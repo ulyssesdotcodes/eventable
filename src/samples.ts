@@ -24,6 +24,54 @@ export const slugify = (name: string): string =>
 export const sampleIndexForSlug = (slug: string): number =>
   SAMPLES.findIndex((s) => slugify(s.name) === slug)
 
+// --- scene <-> Sample literal (editor Export / Import) -----------------------
+// serializeSample renders a live scene as a Sample object literal in this
+// file's own style, so the copied text drops straight into SAMPLES; parseSample
+// reads that text back. Together they let the editor round-trip a scene through
+// the clipboard.
+
+const IDENT = /^[A-Za-z_$][\w$]*$/
+const propKey = (k: string): string => (IDENT.test(k) ? k : JSON.stringify(k))
+const cellLiteral = (v: unknown): string =>
+  typeof v === 'number' || typeof v === 'boolean' ? String(v) : JSON.stringify(v)
+const rowLiteral = (row: Row): string =>
+  `{ ${Object.entries(row).map(([k, v]) => `${propKey(k)}: ${cellLiteral(v)}`).join(', ')} }`
+
+// `code` is emitted as a template literal, so a program's own backticks, ${…}
+// and backslashes are escaped to survive the round-trip.
+const codeLiteral = (code: string): string =>
+  '`' + code.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${') + '`'
+
+export function serializeSample(sample: Sample): string {
+  const out = ['{', `  name: ${JSON.stringify(sample.name)},`]
+  if (sample.table) out.push(`  table: ${JSON.stringify(sample.table)},`)
+  out.push(`  code: ${codeLiteral(sample.code)},`)
+  const tables = Object.entries(sample.tables ?? {}).filter(([, rows]) => rows.length)
+  if (tables.length) {
+    out.push('  tables: {')
+    for (const [name, rows] of tables) {
+      out.push(`    ${propKey(name)}: [`)
+      for (const row of rows) out.push(`      ${rowLiteral(row)},`)
+      out.push('    ],')
+    }
+    out.push('  },')
+  }
+  out.push('},')
+  return out.join('\n')
+}
+
+export function parseSample(text: string): Sample {
+  // Tolerate the trailing comma serializeSample emits (so the block pastes into
+  // SAMPLES): a bare `({…},)` would be a syntax error. new Function is how the
+  // rest of the app evaluates user text too (see cook/expr cells).
+  const body = text.trim().replace(/,+\s*$/, '')
+  const value = new Function(`"use strict"; return (${body});`)() as Sample
+  if (!value || typeof value !== 'object' || typeof value.code !== 'string') {
+    throw new Error('clipboard does not hold a scene')
+  }
+  return value
+}
+
 export const SAMPLES: Sample[] = [
   {
     name: "Editable Table",

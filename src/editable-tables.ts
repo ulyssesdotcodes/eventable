@@ -88,7 +88,7 @@ function visibleRows(t: TableState): Row[] {
   return t.rows.filter((r) => r[DISABLED_COL] !== true)
 }
 
-function defaultFor(type: ColumnType, options?: string[]): unknown {
+export function defaultFor(type: ColumnType, options?: string[]): unknown {
   switch (type) {
     case 'number': return 0
     case 'boolean': return false
