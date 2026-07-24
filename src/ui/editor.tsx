@@ -108,6 +108,10 @@ export interface EditorOptions {
   // "Reset visuals": hydra occasionally wedges into a stuck error state that
   // a canvas resize/regl refresh clears — this triggers that fix manually.
   onResetHydra?: () => void
+  // Copy the live scene to the clipboard as a Sample literal (Export) and load
+  // one back from the clipboard (Import) — see main.ts.
+  onExport?: () => void
+  onImport?: () => void
   // Multiplayer presence: the cell this editor is a window onto plus the
   // cursor offset.
   onCursor?: (cell: string, head: number) => void
@@ -163,6 +167,8 @@ export interface EditorController extends EditorAPI {
   setVimMode(enabled: boolean): void
   setMidiEnabled(enabled: boolean): void
   resetHydra(): void
+  exportScene(): void
+  importScene(): void
   back(): void
   // CodeMirror's DOM, adopted by the view's editor-host div.
   cmDom: HTMLElement
@@ -174,7 +180,7 @@ export interface EditorController extends EditorAPI {
 }
 
 export function createEditor(
-  { onRun, getViews, onCaretView, getPlayIndex, vimMode = true, onVimModeChange, midiEnabled = false, onMidiEnabledChange, onResetHydra, onCursor, onEdit, onExitCell, programDirty, hasPendingEdits }: EditorOptions = {},
+  { onRun, getViews, onCaretView, getPlayIndex, vimMode = true, onVimModeChange, midiEnabled = false, onMidiEnabledChange, onResetHydra, onExport, onImport, onCursor, onEdit, onExitCell, programDirty, hasPendingEdits }: EditorOptions = {},
 ): EditorController {
   const [title, setTitle] = createSignal('DSL')
   const [runLabel, setRunLabel] = createSignal('Run')
@@ -360,6 +366,12 @@ export function createEditor(
     resetHydra(): void {
       onResetHydra?.()
     },
+    exportScene(): void {
+      onExport?.()
+    },
+    importScene(): void {
+      onImport?.()
+    },
     back: () => exitCell(true),
     cmDom: view.dom,
     setRemoteCursors(cursors: RemoteCursor[]): void {
@@ -489,6 +501,20 @@ export function EditorPane(props: { ctl: EditorController; currentTable?: Access
               onClick={() => { ctl.resetHydra(); setSettingsOpen(false) }}
             >
               Reset visuals
+            </button>
+            <button
+              class="settings-row settings-action"
+              title="Copy the current scene to the clipboard as an example you can paste into samples.ts"
+              onClick={() => { ctl.exportScene(); setSettingsOpen(false) }}
+            >
+              Export scene
+            </button>
+            <button
+              class="settings-row settings-action"
+              title="Load a scene from the clipboard (exported from here, or a SAMPLES entry)"
+              onClick={() => { ctl.importScene(); setSettingsOpen(false) }}
+            >
+              Import scene
             </button>
           </div>
         </div>
