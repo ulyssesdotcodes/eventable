@@ -395,7 +395,14 @@ async function cookInWorker(code: string, seed: number, seeds?: Record<string, R
   // of what happened); a reactive re-cook of a peer's run declares nothing —
   // the author's own events arrive by merge.
   if (declareSliders) for (const s of sliders) editableStore.defineSlider(s.id, s.min, s.max)
-  return { cooked, declaredNames: declared.map((d) => d.name) }
+  const declaredNames = declared.map((d) => d.name)
+  // Every cook path funnels through here — apply, scrub/restore, reactive — so
+  // this is the one place that always tracks the on-screen program's editable()
+  // tables, the set an export carries as its Sample `tables`. Setting it only in
+  // evaluate() left it empty after a reload (firstRun resumes via scrubSession),
+  // so exports dropped all table data.
+  lastDeclaredNames = declaredNames
+  return { cooked, declaredNames }
 }
 
 const sessionStore = defaultSessionStore()
@@ -431,8 +438,9 @@ let particleTableRows: Row[] = []
 // "code"'s latest row — so a tap can re-cook in place.
 let liveCode: string | null = null
 let liveSeed = 0
-// The editable() tables the last cook declared — the set whose current rows an
-// exported scene carries as its Sample `tables`.
+// The editable() tables the on-screen program declares — kept current by every
+// cook (see cookInWorker), so an export carries their rows as its Sample
+// `tables` even right after a reload.
 let lastDeclaredNames: string[] = []
 
 interface CookedData {
@@ -645,7 +653,6 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     // Drop tables the program no longer declares editable(), so a computed
     // view of the same name (or nothing) takes over.
     editableStore.retainDeclared(declaredNames)
-    lastDeclaredNames = declaredNames
 
     // *Before* applyCooked renders the table panel, so its first render sees
     // "code" — the onChange reaction that would normally pick up a new table
