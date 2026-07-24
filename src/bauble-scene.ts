@@ -1,4 +1,4 @@
-// livecodata bauble-scene — the bauble compiler + WebGL layer. Wraps
+// eventable bauble-scene — the bauble compiler + WebGL layer. Wraps
 // bauble-runtime (bauble.studio's Janet-to-GLSL compiler, wasm) and a small
 // WebGL2 renderer for the fragment shaders it emits, using bauble.studio's
 // uniform contract. Compilation is gated on script-string identity — a

@@ -1,4 +1,4 @@
-// livecodata DSL — chainable tables of plain row objects that drive visuals.
+// eventable DSL — chainable tables of plain row objects that drive visuals.
 // All timing is in beats (1-indexed; no seconds in the data model). A Table is
 // a node in a lazy op-graph, content-hashed (Merkle) so unchanged subgraphs
 // reuse their previous rows; the declarative Expr verbs exist so specs stay

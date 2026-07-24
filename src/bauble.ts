@@ -1,4 +1,4 @@
-// livecodata bauble — table-driven 3D SDF sketches (bauble.studio: Janet code
+// eventable bauble — table-driven 3D SDF sketches (bauble.studio: Janet code
 // compiled to a GLSL raymarcher). The "bauble" view mirrors the hydra table:
 // events placed by a 1-indexed `beat` column, folded at a frame into a Janet
 // script. setCode replaces the sketch; the meta events rewrite the accumulated

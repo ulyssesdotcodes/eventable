@@ -1,4 +1,4 @@
-// livecodata tap-beat log — event-sourced ("tap"/"clear" events) so it syncs
+// eventable tap-beat log — event-sourced ("tap"/"clear" events) so it syncs
 // over multiplayer like any other table; the tap-beat table and derived tempo
 // are folds of the log. Taps are stamped with wall-clock Date.now() (not
 // performance.now(), which is meaningless across processes) so presses from

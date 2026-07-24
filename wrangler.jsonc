@@ -5,7 +5,7 @@
   // `npm run build && npx wrangler deploy` (build first: [assets].directory
   // must be populated before wrangler uploads it), or via the GitHub Actions
   // workflow at .github/workflows/deploy-cloudflare.yml.
-  "name": "livecodata",
+  "name": "eventable",
   "main": "worker/index.ts",
   "compatibility_date": "2025-01-01",
   "assets": {
