@@ -17,7 +17,7 @@ import { createPlaybackController, type PlaybackController } from './ui/playback
 import { createSessionBar } from './ui/session-bar.js'
 import { createSessionSelector } from './ui/session-selector.js'
 import { createRoomChip } from './ui/room-chip.js'
-import { SAMPLES, sampleIndexForSlug, slugify } from './samples.js'
+import { SAMPLES, sampleIndexForSlug, slugify, serializeSample, parseSample, type Sample } from './samples.js'
 import { defaultSessionStore } from './sessions.js'
 import { getVimMode, setVimMode, getMidiEnabled, setMidiEnabled, getUsername, setUsername } from './settings.js'
 import { createCookClient } from './cook-client.js'
@@ -25,7 +25,7 @@ import type { CookedSigs } from './replay.js'
 import { randomSeed, localSource } from './event-log.js'
 import { createPresenceChannel, userColor, lastCellEdits } from './presence.js'
 import { Table, outViewName } from './dsl.js'
-import { createEditableTableStore, DISABLED_COL, CLEAR_RUNS_KIND, ACTIVITY_TABLE, isExprCellText, type ColumnType, type SessionRun } from './editable-tables.js'
+import { createEditableTableStore, defaultFor, DISABLED_COL, CLEAR_RUNS_KIND, ACTIVITY_TABLE, isExprCellText, type ColumnType, type SessionRun } from './editable-tables.js'
 import type { ApplyNode } from './branches.js'
 import { createMidiInput, subscribeWebMidi, type MidiInput, type MidiStore } from './midi.js'
 import { createSliderInput, sliderDefs, sameSliderDefs, type SliderDef, type SliderInput } from './sliders.js'
@@ -431,6 +431,9 @@ let particleTableRows: Row[] = []
 // "code"'s latest row — so a tap can re-cook in place.
 let liveCode: string | null = null
 let liveSeed = 0
+// The editable() tables the last cook declared — the set whose current rows an
+// exported scene carries as its Sample `tables`.
+let lastDeclaredNames: string[] = []
 
 interface CookedData {
   views: Map<string, Table>
@@ -642,6 +645,7 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     // Drop tables the program no longer declares editable(), so a computed
     // view of the same name (or nothing) takes over.
     editableStore.retainDeclared(declaredNames)
+    lastDeclaredNames = declaredNames
 
     // *Before* applyCooked renders the table panel, so its first render sees
     // "code" — the onChange reaction that would normally pick up a new table
@@ -687,6 +691,8 @@ const editor = createEditor({
     tablePanel.setTables(tablesForDisplay(lastViews))
   },
   onResetHydra: () => { hydraAPI.reinit(); baubleAPI.reinit() },
+  onExport: exportScene,
+  onImport: importScene,
   onCursor: (cell, head) => {
     const cellChanged = cell !== localCell
     localCell = cell
@@ -1017,6 +1023,23 @@ function checkoutBranch(headId: string): void {
   void scrubSession(sessionLength() - 1)
   persistSession()
 }
+// Load a Sample into a fresh session: from SAMPLES (loadExample) or an
+// imported scene (importScene). The sample's table data seeds the cleared
+// store — its editable() calls carry column schemas only, the row data lives
+// with the sample — and restoreTable shows its most relevant tab once the tabs
+// exist (like session resume), falling back to the default tab when it names
+// none.
+async function loadSample(sample: Sample): Promise<void> {
+  exitRoomMode()
+  currentSessionId = sessionStore.newId()
+  quietly(() => editableStore.clear())
+  editor.setCode(sample.code)
+  tablePanel.restoreTable(sample.table ?? null)
+  await evaluate(sample.code, { setError: editor.setError, persist: false, seeds: sample.tables })
+  syncSessionBar()
+  refreshSelector()
+}
+
 // The awaitable core behind opening an example: boot() (a direct ?example=
 // link) needs to know once the cook has actually landed, so it can start
 // playback the same way firstRun() does — everywhere else (the dropdown)
@@ -1024,23 +1047,68 @@ function checkoutBranch(headId: string): void {
 async function loadExample(index: number): Promise<void> {
   const sample = SAMPLES[index]
   if (!sample) return
-  exitRoomMode()
-  currentSessionId = sessionStore.newId()
-  quietly(() => editableStore.clear())
-  editor.setCode(sample.code)
-  // Show the example's most relevant table once its tabs exist (like session
-  // resume); falls back to the default tab when the sample names none.
-  tablePanel.restoreTable(sample.table ?? null)
-  // The sample's table data seeds the cleared store — its editable() calls
-  // carry column schemas only; the row data lives with the sample.
-  await evaluate(sample.code, { setError: editor.setError, persist: false, seeds: sample.tables })
-  syncSessionBar()
-  refreshSelector()
+  await loadSample(sample)
   setExampleParam(slugify(sample.name))
 }
 
 function openExample(index: number): void {
   void loadExample(index)
+}
+
+// --- scene export / import --------------------------------------------------
+// Export copies the live scene to the clipboard as a Sample literal (paste it
+// into SAMPLES in samples.ts); Import reads that text back and loads it. The
+// two are symmetric through the clipboard.
+
+// The live scene as a Sample: the editor's program plus the current rows of
+// every editable() table. Blank cells and cells equal to their column default
+// are dropped — conformRow refills them identically on load, so this is
+// lossless and keeps the output as terse as the hand-written samples. The row's
+// discriminant (`event`/`type`) is the one default-valued cell kept, so an
+// event row still reads with its kind visible.
+function currentScene(): Sample {
+  const tables: Record<string, Row[]> = {}
+  for (const name of lastDeclaredNames) {
+    const data = editableStore.get(name)
+    if (!data?.rows.length) continue
+    const discriminant = data.columns.some((c) => c.name === 'event') ? 'event'
+      : data.columns.some((c) => c.name === 'type') ? 'type' : null
+    tables[name] = data.rows.map((row) => {
+      const clean: Row = {}
+      for (const col of data.columns) {
+        const v = row[col.name]
+        if (v === undefined || v === null || v === '') continue
+        if (col.name === discriminant || v !== defaultFor(col.type, col.options)) clean[col.name] = v
+      }
+      return clean
+    })
+  }
+  const slug = new URL(location.href).searchParams.get('example')
+  const known = slug ? sampleIndexForSlug(slug) : -1
+  return {
+    name: known >= 0 ? SAMPLES[known].name : 'My Scene',
+    ...(currentTable ? { table: currentTable } : {}),
+    code: editor.getCode(),
+    ...(Object.keys(tables).length ? { tables } : {}),
+  }
+}
+
+async function exportScene(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(serializeSample(currentScene()))
+  } catch (err) {
+    editor.setError(`Export failed: ${(err as Error).message}`)
+  }
+}
+
+async function importScene(): Promise<void> {
+  try {
+    const sample = parseSample(await navigator.clipboard.readText())
+    await loadSample(sample)
+    setExampleParam(null)
+  } catch (err) {
+    editor.setError(`Import failed: ${(err as Error).message}`)
+  }
 }
 
 const sessionSelector = createSessionSelector({
