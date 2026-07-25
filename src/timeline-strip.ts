@@ -6,6 +6,12 @@
 // beats, so beat b sits at elapsed (b - 1). The `timeline` table's own rows
 // already live on this playback axis (identity); every other table's `beat`
 // is a *source* beat, placed onto the axis through `placeBeat`.
+//
+// Tracks (DAW-style): the strip can stack read-only bands under the open
+// table's interactive one, one per cooked out view (stripLayout's `out`
+// argument) — the rows playback will actually consume, any .retime() already
+// baked in by the cook, placed through the APPLIED timeline so indicators sit
+// where the visual changes will happen.
 
 import type { Row } from './lineage.js'
 import type { EditableColumn } from './editable-tables.js'
@@ -119,6 +125,9 @@ export interface Handle {
   // running off the strip. Omitted (not just 0) for the common unwrapped
   // case, so existing handle-shape assertions don't need to know about it.
   pass?: number
+  // Index into stripLayout's `out.tracks` for a handle on a read-only out-view
+  // band; absent on the open table's own (interactive) handles.
+  track?: number
 }
 
 // Which pass `beat` falls in, and its beat local to that pass — a beat past
@@ -192,9 +201,12 @@ type RawHandle = Handle & { group: number }
 // placeBeat, wrapping past one pass into a "pass n" badge. A fold table draws a
 // transition as its fold window (FOLD_WINDOWS) — a wrapped window (its
 // destination earlier in the loop) splits into two arcs; other tables fall
-// back to their `dur` column. An active timeline's passes are the groups.
+// back to their `dur` column. An active timeline's passes are the groups —
+// except under `flat` (an out-view track band), where every pass shares one
+// group (the band stays compact) and only the "pass n" badge marks the wrap.
 function buildRaw(
   name: string, rows: Row[], columns: EditableColumn[], timelineRows: Row[], loopBeats?: number,
+  flat = false,
 ): { raw: RawHandle[]; groupCount: number } {
   const colNames = new Set(columns.map((c) => c.name))
   const raw: RawHandle[] = []
@@ -234,7 +246,7 @@ function buildRaw(
     const placements = segments.length ? placeBeat(segments, beat) : [{ beat, stretch: 1 }]
     placements.forEach((p, idx) => {
       const w = wrapPass(p.beat, wrapUnit, maxPass)
-      const group = timeline ? w.pass : 0
+      const group = timeline && !flat ? w.pass : 0
       const common = {
         row: i, group, lane: group, ghost: idx > 0, disabled,
         ...(w.pass > 0 ? { pass: w.pass } : {}),
@@ -258,7 +270,7 @@ function buildRaw(
       })
     })
   }
-  return { raw, groupCount: timeline ? timeline.loops : 1 }
+  return { raw, groupCount: timeline && !flat ? timeline.loops : 1 }
 }
 
 // Greedy interval packing: within each pass group, spans overlapping in their
@@ -289,24 +301,105 @@ function packLanes(raw: RawHandle[], groupCount: number): { base: number[]; lane
   return { base, laneCount: Math.max(1, cursor) }
 }
 
+// A cooked out view rendered as its own read-only band: `name` is the
+// consumer kind ('three', 'hydra', …) — also the FOLD_WINDOWS/FOLD_GLIDES
+// key — and `rows` the applied cook's rows for it, any .retime() already
+// baked in.
+export interface OutTrack {
+  name: string
+  rows: Row[]
+}
+
+// One horizontal band of a multi-track strip: the open table's interactive
+// band first (when a table is open), then one band per out view with any
+// handles. `track` indexes the OutTrack a non-interactive band renders,
+// matching its handles' own `track` tag.
+export interface StripTrack {
+  name: string
+  base: number
+  end: number
+  interactive: boolean
+  track?: number
+}
+
 export interface StripLayout {
   // Every placement's public handle, packed lanes written back.
   handles: Handle[]
   // Total lane bands the strip needs — packed sub-lanes included.
   laneCount: number
-  // The first lane of each pass; pass g spans [passBase[g], passBase[g + 1]).
-  // Length is the pass count, so passBase.length > 1 means a multi-pass strip.
+  // The first lane of each of the INTERACTIVE band's passes; pass g spans
+  // [passBase[g], passBase[g + 1]). Length is the pass count, so
+  // passBase.length > 1 means a multi-pass strip; empty means no open table.
   passBase: number[]
+  // The bands stacked top to bottom; a single-table strip is one interactive
+  // band spanning every lane.
+  tracks: StripTrack[]
 }
 
-// The open table's handles and the lane layout they pack into, from one
-// buildRaw + packLanes pass: how many lane bands (packed sub-lanes and all),
-// and where each pass starts — the coverage shading and pass labels key off
-// passBase so a pass's tint spans exactly its sub-lanes.
-export function stripLayout(name: string, rows: Row[], columns: EditableColumn[], timelineRows: Row[], loopBeats?: number): StripLayout {
-  const { raw, groupCount } = buildRaw(name, rows, columns, timelineRows, loopBeats)
-  const { base, laneCount } = packLanes(raw, groupCount)
-  return { handles: raw.map(({ group: _group, ...h }) => h), laneCount, passBase: base }
+// Minimal column specs inferred from cooked rows, which carry no editable
+// schema: every key seen with a non-null value, `event` hoisted first so
+// readouts lead with the row's identity. Enough for meaningfulSummary and
+// buildRaw's dur detection — never for editing.
+export function columnsFromRows(rows: Row[]): EditableColumn[] {
+  const seen = new Map<string, EditableColumn['type']>()
+  for (const r of rows) {
+    for (const [k, v] of Object.entries(r)) {
+      if (v == null || seen.has(k)) continue
+      seen.set(k, typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'boolean' : k === 'code' ? 'code' : 'string')
+    }
+  }
+  const columns = [...seen].map(([name, type]) => ({ name, type }))
+  const ev = columns.findIndex((c) => c.name === 'event')
+  if (ev > 0) columns.unshift(...columns.splice(ev, 1))
+  return columns
+}
+
+// The strip's handles and the lane layout they pack into. The open table
+// (`name` — pass '' for none) keeps today's interactive behavior: passes as
+// lane groups, placed through the LIVE timeline rows. `out` stacks a read-only
+// band per cooked view under it, placed through `out.timelineRows` — the
+// APPLIED cook's, the ones playback actually warps by — with passes kept flat
+// (badges, not lanes) so each band stays compact. Coverage shading and pass
+// labels key off passBase so a pass's tint spans exactly its sub-lanes.
+export function stripLayout(
+  name: string, rows: Row[], columns: EditableColumn[], timelineRows: Row[], loopBeats?: number,
+  out?: { tracks: OutTrack[]; timelineRows: Row[] },
+): StripLayout {
+  const handles: Handle[] = []
+  const tracks: StripTrack[] = []
+  let passBase: number[] = []
+  let cursor = 0
+  if (name !== '') {
+    const { raw, groupCount } = buildRaw(name, rows, columns, timelineRows, loopBeats)
+    const { base, laneCount } = packLanes(raw, groupCount)
+    passBase = base
+    handles.push(...raw.map(({ group: _group, ...h }) => h))
+    tracks.push({ name, base: 0, end: laneCount, interactive: true })
+    cursor = laneCount
+  }
+  for (const [i, t] of (out?.tracks ?? []).entries()) {
+    const built = buildRaw(t.name, t.rows, columnsFromRows(t.rows), out!.timelineRows, loopBeats, true)
+    // A multi-pass warp folds every pass onto the same flat band, so later
+    // passes usually duplicate an earlier placement exactly — keep the first
+    // (packLanes would stack identical spans into phantom sub-lanes); the
+    // interactive band is where passes genuinely stack.
+    const seen = new Set<string>()
+    const raw = built.raw.filter((h) => {
+      const key = `${h.row}:${h.beat}:${h.end ?? ''}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    // An empty band still renders (its rows place nowhere under the current
+    // warp) — band presence must match the caller's track list, which is
+    // also what widens the transport.
+    const { laneCount } = packLanes(raw, 1)
+    for (const h of raw) h.lane += cursor
+    handles.push(...raw.map(({ group: _group, ...h }) => ({ ...h, track: i })))
+    tracks.push({ name: t.name, base: cursor, end: cursor + laneCount, interactive: false, track: i })
+    cursor += laneCount
+  }
+  return { handles, laneCount: Math.max(1, cursor), passBase, tracks }
 }
 
 export interface CoverageBand {

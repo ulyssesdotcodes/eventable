@@ -254,6 +254,81 @@ test('sub-lane packing: overlapping spans stack into sub-lanes, disjoint spans s
   assert.equal(stripLayout('scene', rows, columns, []).laneCount, 2)
 })
 
+// --- out tracks (multi-track strip) -----------------------------------------
+
+test('out tracks: bands stack under the interactive table, handles tagged with their track; every given track keeps a band (the transport widens on the same list)', () => {
+  const { handles, tracks, laneCount } = stripLayout('timeline', [{ beat: 1 }], cols('beat', 'loop'), [], 8, {
+    tracks: [
+      { name: 'three', rows: [{ beat: 3, dur: 2 }] },
+      { name: 'post', rows: [] },
+      { name: 'hydra', rows: [{ beat: 2, event: 'setCode', code: 'osc().out(o0)' }] },
+    ],
+    timelineRows: [],
+  })
+  assert.deepEqual(
+    tracks.map((t) => ({ name: t.name, base: t.base, end: t.end, interactive: t.interactive, track: t.track })),
+    [
+      { name: 'timeline', base: 0, end: 1, interactive: true, track: undefined },
+      { name: 'three', base: 1, end: 2, interactive: false, track: 0 },
+      { name: 'post', base: 2, end: 3, interactive: false, track: 1 },
+      { name: 'hydra', base: 3, end: 4, interactive: false, track: 2 },
+    ],
+    'interactive band first, then one band per given out view — an empty one stays, just with no handles',
+  )
+  assert.equal(laneCount, 4)
+  const three = handles.find((h) => h.track === 0)!
+  assert.deepEqual([three.kind, three.beat, three.end, three.lane], ['span', 3, 5, 1], 'a dur column inferred from the cooked rows still draws a bar')
+  assert.equal(handles.some((h) => h.track === 1), false)
+  assert.equal(handles.find((h) => h.track === 2)!.lane, 3)
+})
+
+test('out tracks: rows place through the APPLIED timeline, not the live rows being edited', () => {
+  // Applied warp stretches source 1..5 across the 8-beat pass; the live store
+  // rows have dropped it (a pending edit). Playback still warps by the applied
+  // rows, so the out track's indicator must sit where playback will show the
+  // beat — source 3, the stretch midpoint, at playback beat 5.
+  const applied = [{ event: 'retime', beat: 1, from: 1, to: 5 }]
+  const { handles } = stripLayout('hits', [{ beat: 3 }], cols('beat'), [], 8, {
+    tracks: [{ name: 'three', rows: [{ id: 'a', event: 'update', beat: 3 }] }],
+    timelineRows: applied,
+  })
+  assert.equal(handles.find((h) => h.track === undefined)!.beat, 3, 'the open table still follows the live (identity) rows')
+  assert.equal(handles.find((h) => h.track === 0)!.beat, 5, 'the out view follows the applied warp')
+})
+
+test('out tracks: a multi-pass timeline keeps an out band flat — later passes fold onto the same placements instead of stacking lanes', () => {
+  const twoPass = [
+    { event: 'loop', beat: 1, from: 1, to: 5, loop: 0 },
+    { event: 'loop', beat: 1, from: 1, to: 5, loop: 1 },
+  ]
+  const { handles, tracks, passBase } = stripLayout('', [], [], [], 8, {
+    tracks: [{ name: 'three', rows: [{ beat: 3 }] }],
+    timelineRows: twoPass,
+  })
+  assert.deepEqual(passBase, [], 'no open table, no pass lanes')
+  assert.deepEqual(tracks, [{ name: 'three', base: 0, end: 1, interactive: false, track: 0 }])
+  assert.deepEqual(
+    handles.map((h) => ({ beat: h.beat, lane: h.lane, pass: h.pass })),
+    [
+      { beat: 3, lane: 0, pass: undefined },
+      { beat: 7, lane: 0, pass: undefined },
+    ],
+    "pass 2's identical placements dedupe away — the band stays one lane tall",
+  )
+})
+
+test('out tracks: a hydra transition span keeps fold-window parity on its own band', () => {
+  const rows = [
+    { beat: 3, event: 'setCode', code: 'osc().out(o0)' },
+    { beat: 5, event: 'transition' },
+    { beat: 9, event: 'setCode', code: 'noise().out(o0)' },
+  ]
+  const { handles } = stripLayout('', [], [], [], undefined, { tracks: [{ name: 'hydra', rows }], timelineRows: [] })
+  const t = handles.find((h) => h.row === 1)!
+  const win = hydraTransitionWindows(rows)[0]
+  assert.deepEqual([t.kind, t.beat, t.end, t.endRow], ['span', win.start, win.end, win.endRow])
+})
+
 // --- coverageBands -----------------------------------------------------------
 
 test('coverageBands: each pass\'s segments map onto its own local axis, tagged with that pass\'s lane and event kind', () => {

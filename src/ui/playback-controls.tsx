@@ -9,7 +9,7 @@ import { createPlaybackEngine } from '../playback.js'
 import type { PlaybackEngine, PlaybackOptions, PlaybackViewState, TapControl } from '../playback.js'
 import { DEFAULT_LOOP_BEATS } from '../constants.js'
 import type { Visualizer } from '../visualizer.js'
-import { TimelineStrip } from './timeline-strip.js'
+import { TimelineStrip, type StripOutTrack } from './timeline-strip.js'
 import type { Row } from '../lineage.js'
 import type { EditableTableStore } from '../editable-tables.js'
 import type { PeerPresence } from '../table-panel.js'
@@ -26,6 +26,8 @@ export function PlaybackControls(props: {
   focusedRow: Accessor<number | null>
   onStripRowChange?: (row: { table: string; row: number } | null) => void
   onDragCommit?: () => void
+  outTracks?: Accessor<StripOutTrack[]>
+  onSelectTrack?: (view: string) => void
   // Collapsed to a corner icon when true — the whole transport hides so the
   // visual output is unobscured; the restore icon toggles it back.
   minimized: Accessor<boolean>
@@ -127,6 +129,8 @@ export function PlaybackControls(props: {
         focusedRow={props.focusedRow}
         onStripRowChange={props.onStripRowChange}
         onDragCommit={props.onDragCommit}
+        outTracks={props.outTracks}
+        onSelectTrack={props.onSelectTrack}
       />
     </>
   )

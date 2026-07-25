@@ -16,6 +16,7 @@ import { SliderPanel, type SliderPanelController } from './slider-panel.js'
 import { PaneDivider } from './pane-divider.js'
 import { Icon } from './icon.js'
 import type { Row } from '../lineage.js'
+import type { StripOutTrack } from './timeline-strip.js'
 
 export interface AppProps {
   editor: EditorController
@@ -28,6 +29,10 @@ export interface AppProps {
   // The applied cook's timeline rows, for the strip's coverage shading —
   // the "applied" half of the live/applied split (see playback's vs/engine).
   timelineRows: Accessor<Row[]>
+  // The applied cook's out views, one read-only strip track per consumer —
+  // refreshed by applyCooked alongside timelineRows. The transport widens
+  // when any exist (DAW-style multi-track needs the room).
+  outTracks: Accessor<StripOutTrack[]>
   onClearRuns: () => void
   // A timeline-strip drag just committed its one store.setRow — re-run so
   // the drop applies immediately instead of sitting pending (see main.ts's
@@ -58,7 +63,7 @@ function App(props: AppProps & { mounts: CanvasMounts }) {
         <canvas id="hydra-canvas" ref={(el) => (props.mounts.hydraCanvas = el)} />
         <canvas id="bauble-canvas" ref={(el) => (props.mounts.baubleCanvas = el)} />
         <SliderPanel ctl={props.sliderPanel} />
-        <div id="playback-controls" classList={{ minimized: playbackMinimized() }}>
+        <div id="playback-controls" classList={{ minimized: playbackMinimized(), 'has-tracks': props.outTracks().length > 0 }}>
           <Show when={props.playback()}>
             {(p) => (
               <PlaybackControls
@@ -78,6 +83,8 @@ function App(props: AppProps & { mounts: CanvasMounts }) {
                 }}
                 onStripRowChange={(row) => props.tablePanel.setStripRow(row)}
                 onDragCommit={props.onDragCommit}
+                outTracks={props.outTracks}
+                onSelectTrack={(view) => props.tablePanel.selectTable(view)}
               />
             )}
           </Show>

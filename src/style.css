@@ -1715,6 +1715,14 @@ html, body {
   max-width: 420px;
 }
 
+/* Multi-track mode: with out-view bands stacked under the open table's the
+   strip is a real DAW-style timeline, so the 420px plain-transport cap gives
+   way to most of the canvas width. */
+#playback-controls.has-tracks {
+  width: min(94%, 820px);
+  max-width: none;
+}
+
 /* Minimized: the transport rows + strip hide (the strip stays mounted — see
    ui/playback-controls.tsx), leaving a single corner icon (.pb-restore-btn)
    pinned bottom-right so the visual output is clear. The panel chrome
@@ -1999,6 +2007,29 @@ html, body {
   white-space: nowrap;
 }
 
+/* An out-view track band (DAW-style): separated harder than a pass band and
+   named more loudly, since each is a different table, not another pass of the
+   same one. The band at the strip's very top gets no separator — DOM-order
+   :first-child can't tell (the pass-label bands precede the track bands as
+   siblings), so the view tags it explicitly. */
+.timeline-strip-lane.timeline-strip-track {
+  border-top: 1px solid rgba(143, 169, 196, 0.5);
+}
+
+.timeline-strip-lane.timeline-strip-track-first {
+  border-top: none;
+}
+
+.timeline-strip-track .timeline-strip-lane-label {
+  color: #8fa9c4;
+}
+
+/* The one band whose handles are editable — its name reads brighter than the
+   read-only out views'. */
+.timeline-strip-track-interactive .timeline-strip-lane-label {
+  color: #cfe0f0;
+}
+
 .timeline-strip-lane-overflow {
   position: absolute;
   left: 3px;
@@ -2190,6 +2221,14 @@ html, body {
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
   border-right: 5px solid #4a9eff;
+}
+
+/* A read-only out-view handle: same event language as the open table's, a
+   shade quieter (it isn't draggable), with a pointer cursor — clicking one
+   opens its view's panel tab. */
+.timeline-strip-handle-out {
+  cursor: pointer;
+  opacity: 0.8;
 }
 
 /* Ghost: a later placement of a row a loop event plays more than once — not

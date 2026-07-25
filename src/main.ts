@@ -284,6 +284,11 @@ const [playbackCtl, setPlaybackCtl] = createSignal<PlaybackController | null>(nu
 // The applied cook's timeline rows, for the timeline strip's coverage shading
 // — refreshed on every applyCooked, same cadence as the panel's tables.
 const [timelineRows, setTimelineRows] = createSignal<Row[]>([])
+// The applied cook's out views as strip tracks — the same row arrays playback
+// consumes, so the strip's event indicators can't disagree with what will
+// happen. Refreshed on every applyCooked; changing a retime table and
+// applying moves these events.
+const [outTracks, setOutTracks] = createSignal<{ name: string; view: string; rows: Row[] }[]>([])
 const playbackOptions: PlaybackOptions = {
   onTick: (tick, active, srcBeats) => {
     currentPlayIndex = srcBeats
@@ -519,6 +524,32 @@ function diffCooked({ sigs }: CookedData): { scene: boolean; timeline: boolean; 
   return changed
 }
 
+// The strip's out tracks: per consumer kind, the cooked event rows playback
+// will actually use — the arrays applyCooked hands the engine/visualizers, so
+// the strip mirrors what will happen, any .retime() already baked in. 'scene'
+// (pre-rasterized dense frames) has no event rows to show, and 'timeline' IS
+// the warp, drawn as the strip's coverage shading. `view` is the panel tab a
+// track's handle click opens — the "(system)" view when routed, else the
+// bare-named one the consumer fell back to.
+function outTracksFor(cooked: CookedData, particleTableRows: Row[]): { name: string; view: string; rows: Row[] }[] {
+  const viewOf = (kind: string, extra: string[] = []): string => {
+    for (const n of [outViewName(kind), kind, ...extra]) if (cooked.views.has(n)) return n
+    return kind
+  }
+  const three = cooked.views.get(outViewName('three')) ?? cooked.views.get('three') ?? cooked.views.get('events')
+  // hydraRows may be sniffed out of the three table when no hydra view exists
+  // (see replay.ts) — those rows already ride the 'three' band and there is
+  // no hydra tab to open, so only a real hydra view earns a band.
+  const hydraRows = cooked.views.has(outViewName('hydra')) || cooked.views.has('hydra') ? cooked.hydraRows : []
+  return [
+    { name: 'three', view: viewOf('three', ['events']), rows: three?.rows ?? [] },
+    { name: 'hydra', view: viewOf('hydra'), rows: hydraRows },
+    { name: 'bauble', view: viewOf('bauble'), rows: cooked.baubleRows },
+    { name: 'post', view: viewOf('post'), rows: cooked.postRows },
+    { name: 'particles', view: viewOf('particles'), rows: particleTableRows },
+  ].filter((t) => t.rows.some((r) => typeof r.beat === 'number'))
+}
+
 // Render a cooked program and hand its rows to playback. Loop epochs come from
 // the activity table's apply stamps — the author's clock, NOT this replica's —
 // so late joiners land on the same pass of a multi-loop sequence. The loop
@@ -534,6 +565,7 @@ function applyCooked(cooked: CookedData): void {
   tablePanel.setTables(tablesForDisplay(cooked.views))
   tablePanel.setGraphs(cooked.graphs)
   setTimelineRows(cooked.timelineRows)
+  setOutTracks(outTracksFor(cooked, particleTableRows))
   // With hydra rows present, hydra's output is the display and it reads the
   // bauble render as s1 — only a bauble-only sketch shows this canvas directly.
   mounts.baubleCanvas.classList.toggle('visible', cooked.baubleRows.length > 0 && cooked.hydraRows.length === 0)
@@ -1171,6 +1203,7 @@ const mounts = mountApp(document.getElementById('app') as HTMLElement, {
   sliderPanel,
   playback: playbackCtl,
   timelineRows,
+  outTracks,
   onClearRuns: clearRuns,
   // A timeline-strip drag committed its one setRow — re-run at the current
   // seed immediately, same as a code-cell commit (onEditCell above), so the
