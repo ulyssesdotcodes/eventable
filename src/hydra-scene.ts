@@ -1,4 +1,4 @@
-// livecodata hydra-scene — the hydra-ts GPU layer. Source s0 is the Three.js
+// eventable hydra-scene — the hydra-ts GPU layer. Source s0 is the Three.js
 // scene canvas, output o0 the visible canvas. Sketch variables flow through
 // hydra-ts's per-frame `props` callback, not baked into the compiled code, so
 // a value can change every frame without a shader-rebuilding recompile. tick()

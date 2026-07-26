@@ -1,4 +1,4 @@
-// livecodata multiplayer server — Node adapter. Room behavior lives in the
+// eventable multiplayer server — Node adapter. Room behavior lives in the
 // transport-agnostic src/room-core.ts (shared with the Durable Object twin in
 // worker/room.ts); this file owns the ws sockets and serving the built app
 // from public/. Rooms live in memory: clients re-upload their full logs on
@@ -142,7 +142,7 @@ const isMain = process.argv[1] != null && import.meta.url === pathToFileURL(proc
 if (isMain) {
   const port = Number(process.env.PORT) || 8787
   void startMultiplayerServer({ port }).then((s) => {
-    console.log(`livecodata multiplayer on http://localhost:${s.port} (ws at /ws)`)
+    console.log(`eventable multiplayer on http://localhost:${s.port} (ws at /ws)`)
     console.log(`open http://localhost:${s.port}/?room=<name> in two browsers to jam`)
   })
 }

@@ -1,4 +1,4 @@
-// livecodata post-scene — the TSL engine behind the post view. Turns the op
+// eventable post-scene — the TSL engine behind the post view. Turns the op
 // lists folded by post.ts into a `three` node graph rendered by a RenderPipeline
 // over the same scene three-scene.ts draws, BEFORE hydra samples the canvas as
 // s0. All compilation happens at setProgram (cook/apply): every distinct folded

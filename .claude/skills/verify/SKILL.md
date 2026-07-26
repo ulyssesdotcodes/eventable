@@ -1,9 +1,9 @@
 ---
 name: verify
-description: Build, launch, and drive livecodata in a real browser to verify changes end-to-end.
+description: Build, launch, and drive eventable in a real browser to verify changes end-to-end.
 ---
 
-# Verifying livecodata
+# Verifying eventable
 
 ## Build & launch
 

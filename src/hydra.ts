@@ -1,4 +1,4 @@
-// livecodata hydra — table-driven video synth (hydra-ts). The "hydra" view is a
+// eventable hydra — table-driven video synth (hydra-ts). The "hydra" view is a
 // table of events placed on the loop by a 1-indexed `beat` column; sampling a
 // frame folds every event at/before it, per `out` output, into one running
 // sketch string plus the latest value of each setVariable. This module is pure;

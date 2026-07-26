@@ -8,10 +8,10 @@
 import type { SessionRun } from './editable-tables.js'
 import { defaultStorage, type MinimalStorage } from './storage.js'
 
-const STORAGE_KEY = 'livecodata.sessions'
+const STORAGE_KEY = 'eventable.sessions'
 const STORAGE_VERSION = 1
 
-const DB_NAME = 'livecodata'
+const DB_NAME = 'eventable'
 const DB_VERSION = 1
 const DB_STORE = 'sessions'
 

@@ -1,4 +1,4 @@
-// livecodata timeline — an OPTIONAL remap on top of the beat-grid playhead,
+// eventable timeline — an OPTIONAL remap on top of the beat-grid playhead,
 // defined as a table of EVENTS (see schemas.timeline). Rows are ordered by
 // (loop, beat) and each covers an UNTIL-NEXT window: from its own `beat`
 // (1-indexed) to the next row's, the last row running to the end of its pass —

@@ -1,4 +1,4 @@
-// livecodata post — the post-processing chain language (pure half). Code cells
+// eventable post — the post-processing chain language (pure half). Code cells
 // evaluate like hydra sketches: `new Function` over a fixed scope of head
 // factories (`scene()`, later `src(bN)` and generators), each returning a chain
 // builder whose fluent ops (`.edges(...)`, `.blur(...)`, …) accumulate an

@@ -1,4 +1,4 @@
-// livecodata sliders — on-screen controls, event-logged like MIDI. What is
+// eventable sliders — on-screen controls, event-logged like MIDI. What is
 // stored is the append-only log of value changes, each stamped with the
 // playhead's content/source position (a 1-indexed beat), so a recorded move
 // replays every loop and tracks the timeline mapping. Unlike MIDI, the log

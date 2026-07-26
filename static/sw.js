@@ -4,7 +4,7 @@
 // time (build.js / watch.js) so each deploy activates a fresh cache and evicts
 // the previous one.
 const VERSION = '__BUILD_VERSION__'
-const CACHE = `livecodata-${VERSION}`
+const CACHE = `eventable-${VERSION}`
 
 // The minimum needed to boot offline. lang-worker.js (~3.5 MB) and the data
 // files are left to runtime caching so a flaky install can't abort on them; the
@@ -40,7 +40,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     for (const key of await caches.keys()) {
-      if (key !== CACHE && key.startsWith('livecodata-')) await caches.delete(key)
+      if (key !== CACHE && key.startsWith('eventable-')) await caches.delete(key)
     }
     await self.clients.claim()
   })())
