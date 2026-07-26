@@ -61,6 +61,10 @@ function fakeHydra() {
     ticks: [] as number[],
     setSketch(): void { /* recorded implicitly via ticks */ },
     tick(t: number): void { this.ticks.push(t) },
+    previews: [] as ({ code: string; vars: Record<string, unknown> } | null)[],
+    setPreview(code: string | null, vars: Record<string, unknown>): void {
+      this.previews.push(code == null ? null : { code, vars })
+    },
     reset(): void { /* noop */ },
     reinit(): void { /* noop */ },
   }
@@ -502,25 +506,19 @@ test('the pending-edit preview runs the editor buffer against the applied frame,
   const hydra = fakeHydra()
   const applied: (string | null)[] = []
   hydra.setSketch = (s?: { code: string } | null) => { applied.push(s?.code ?? null) }
-  const previewAPI = fakeHydra()
-  const previews: ({ code: string; vars: Record<string, unknown> } | null)[] = []
-  previewAPI.setSketch = (s?: { code: string; vars: Record<string, unknown> } | null) => { previews.push(s ?? null) }
   let pending: string | null = null
-  const viz = createHydraVisualizer(hydra, { api: () => previewAPI, code: () => pending })
-  const engine = createPlaybackEngine([viz], { clock: time.clock })
+  const engine = createPlaybackEngine([createHydraVisualizer(hydra, () => pending)], { clock: time.clock })
   engine.load({ sceneRows: [], timelineRows: [], hydraRows: [
     { event: 'setCode', code: 'osc(1)', beat: 1 },
     { event: 'setVariable', name: 'freq', value: 7, beat: 1 },
   ] })
+  // Paused: typing moves no playhead, so refresh() is what lands the preview.
   engine.toggle()
-  assert.equal(previews.length, 0, 'nothing previews with no code cell open')
-  // Typing in a hydra cell doesn't move the playhead — refresh() is what lands
-  // the preview, and it must land while paused too.
   engine.toggle()
   pending = 'osc(2).out(o0)'
   engine.refresh()
-  assert.equal(previews.at(-1)?.code, 'osc(2).out(o0)')
-  assert.equal(previews.at(-1)?.vars.freq, 7, 'the preview sees the frame’s folded variables')
+  assert.equal(hydra.previews.at(-1)?.code, 'osc(2).out(o0)')
+  assert.equal(hydra.previews.at(-1)?.vars.freq, 7, 'the preview sees the frame’s folded variables')
   assert.equal(applied.at(-1), 'osc(1).out(o0)', 'the visible output still shows the applied sketch')
 })
 

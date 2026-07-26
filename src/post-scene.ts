@@ -36,10 +36,9 @@ export interface PostAPI {
   // avoid. The visualizer re-programs when it changes.
   setProgram(index: Row[], loopFrames: number): void
   setFrame(frame: PostFrame | null, props: Record<string, unknown>): void
-  // The chain text being edited (null when no post cell is open): compiled to
-  // a state of its own and drawn to initPost's `preview` canvas by a second
-  // renderer over the same scene, leaving the visible output untouched.
-  // Half-typed text that fails to compile leaves the last good preview up.
+  // The chain text being edited (null when no post cell is open), drawn to
+  // initPost's `preview` canvas. Half-typed text that fails to compile leaves
+  // the last good preview up.
   setPreview(code: string | null, props: Record<string, unknown>): void
   render(): boolean
   resize(): void
@@ -341,21 +340,18 @@ export function initPost(
     return { pipeline: new THREE.RenderPipeline(into, graph.node), graph, warmed: false }
   }
 
-  // Pending-edit preview (see setPreview): one compiled state of its own, drawn
-  // by a second renderer straight to the editor's canvas. It can't borrow the
-  // main target and copy — a WebGPU canvas snapshot lags a frame behind, so the
-  // mirror would show the real output rather than the pending chain. Built on
-  // the first previewed edit, so a session that never opens a post cell pays
-  // for none of it; it stays out of `states` so a per-edit rebuild can't
-  // accumulate pipelines.
+  // Pending-edit preview (see setPreview): a second renderer drawing straight
+  // to the editor's canvas. It can't borrow the main target and copy — a WebGPU
+  // canvas snapshot lags a frame, so the mirror shows the real output rather
+  // than the pending chain. Its one state stays out of `states`, so a per-edit
+  // rebuild can't accumulate pipelines.
   let preview: { code: string; state: State | null } | null = null
   let previewRenderer: THREE.WebGPURenderer | null = null
   let previewSceneColor: Node = null
   let previewReady = false
 
-  // Repaints on demand, not from the animate loop: a paused playhead draws no
-  // frames, so every event that invalidates the preview (a new chain, the
-  // renderer coming up, a resize) has to redraw it itself.
+  // On demand, not from the animate loop: a paused playhead draws no frames, so
+  // whatever invalidates the preview has to redraw it.
   function renderPreview(): void {
     if (!preview?.state || !previewReady) return
     try {
@@ -368,6 +364,8 @@ export function initPost(
   function previewTarget(): THREE.WebGPURenderer | null {
     const canvas = three.preview
     if (!canvas) return null
+    // Built on the first previewed edit, so a session that never opens a post
+    // cell pays for none of it.
     if (!previewRenderer) {
       const r = new THREE.WebGPURenderer({ canvas, antialias: true })
       previewRenderer = r

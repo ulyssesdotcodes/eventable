@@ -54,17 +54,6 @@ export interface VisualizerFrame {
   bpm?: number
 }
 
-// The pending-edit preview drawn behind the code editor: `code` is the open
-// hydra cell's uncommitted sketch, already folded into the running program by
-// main.ts (null when no hydra cell is open), rendered against the frame's
-// variables and clock like the real sketch. `api` is lazy — the preview's GPU
-// context only comes up once something is actually being previewed. Post's
-// preview needs no second API: it renders through the same PostAPI.
-export interface HydraPreview {
-  api: () => HydraAPI
-  code: () => string | null
-}
-
 export interface Visualizer {
   // Swap in freshly cooked rows. Reconciliation state survives on purpose: a
   // re-cook updates what's on screen in place rather than tearing it down.
@@ -136,7 +125,10 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
 // The hydra layer: the sampled sketch is absolute (setSketch replaces the
 // whole program), so there is no reconciliation state to clear. tick() drives
 // hydra's clock from the source position, so scrubbing scrubs the sketch.
-export function createHydraVisualizer(hydraAPI: HydraAPI, preview?: HydraPreview): Visualizer {
+// `previewCode` is the open hydra cell's uncommitted sketch, folded in place by
+// main.ts (null when there's no such cell): the scene API previews it against
+// this frame's variables and clock. The post visualizer takes the same hook.
+export function createHydraVisualizer(hydraAPI: HydraAPI, previewCode?: () => string | null): Visualizer {
   let index: Row[] = buildHydraIndex([])
   let maxIndex = 0
   let epoch = 0
@@ -169,15 +161,10 @@ export function createHydraVisualizer(hydraAPI: HydraAPI, preview?: HydraPreview
         const loop = ctx.loop ? { loop: ctx.loop() } : {}
         return { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...loop }
       }
-      hydraAPI.setSketch(sketch ? { ...sketch, vars: withCtx(sketch.vars) } : null)
+      const vars = withCtx(sketch?.vars ?? {})
+      hydraAPI.setSketch(sketch ? { ...sketch, vars } : null)
       hydraAPI.tick(frameF / FPS)
-      // The pending edit rides the same variables and clock as the real sketch.
-      const pending = preview?.code() ?? null
-      if (preview && pending != null) {
-        const api = preview.api()
-        api.setSketch({ code: pending, vars: withCtx(sketch?.vars ?? {}) })
-        api.tick(frameF / FPS)
-      }
+      if (previewCode) hydraAPI.setPreview(previewCode(), vars)
       return []
     },
     clear(): void {
@@ -231,8 +218,6 @@ export function createBaubleVisualizer(baubleAPI: BaubleAPI): Visualizer {
 // once loopFrames is known), so clear() must not tear it down. applyFrame folds
 // to a precompiled state and writes the frame's live-uniform values;
 // three-scene's animate loop drives the actual render.
-// `previewCode` is the hydra preview's post twin: the open post cell's
-// uncommitted chain (see HydraPreview), rendered by the same PostAPI.
 export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => string | null): Visualizer {
   let index: Row[] = buildPostIndex([])
   let maxIndex = 0
@@ -273,7 +258,6 @@ export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => strin
       const midi = ctx?.midi ? { $midi: ctx.midi } : {}
       const props = { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...clock }
       postAPI.setFrame(frame, props)
-      // The pending edit compiles to its own state off the same props.
       if (previewCode) postAPI.setPreview(previewCode(), props)
       return []
     },

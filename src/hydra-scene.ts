@@ -13,6 +13,9 @@ import type { HydraFrame } from './hydra.js'
 export interface HydraAPI {
   setSketch(frame: HydraFrame | null): void
   tick(timeSeconds: number): void
+  // The sketch text being edited (null when no hydra cell is open), run on
+  // initHydra's `preview` canvas by a second hydra reading the same sources.
+  setPreview(code: string | null, vars: Record<string, unknown>): void
   reset(): void
   // Force the regl-refresh/redraw sequence a real window resize triggers —
   // hydra occasionally wedges into a stuck error state that only this (not
@@ -24,8 +27,14 @@ export interface HydraAPI {
 const PASSTHROUGH = 'src(s0).out(o0)'
 
 // `source` becomes hydra's s0; each canvas in `extras` becomes the next source
-// in order (main.ts wires the bauble canvas in as s1).
-export function initHydra(canvas: HTMLCanvasElement, source: HTMLCanvasElement, ...extras: HTMLCanvasElement[]): HydraAPI {
+// in order (main.ts wires the bauble canvas in as s1). `preview` is where
+// setPreview's second hydra draws.
+export function initHydra(
+  canvas: HTMLCanvasElement,
+  source: HTMLCanvasElement,
+  extras: HTMLCanvasElement[] = [],
+  preview?: HTMLCanvasElement,
+): HydraAPI {
   const width = canvas.width || 1280
   const height = canvas.height || 720
   const regl = createREGL({ canvas, pixelRatio: 1 })
@@ -102,9 +111,20 @@ export function initHydra(canvas: HTMLCanvasElement, source: HTMLCanvasElement, 
   setSketch(null)
   tick(0)
 
+  // Built on first use, so a session that never edits a hydra cell pays for no
+  // second GPU context. It rides this hydra's clock, which is already the
+  // playback clock in absolute seconds.
+  let previewHydra: HydraAPI | null = null
+
   return {
     setSketch,
     tick,
+    setPreview(code, vars): void {
+      if (code == null || !preview) return
+      previewHydra ??= initHydra(preview, source, extras)
+      previewHydra.setSketch({ code, vars })
+      previewHydra.tick(lastTimeSeconds)
+    },
     reset(): void {
       lastCode = null
       lastTimeSeconds = 0

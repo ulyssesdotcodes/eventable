@@ -1,7 +1,7 @@
 import './style.css'
 import { createSignal } from 'solid-js'
 import { initThree } from './three-scene.js'
-import { initHydra, type HydraAPI } from './hydra-scene.js'
+import { initHydra } from './hydra-scene.js'
 import { isHydraRow, hydraCodeUpToRow } from './hydra.js'
 import { isBaubleRow } from './bauble.js'
 import { isPostRow, postCodeUpToRow } from './post.js'
@@ -115,15 +115,14 @@ let playback: PlaybackAPI
 // persistSession can record it, restoring the last-shown table on resume.
 let currentTable: string | null = null
 
-// --- pending-edit preview ----------------------------------------------------
 // The hydra/post cell open in the editor, previewed behind the code as you
-// type. The uncommitted text goes back into its table and folds like any other
+// type: the uncommitted text goes back into its table and folds like any other
 // row, so a fragment cell (an `add` chunk) previews as the running sketch it
-// joins — the same fold the row's ⓘ popover shows. Cleared implicitly: the
-// editor's own cell language is what gates it.
+// joins — the same fold the row's ⓘ popover shows. No explicit clear; the
+// editor's own cell language gates it.
 let previewCell: { table: string; rowIndex: number; col: string; lang: 'hydra' | 'post'; text: string } | null = null
-// Debounced: each change recompiles a sketch (hydra) or a whole TSL pipeline
-// (post), so a keystroke must not reach the GPU.
+// A keystroke must not reach the GPU: each change recompiles a sketch (hydra)
+// or a whole TSL pipeline (post).
 const PREVIEW_DEBOUNCE_MS = 150
 let previewTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -742,11 +741,9 @@ const editor = createEditor({
     const target = previewCell
     if (!target) return
     clearTimeout(previewTimer)
-    previewTimer = setTimeout(() => {
-      if (previewCell !== target) return
-      target.text = code
-      playback.refresh()
-    }, PREVIEW_DEBOUNCE_MS)
+    // Writes to the captured cell, so a late timer after a cell switch lands on
+    // the object nothing reads any more.
+    previewTimer = setTimeout(() => { target.text = code; playback.refresh() }, PREVIEW_DEBOUNCE_MS)
   },
   // Escaping a code cell hands keyboard focus back to the table it came from.
   onExitCell: () => tablePanel.focusGrid(),
@@ -1229,20 +1226,14 @@ sceneAPI.setPost(postAPI)
 const baubleAPI = initBauble(mounts.baubleCanvas)
 // The bauble canvas rides along as hydra source s1, so a sketch can composite
 // the SDF render.
-const hydraAPI = initHydra(mounts.hydraCanvas, mounts.threeCanvas, mounts.baubleCanvas)
-// The preview's own hydra reads the same sources; built on first use so a
-// session that never edits a hydra cell pays for no second GPU context.
-let hydraPreviewAPI: HydraAPI | null = null
+const hydraAPI = initHydra(mounts.hydraCanvas, mounts.threeCanvas, [mounts.baubleCanvas], mounts.preview.hydra)
 // Post is registered before hydra: it prepares the scene's post uniforms for
 // the frame hydra then samples.
 const playbackController = createPlaybackController(
   [
     createSceneVisualizer(sceneAPI),
     createPostVisualizer(postAPI, () => previewCode('post')),
-    createHydraVisualizer(hydraAPI, {
-      api: () => (hydraPreviewAPI ??= initHydra(mounts.preview.hydra, mounts.threeCanvas, mounts.baubleCanvas)),
-      code: () => previewCode('hydra'),
-    }),
+    createHydraVisualizer(hydraAPI, () => previewCode('hydra')),
     createBaubleVisualizer(baubleAPI),
   ],
   playbackOptions,

@@ -415,10 +415,8 @@ const EXPR_TOKENS: { label: string; insert: string; back: number }[] = [
   { label: 'tau', insert: 'tau', back: 0 },
 ]
 
-// Canvases the pending-edit preview draws into, filled by this render and
-// driven imperatively from main.ts — one per language, since each is a GPU
-// surface of its own (a second hydra, a second post renderer). Only the open
-// cell's shows, behind the code.
+// Canvases the pending-edit preview draws into — one per language, since each
+// is a GPU surface of its own. Only the open cell's shows.
 export interface PreviewMounts {
   hydra: HTMLCanvasElement
   post: HTMLCanvasElement
