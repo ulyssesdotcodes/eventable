@@ -1,10 +1,10 @@
 import './style.css'
 import { createSignal } from 'solid-js'
 import { initThree } from './three-scene.js'
-import { initHydra } from './hydra-scene.js'
-import { isHydraRow } from './hydra.js'
+import { initHydra, type HydraAPI } from './hydra-scene.js'
+import { isHydraRow, hydraCodeUpToRow } from './hydra.js'
 import { isBaubleRow } from './bauble.js'
-import { isPostRow } from './post.js'
+import { isPostRow, postCodeUpToRow } from './post.js'
 import { particleRows, hasSpawner, particleParamsAt, type ParticleParamName } from './particles.js'
 import { initBauble } from './bauble-scene.js'
 import { initPost } from './post-scene.js'
@@ -115,6 +115,27 @@ let playback: PlaybackAPI
 // persistSession can record it, restoring the last-shown table on resume.
 let currentTable: string | null = null
 
+// --- pending-edit preview ----------------------------------------------------
+// The hydra/post cell open in the editor, previewed behind the code as you
+// type. The uncommitted text goes back into its table and folds like any other
+// row, so a fragment cell (an `add` chunk) previews as the running sketch it
+// joins — the same fold the row's ⓘ popover shows. Cleared implicitly: the
+// editor's own cell language is what gates it.
+let previewCell: { table: string; rowIndex: number; col: string; lang: 'hydra' | 'post'; text: string } | null = null
+// Debounced: each change recompiles a sketch (hydra) or a whole TSL pipeline
+// (post), so a keystroke must not reach the GPU.
+const PREVIEW_DEBOUNCE_MS = 150
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+
+function previewCode(lang: 'hydra' | 'post'): string | null {
+  const cell = previewCell
+  if (!cell || cell.lang !== lang || editor.activeCellLang() !== lang) return null
+  const rows = editableStore.get(cell.table)?.rows
+  if (!rows) return null
+  const edited = rows.map((r, i) => (i === cell.rowIndex ? { ...r, [cell.col]: cell.text } : r))
+  return (lang === 'post' ? postCodeUpToRow : hydraCodeUpToRow)(edited, cell.rowIndex)
+}
+
 const tablePanel = createTablePanel(editableStore, {
   onEditCell: (table, rowIndex, col, value) => {
     // Clicking a code cell should reveal the editor if it's collapsed (the
@@ -142,6 +163,8 @@ const tablePanel = createTablePanel(editableStore, {
     // "=" cells edit without the marker — the buffer must be a plain JS
     // expression for the 'expr' language service — and commit re-adds it.
     const isExpr = lang === 'expr'
+    // Preview this cell behind the editor — see previewCode.
+    previewCell = lang === 'hydra' || lang === 'post' ? { table, rowIndex, col, lang, text: value } : null
     editor.editCell(`${table}[${rowIndex}].${col}`, isExpr ? value.slice(1) : value, (text) => {
       // A number column reached via cell-target mode: plain numeric (or
       // blank) text goes back to a number/blank, so deleting the formula
@@ -155,6 +178,9 @@ const tablePanel = createTablePanel(editableStore, {
       editableStore.setCell(table, rowIndex, col, stored)
       if (liveCode != null) void evaluate(liveCode, { setError: editor.setError, seed: liveSeed })
     }, { lang })
+    // editCell is what makes the cell's language current, and a paused playhead
+    // draws no frames of its own — so the preview needs this nudge to appear.
+    playback.refresh()
   },
   onCtrlEnter: () => editor.run(),
   onSelectTable: (name) => {
@@ -709,8 +735,19 @@ const editor = createEditor({
     if (cellChanged) schedulePresenceRefresh()
   },
   // Announce the in-progress buffer (throttled in presence.ts) so peers can
-  // mirror it before it is ever Run.
-  onEdit: (cell, code) => presence?.setLiveCode(cell, code),
+  // mirror it before it is ever Run, and feed the same text to the preview
+  // behind the editor.
+  onEdit: (cell, code) => {
+    presence?.setLiveCode(cell, code)
+    const target = previewCell
+    if (!target) return
+    clearTimeout(previewTimer)
+    previewTimer = setTimeout(() => {
+      if (previewCell !== target) return
+      target.text = code
+      playback.refresh()
+    }, PREVIEW_DEBOUNCE_MS)
+  },
   // Escaping a code cell hands keyboard focus back to the table it came from.
   onExitCell: () => tablePanel.focusGrid(),
   programDirty: (buffer) => (liveCode == null || buffer !== liveCode) || editableStore.hasPendingEdits(),
@@ -1182,16 +1219,32 @@ const mounts = mountApp(document.getElementById('app') as HTMLElement, {
 const sceneAPI = initThree(mounts.threeCanvas, mounts.canvasPane)
 // The TSL post stage runs over the three scene BEFORE hydra samples the canvas
 // as s0; three-scene's animate loop drives its render (see setPost).
-const postAPI = initPost({ renderer: sceneAPI.renderer, scene: sceneAPI.scene, camera: sceneAPI.camera })
+const postAPI = initPost({
+  renderer: sceneAPI.renderer,
+  scene: sceneAPI.scene,
+  camera: sceneAPI.camera,
+  preview: mounts.preview.post,
+})
 sceneAPI.setPost(postAPI)
 const baubleAPI = initBauble(mounts.baubleCanvas)
 // The bauble canvas rides along as hydra source s1, so a sketch can composite
 // the SDF render.
 const hydraAPI = initHydra(mounts.hydraCanvas, mounts.threeCanvas, mounts.baubleCanvas)
+// The preview's own hydra reads the same sources; built on first use so a
+// session that never edits a hydra cell pays for no second GPU context.
+let hydraPreviewAPI: HydraAPI | null = null
 // Post is registered before hydra: it prepares the scene's post uniforms for
 // the frame hydra then samples.
 const playbackController = createPlaybackController(
-  [createSceneVisualizer(sceneAPI), createPostVisualizer(postAPI), createHydraVisualizer(hydraAPI), createBaubleVisualizer(baubleAPI)],
+  [
+    createSceneVisualizer(sceneAPI),
+    createPostVisualizer(postAPI, () => previewCode('post')),
+    createHydraVisualizer(hydraAPI, {
+      api: () => (hydraPreviewAPI ??= initHydra(mounts.preview.hydra, mounts.threeCanvas, mounts.baubleCanvas)),
+      code: () => previewCode('hydra'),
+    }),
+    createBaubleVisualizer(baubleAPI),
+  ],
   playbackOptions,
 )
 setPlaybackCtl(playbackController)

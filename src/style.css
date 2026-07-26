@@ -105,6 +105,39 @@ html, body {
   flex-direction: column;
   background: #16213e;
   overflow: hidden;
+  /* Stacking context for the preview below: it has to paint over the pane's
+     own background but under everything in the pane. */
+  position: relative;
+  z-index: 0;
+}
+
+/* Pending-edit preview: the open hydra/post cell's uncommitted code, rendered
+   behind the code it comes from (main.ts drives the canvases). Only the open
+   cell's language shows; negative z-index puts it under the header, the
+   session bars and the text without any of them needing to be lifted. */
+.editor-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  display: none;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.editor-preview.active {
+  display: block;
+}
+
+/* Let the preview through: CodeMirror's own theme paints an opaque background
+   over the whole editor, and its injected rules outrank a plain selector. A
+   scrim rather than full transparency — the code has to stay readable over a
+   bright sketch. */
+#editor-pane.previewing .cm-editor,
+#editor-pane.previewing .cm-gutters,
+#editor-pane.previewing .cm-panels {
+  background: rgba(22, 33, 62, 0.45) !important;
 }
 
 /* ── Editor/table divider ── */

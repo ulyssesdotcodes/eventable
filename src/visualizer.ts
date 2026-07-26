@@ -54,6 +54,17 @@ export interface VisualizerFrame {
   bpm?: number
 }
 
+// The pending-edit preview drawn behind the code editor: `code` is the open
+// hydra cell's uncommitted sketch, already folded into the running program by
+// main.ts (null when no hydra cell is open), rendered against the frame's
+// variables and clock like the real sketch. `api` is lazy — the preview's GPU
+// context only comes up once something is actually being previewed. Post's
+// preview needs no second API: it renders through the same PostAPI.
+export interface HydraPreview {
+  api: () => HydraAPI
+  code: () => string | null
+}
+
 export interface Visualizer {
   // Swap in freshly cooked rows. Reconciliation state survives on purpose: a
   // re-cook updates what's on screen in place rather than tearing it down.
@@ -125,7 +136,7 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
 // The hydra layer: the sampled sketch is absolute (setSketch replaces the
 // whole program), so there is no reconciliation state to clear. tick() drives
 // hydra's clock from the source position, so scrubbing scrubs the sketch.
-export function createHydraVisualizer(hydraAPI: HydraAPI): Visualizer {
+export function createHydraVisualizer(hydraAPI: HydraAPI, preview?: HydraPreview): Visualizer {
   let index: Row[] = buildHydraIndex([])
   let maxIndex = 0
   let epoch = 0
@@ -146,20 +157,27 @@ export function createHydraVisualizer(hydraAPI: HydraAPI): Visualizer {
       const sketch = hydraFrameAt(index, Math.floor(frameF), loopFrames)
       // Resolve midi/slider bindings, then expose every slider's value as
       // `props.sliders` (an explicit user variable named "sliders" still wins).
-      if (sketch) {
-        const vars = ctx ? resolveBindings(sketch.vars, ctx) : sketch.vars
-        const sliders = ctx?.sliders?.()
-        // $midi lets expr.midi() dynamic args sample the playhead's MIDI
-        // ($-prefix reserved, like $expr); loop is the expr.loop() counter,
-        // merged after the user vars (like hydra's own clock fields) so a
-        // same-named variable can't hide it.
-        const midi = ctx?.midi ? { $midi: ctx.midi } : {}
-        const loop = ctx?.loop ? { loop: ctx.loop() } : {}
-        hydraAPI.setSketch(ctx ? { ...sketch, vars: { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...loop } } : sketch)
-      } else {
-        hydraAPI.setSketch(sketch)
+      // $midi lets expr.midi() dynamic args sample the playhead's MIDI
+      // ($-prefix reserved, like $expr); loop is the expr.loop() counter,
+      // merged after the user vars (like hydra's own clock fields) so a
+      // same-named variable can't hide it.
+      const withCtx = (base: Record<string, unknown>): Record<string, unknown> => {
+        if (!ctx) return base
+        const vars = resolveBindings(base, ctx)
+        const sliders = ctx.sliders?.()
+        const midi = ctx.midi ? { $midi: ctx.midi } : {}
+        const loop = ctx.loop ? { loop: ctx.loop() } : {}
+        return { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...loop }
       }
+      hydraAPI.setSketch(sketch ? { ...sketch, vars: withCtx(sketch.vars) } : null)
       hydraAPI.tick(frameF / FPS)
+      // The pending edit rides the same variables and clock as the real sketch.
+      const pending = preview?.code() ?? null
+      if (preview && pending != null) {
+        const api = preview.api()
+        api.setSketch({ code: pending, vars: withCtx(sketch?.vars ?? {}) })
+        api.tick(frameF / FPS)
+      }
       return []
     },
     clear(): void {
@@ -213,7 +231,9 @@ export function createBaubleVisualizer(baubleAPI: BaubleAPI): Visualizer {
 // once loopFrames is known), so clear() must not tear it down. applyFrame folds
 // to a precompiled state and writes the frame's live-uniform values;
 // three-scene's animate loop drives the actual render.
-export function createPostVisualizer(postAPI: PostAPI): Visualizer {
+// `previewCode` is the hydra preview's post twin: the open post cell's
+// uncommitted chain (see HydraPreview), rendered by the same PostAPI.
+export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => string | null): Visualizer {
   let index: Row[] = buildPostIndex([])
   let maxIndex = 0
   let epoch = 0
@@ -240,22 +260,21 @@ export function createPostVisualizer(postAPI: PostAPI): Visualizer {
       const loops = loopFrames > 0 ? Math.floor(maxIndex / loopFrames) + 1 : 1
       const frameF = (loops > 1 ? (passAt(epoch) % loops) * loopFrames : 0) + srcFrameF
       const frame = postFrameAt(index, Math.floor(frameF), loopFrames)
-      if (frame) {
-        // Live-arg functions read the props object: the folded variables (with
-        // midi/slider bindings resolved), every slider under `p.sliders`, and
-        // the playback clock (time/beat/bpm) merged LAST so they can't be
-        // shadowed — the only clock a chain sees, which keeps post deterministic
-        // under pause/scrub.
-        const vars = ctx ? resolveBindings(frame.vars, ctx) : frame.vars
-        const sliders = ctx?.sliders?.()
-        const clock = { time: frameF / FPS, beat: frameToBeat(frameF), bpm: bpm ?? 60 / DEFAULT_BEAT_SECONDS, loop: ctx?.loop ? ctx.loop() : 0 }
-        // $midi lets expr.midi() live args sample the playhead's MIDI ($-prefix
-        // reserved, like $expr — a user var can't collide).
-        const midi = ctx?.midi ? { $midi: ctx.midi } : {}
-        postAPI.setFrame(frame, { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...clock })
-      } else {
-        postAPI.setFrame(null, {})
-      }
+      // Live-arg functions read the props object: the folded variables (with
+      // midi/slider bindings resolved), every slider under `p.sliders`, and
+      // the playback clock (time/beat/bpm) merged LAST so they can't be
+      // shadowed — the only clock a chain sees, which keeps post deterministic
+      // under pause/scrub.
+      const vars = frame ? (ctx ? resolveBindings(frame.vars, ctx) : frame.vars) : {}
+      const sliders = ctx?.sliders?.()
+      const clock = { time: frameF / FPS, beat: frameToBeat(frameF), bpm: bpm ?? 60 / DEFAULT_BEAT_SECONDS, loop: ctx?.loop ? ctx.loop() : 0 }
+      // $midi lets expr.midi() live args sample the playhead's MIDI ($-prefix
+      // reserved, like $expr — a user var can't collide).
+      const midi = ctx?.midi ? { $midi: ctx.midi } : {}
+      const props = { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...clock }
+      postAPI.setFrame(frame, props)
+      // The pending edit compiles to its own state off the same props.
+      if (previewCode) postAPI.setPreview(previewCode(), props)
       return []
     },
     clear(): void {

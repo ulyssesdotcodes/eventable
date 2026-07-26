@@ -497,6 +497,33 @@ test('loopBeatsFromEvents keeps the newest set-loop-beats, ignoring other events
   assert.equal(loopBeatsFromEvents([]), null)
 })
 
+test('the pending-edit preview runs the editor buffer against the applied frame, leaving the output alone', () => {
+  const time = fakeTime(0)
+  const hydra = fakeHydra()
+  const applied: (string | null)[] = []
+  hydra.setSketch = (s?: { code: string } | null) => { applied.push(s?.code ?? null) }
+  const previewAPI = fakeHydra()
+  const previews: ({ code: string; vars: Record<string, unknown> } | null)[] = []
+  previewAPI.setSketch = (s?: { code: string; vars: Record<string, unknown> } | null) => { previews.push(s ?? null) }
+  let pending: string | null = null
+  const viz = createHydraVisualizer(hydra, { api: () => previewAPI, code: () => pending })
+  const engine = createPlaybackEngine([viz], { clock: time.clock })
+  engine.load({ sceneRows: [], timelineRows: [], hydraRows: [
+    { event: 'setCode', code: 'osc(1)', beat: 1 },
+    { event: 'setVariable', name: 'freq', value: 7, beat: 1 },
+  ] })
+  engine.toggle()
+  assert.equal(previews.length, 0, 'nothing previews with no code cell open')
+  // Typing in a hydra cell doesn't move the playhead — refresh() is what lands
+  // the preview, and it must land while paused too.
+  engine.toggle()
+  pending = 'osc(2).out(o0)'
+  engine.refresh()
+  assert.equal(previews.at(-1)?.code, 'osc(2).out(o0)')
+  assert.equal(previews.at(-1)?.vars.freq, 7, 'the preview sees the frame’s folded variables')
+  assert.equal(applied.at(-1), 'osc(1).out(o0)', 'the visible output still shows the applied sketch')
+})
+
 // --- beat-derived passes: content past the loop's end plays in later passes --
 
 test('a hydra event past the loop plays once the wall-aligned pass reaches it', () => {

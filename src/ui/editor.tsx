@@ -415,10 +415,23 @@ const EXPR_TOKENS: { label: string; insert: string; back: number }[] = [
   { label: 'tau', insert: 'tau', back: 0 },
 ]
 
+// Canvases the pending-edit preview draws into, filled by this render and
+// driven imperatively from main.ts — one per language, since each is a GPU
+// surface of its own (a second hydra, a second post renderer). Only the open
+// cell's shows, behind the code.
+export interface PreviewMounts {
+  hydra: HTMLCanvasElement
+  post: HTMLCanvasElement
+}
+
 // `children` slots between the header and the CodeMirror host (app.tsx puts
 // the session selector/bar there).
-export function EditorPane(props: { ctl: EditorController; currentTable?: Accessor<string | null>; children?: JSX.Element }) {
+export function EditorPane(props: { ctl: EditorController; currentTable?: Accessor<string | null>; preview?: PreviewMounts; children?: JSX.Element }) {
   const { ctl } = props
+  const previewLang = (): CodeLanguage | null => {
+    const lang = ctl.activeCellLang()
+    return lang === 'hydra' || lang === 'post' ? lang : null
+  }
   const [collapsed, setCollapsed] = createSignal(window.matchMedia('(max-width: 767px)').matches)
   // The token bar targets thumbs; fine-pointer users type with completions.
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches
@@ -436,7 +449,17 @@ export function EditorPane(props: { ctl: EditorController; currentTable?: Access
   })
 
   return (
-    <div id="editor-pane" classList={{ 'editor-collapsed': collapsed() }}>
+    <div id="editor-pane" classList={{ 'editor-collapsed': collapsed(), previewing: !!previewLang() }}>
+      <canvas
+        class="editor-preview"
+        classList={{ active: previewLang() === 'hydra' }}
+        ref={(el) => { if (props.preview) props.preview.hydra = el }}
+      />
+      <canvas
+        class="editor-preview"
+        classList={{ active: previewLang() === 'post' }}
+        ref={(el) => { if (props.preview) props.preview.post = el }}
+      />
       <div class="editor-header">
         <button
           class="collapse-btn"
