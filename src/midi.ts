@@ -1,4 +1,4 @@
-// livecodata MIDI — an append-only event log folded into a streaming table.
+// eventable MIDI — an append-only event log folded into a streaming table.
 // Like sliders, the log rides the shared editable-table store, so recorded
 // MIDI syncs over multiplayer and persists in the session. Events are stamped
 // with the playhead's content/source position (a 1-indexed beat, not wall

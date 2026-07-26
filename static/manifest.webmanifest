@@ -1,6 +1,6 @@
 {
-  "name": "Livecodata",
-  "short_name": "Livecodata",
+  "name": "Eventable",
+  "short_name": "Eventable",
   "description": "Live-coded audiovisual data sketches, jammable in real time.",
   "start_url": "/",
   "scope": "/",

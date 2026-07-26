@@ -1,6 +1,6 @@
 # DSL live-coding plan
 
-Design proposals for making the livecodata DSL a first-class **live** instrument
+Design proposals for making the eventable DSL a first-class **live** instrument
 — typed in front of an audience, where every keystroke costs and every verb has
 to be *findable* under pressure. Hydra's grammar is the reference point: a flat
 global namespace, terse chained verbs, every argument optional with a sensible

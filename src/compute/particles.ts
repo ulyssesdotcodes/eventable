@@ -1,4 +1,4 @@
-// livecodata GPU particle system — vertical slice
+// eventable GPU particle system — vertical slice
 // ----------------------------------------------------------------------------
 // A curl-noise-driven, fully GPU-resident particle system, ported from
 // threely's `particle-specific` branch. Every particle's position/velocity

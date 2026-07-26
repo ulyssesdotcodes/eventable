@@ -1,4 +1,4 @@
-// Sample programs for the livecodata editor. The // lines inside each `code`
+// Sample programs for the eventable editor. The // lines inside each `code`
 // string are user-facing tutorial text shown in the editor — keep them
 // verbose. A sample's `tables` seeds its editable tables' rows, so the code
 // declares only the schema.
@@ -76,7 +76,7 @@ export const SAMPLES: Sample[] = [
   {
     name: "Editable Table",
     table: "path",
-    code: `// livecodata — a sphere moved by an editable table
+    code: `// eventable — a sphere moved by an editable table
 // Unlike every other example here, the path below isn't computed by code —
 // it's data you edit directly, live, in the table panel on the right.
 // Press "Run" (or Cmd/Ctrl-Enter), then hit Play under the scene.
@@ -143,7 +143,7 @@ editable("post", schemas.post)
   {
     name: "Retime Table",
     table: "warp",
-    code: `// livecodata — retiming ONE table with an editable table of time warps
+    code: `// eventable — retiming ONE table with an editable table of time warps
 // The scene is the Editable Table example: a sphere following a hand-entered
 // path. New here is "warp" — an editable table of timeline EVENTS (its own
 // tab on the right) that retimes JUST the sphere, by chaining
@@ -265,7 +265,7 @@ editable("hydra", schemas.hydra,
 },
   {
     name: "Text",
-    code: `// livecodata — text in the 3D scene
+    code: `// eventable — text in the 3D scene
 // A \`shape: "text"\` object is real extruded 3D text (three.js TextGeometry): it
 // has depth, catches the scene's lights, and moves, spins and scales like any
 // other object. The font is bundled, so it appears instantly — no asset to load.
@@ -284,7 +284,7 @@ editable("hydra", schemas.hydra,
 // keyframes ease back and forth, landing back on the start pose just before
 // the loop wraps so it repeats without a jump.
 rows([
-  { id: "title", event: "create", beat: 1, shape: "text", text: "livecodata",
+  { id: "title", event: "create", beat: 1, shape: "text", text: "eventable",
     color: 0x4a9eff, size: 0.7, px: 0, py: 0.4, pz: 0, rx: 0, ry: 0, rz: 0 },
   // A second line that gently swings side to side while turning about y.
   { id: "sub", event: "create", beat: 1, shape: "text", text: "tables to visuals",
@@ -297,7 +297,7 @@ rows([
   {
     name: "Primitives",
     table: "things",
-    code: `// livecodata — building 3D objects the easy way
+    code: `// eventable — building 3D objects the easy way
 // The three.js helpers live under the \`three\` namespace, or its shorthand \`t\`.
 // t.box/sphere/cylinder/cone/torus/text each build a ready-made "create" row
 // for a scene object: beat 1, at the origin, no rotation — you set only the
@@ -336,7 +336,7 @@ t.text({ id: "caption", py: 1.4, size: 0.4, text: "primitives", color: 0xffffff 
   {
     name: "Camera Move",
     table: "cubes",
-    code: `// livecodata — moving the camera from the DSL
+    code: `// eventable — moving the camera from the DSL
 // The camera is just another scene object: \`t.camera([...])\` emits one keyframe
 // per row (id "camera", shape "camera") that rides events → rasterize like
 // anything else, so camera moves interpolate on the beat timeline for free.
@@ -372,7 +372,7 @@ t.camera([
   {
     name: "Lights",
     table: "lights",
-    code: `// livecodata — lighting the scene from the DSL
+    code: `// eventable — lighting the scene from the DSL
 // A \`t.light(...)\` is just another scene object: no mesh, it adds a three.js
 // light. The moment you add one, the scene's default lights switch off, so the
 // program owns the lighting. Being ordinary keyframe tracks, a light's color,
@@ -418,7 +418,7 @@ rows([
   {
     name: "Origami Crane",
     table: "origami",
-    code: `// livecodata — Origami Crane: a table of fold steps, solved exactly
+    code: `// eventable — Origami Crane: a table of fold steps, solved exactly
 // A square of paper folds itself into the traditional crane. Every row of
 // the "origami" table is ONE FOLD, and each is solved exactly when the code
 // runs: the paper is cut along the fold line, the chosen flaps swing over,
@@ -535,7 +535,7 @@ rows([
   {
     name: "Origami Cicada",
     table: "origami",
-    code: `// livecodata — Origami Cicada: the traditional model, nine simple folds
+    code: `// eventable — Origami Cicada: the traditional model, nine simple folds
 // The classic cicada (semi), folded for nearly two centuries: halve the
 // square, fold both corners up, sweep the tips back out past the edges
 // for wings, fold two head layers down (leaving the stripe), then tuck
@@ -586,7 +586,7 @@ paper.spawn({ id: "cicada", color: 0xf4efe2, backColor: 0x79b356, pz: 1.2, rz: -
   {
     name: "Origami Lotus",
     table: "origami",
-    code: `// livecodata — Origami Lotus: a blunt-petalled bloom from a blintz
+    code: `// eventable — Origami Lotus: a blunt-petalled bloom from a blintz
 // The traditional water-lily fold, top-down: blintz the four corners to the
 // centre (a "blintz" fold), coax each corner-point back out past the rim as a
 // petal, then fold every petal's tip back for the lotus's rounded, two-tone
@@ -636,7 +636,7 @@ paper.spawn({ id: "lotus", color: 0xfff2d6, backColor: 0xe0518a, pz: 1.2, rx: -0
   {
     name: "Origami Lily",
     table: "origami",
-    code: `// livecodata — Origami Lily: four sharp petals in a star
+    code: `// eventable — Origami Lily: four sharp petals in a star
 // A blintz base (four corners folded to the centre), then each corner-point
 // pulled straight back out past the rim into a pointed petal — a crisp
 // four-fold star of petals around a pale heart. Every row is one simple fold,
@@ -680,7 +680,7 @@ paper.spawn({ id: "lily", color: 0xf0eeff, backColor: 0x7a3fc0, pz: 1.2, rx: -0.
   {
     name: "Origami Metamorphosis",
     table: "lotus",
-    code: `// livecodata — Origami Metamorphosis: one sheet, two flowers
+    code: `// eventable — Origami Metamorphosis: one sheet, two flowers
 // A single square folds itself into the lotus, opens all the way back to a
 // flat square, then folds into the lily — proof that a fold table runs in
 // reverse. The trick is that origami().sequence() emits the whole folding as
@@ -757,7 +757,7 @@ lotus.spawn({ id: "flowerA", color: 0xfff2d6, backColor: 0xe0518a, ...pose })
   {
     name: "Hydra Sketch",
     table: "hydra",
-    code: `// livecodata — a video-synth sketch with hydra (hydra-ts, a port of ojack's hydra)
+    code: `// eventable — a video-synth sketch with hydra (hydra-ts, a port of ojack's hydra)
 // A generative hydra sketch — no 3D scene involved (src(s0) can equally post-
 // process a rendered scene, sourcing whatever the 3D view draws). Press "Run"
 // (or Cmd/Ctrl-Enter), then hit Play.
@@ -818,7 +818,7 @@ editable("hydra", schemas.hydra)
   {
     name: "Square + Hydra",
     table: "hydra",
-    code: `// livecodata — a flat square spun by three.js, echoed by a two-part hydra sketch
+    code: `// eventable — a flat square spun by three.js, echoed by a two-part hydra sketch
 // The square is the plainest possible 3D object: a "box" squashed thin on one
 // axis. This example is really about the hydra half — a sketch that changes
 // itself partway through the loop, not just a variable (see "Hydra Sketch" for
@@ -860,7 +860,7 @@ editable("hydra", schemas.hydra)
   {
     name: "Post",
     table: "post",
-    code: `// livecodata — GPU post-processing on the rendered scene, as a table (TSL)
+    code: `// eventable — GPU post-processing on the rendered scene, as a table (TSL)
 // The "post" view is hydra's sibling: a table of EVENTS on the loop that build
 // a shader chain run over the rendered 3D scene BEFORE hydra ever sees it. Here
 // a spinning square is turned to glowing edges, then wiped to a mosaic halfway
@@ -938,7 +938,7 @@ editable("post", schemas.post)
   {
     name: "Sliders",
     table: "sliders",
-    code: `// livecodata — on-screen sliders (the twin of MIDI)
+    code: `// eventable — on-screen sliders (the twin of MIDI)
 // Sliders are labelled controls drawn over the visual. Press "Run", then Play,
 // then drag a slider on the top-left of the scene.
 
@@ -997,7 +997,7 @@ rows([
   {
     name: "Particles",
     table: "particles",
-    code: `// livecodata — GPU curl-noise particles, driven by a table
+    code: `// eventable — GPU curl-noise particles, driven by a table
 // A live particle system that runs entirely on the GPU (ported from threely):
 // a huge cloud of points swept along a curl-noise flow field and coloured by
 // their velocity. WebGPU browsers only (desktop Chrome/Edge) — under the WebGL2
@@ -1041,7 +1041,7 @@ t.sphere({ id: "core", r: 0.6, color: 0x140f28, px: 0, py: 0, pz: 0 })
   {
     name: "Hydra Sketch Swap",
     table: "hydra sketch",
-    code: `// livecodata — swapping between two hydra sketches, with a flicker
+    code: `// eventable — swapping between two hydra sketches, with a flicker
 // See "Hydra Sketch" first for the setCode/setVariable basics. Here the base
 // table (\`code\`, below) just swaps scenes with a plain setCode at beat 9 (and
 // wraps back at beat 1 when the loop repeats) — the flicker on top of that
@@ -1094,7 +1094,7 @@ table("hydra sketch").pairBy({ event: "setCode" }, flicker(3, 0.1)).outHydra()
   {
     name: "Hydra Meta",
     table: "hydra",
-    code: `// livecodata — a hydra sketch that rewrites ITSELF as the loop plays
+    code: `// eventable — a hydra sketch that rewrites ITSELF as the loop plays
 // See "Hydra Sketch" first for setCode/setVariable. On top of those, a hydra
 // table has META-PROGRAMMING events — each transforms the code built up so far
 // instead of replacing it, so the whole program edits itself on the beat. Press
@@ -1175,7 +1175,7 @@ editable("hydra", schemas.hydra)
   {
     name: "Bauble Sketch",
     table: "bauble",
-    code: `// livecodata — a 3D SDF sketch with bauble (ianthehenry's bauble.studio)
+    code: `// eventable — a 3D SDF sketch with bauble (ianthehenry's bauble.studio)
 // Where hydra post-processes 2D textures, bauble raymarches a 3D scene written
 // in Janet — shapes composed as signed distance functions and compiled to a
 // GLSL shader. No 3D scene or hydra table involved: the bauble render shows
@@ -1245,8 +1245,8 @@ editable("bauble", schemas.bauble)
   {
     name: "Run Counter",
     table: "runs",
-    code: `// livecodata — a sketch that counts how many times you've run it
-// Everything authored in livecodata lands on an append-only event log, and the
+    code: `// eventable — a sketch that counts how many times you've run it
+// Everything authored in eventable lands on an append-only event log, and the
 // logs are TABLES: the streaming tabs you watch fill up in the panel resolve
 // with table(name) like any other data. "activity" is the session's pulse —
 // every Apply (Run / Cmd/Ctrl-Enter) appends one { kind: "apply" } row. This
@@ -1298,7 +1298,7 @@ rows([
   {
     name: "Session Sculpture",
     table: "pace",
-    code: `// livecodata — the session as a sculpture
+    code: `// eventable — the session as a sculpture
 // table("activity") holds this session's own history — one { kind: "apply" }
 // row per Run — and history makes good building material. This scene lays ONE
 // BRICK PER RUN into a coiling tower: a brick's size is how many table edits
@@ -1374,7 +1374,7 @@ rows(applies.map((a, i) => ({
   {
     name: "Tap Constellation",
     table: "stars",
-    code: `// livecodata — your sense of time, drawn
+    code: `// eventable — your sense of time, drawn
 // The Tap button is a streaming log too: taps() is the tap-beat table, one row
 // per press ({ beat, time } — ordinal + wall-clock ms), the same log the tempo
 // folds from. This sketch draws the current tap window as a CONSTELLATION: one
@@ -1449,7 +1449,7 @@ rows([
   {
     name: "House of Cards",
     table: "ball_height",
-    code: `// livecodata — House of Cards
+    code: `// eventable — House of Cards
 // A triangular pyramid of playing cards collapses when a ball drops on it.
 // Press "Run" (or Cmd/Ctrl-Enter), then hit Play under the scene.
 // Tips: Ctrl-Space completes views, Table verbs, and Expr methods (the methods

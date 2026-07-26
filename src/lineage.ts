@@ -9,7 +9,7 @@
 declare const _lineageUnique: unique symbol
 type LineageSymbol = typeof _lineageUnique
 
-export const LINEAGE = Symbol.for('livecodata.lineage') as unknown as LineageSymbol
+export const LINEAGE = Symbol.for('eventable.lineage') as unknown as LineageSymbol
 
 export type Row = Record<string, unknown>
 
