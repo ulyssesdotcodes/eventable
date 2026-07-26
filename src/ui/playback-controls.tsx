@@ -3,7 +3,7 @@
 // interaction to an engine method (or the TapControl); no playback logic
 // lives here.
 
-import { createSignal, Show, type Accessor } from 'solid-js'
+import { createSignal, createMemo, Show, type Accessor } from 'solid-js'
 import { Icon } from './icon.js'
 import { createPlaybackEngine } from '../playback.js'
 import type { PlaybackEngine, PlaybackOptions, PlaybackViewState, TapControl } from '../playback.js'
@@ -29,6 +29,10 @@ export function PlaybackControls(props: {
 }) {
   const vs = props.vs
   const playing = () => vs().state === 'playing'
+  // vs() re-emits every playback frame; a memo keeps the input's value binding
+  // from re-running (and clobbering an in-progress edit) unless the number
+  // itself changed.
+  const loopBeatsText = createMemo(() => String(vs().loopBeats))
   const timeText = () => {
     const { pos, srcBeat, timelineActive } = vs()
     return timelineActive ? `${(pos + 1).toFixed(2)}→${srcBeat.toFixed(2)} beat` : `beat ${srcBeat.toFixed(2)}`
@@ -60,7 +64,7 @@ export function PlaybackControls(props: {
             type="number"
             min="1"
             step="1"
-            value={String(vs().loopBeats)}
+            value={loopBeatsText()}
             onChange={(e) => {
               const el = e.currentTarget
               const n = Math.max(1, Math.round(parseFloat(el.value) || DEFAULT_LOOP_BEATS))
