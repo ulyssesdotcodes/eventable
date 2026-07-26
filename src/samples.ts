@@ -209,6 +209,60 @@ editable("post", schemas.post)
       ],
     },
   },
+{
+  name: "Origami retime",
+  table: "origami",
+  code: `editable("origami", schemas.origami)
+editable("retime", schemas.timeline)
+
+const paper = origami().steps(table("origami"))
+paper.spawn({ id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.356 })
+  .concat(paper.sequence())
+  // Uncomment to see only a couple folds. 
+  // Check out the "retime" table below and adjust the "from" 
+  // and  "to" columns to change which folds are shown.
+  // Change the event to "pingpong" to see the folds reverse as well
+  // .retime(table("retime"))
+  .outThree()
+
+// Hydra for post-processing. \`src(s0)\` is the rendered origami.
+// Add more "setCode" rows to change the hydra program on the beat.
+editable("hydra", schemas.hydra, 
+[
+  { beat: 1, event: "setCode",
+    code: "src(s0).blend(src(o0).scale(1.003), 0.18).out(o0)" },
+]).outHydra()
+
+`,
+  tables: {
+    origami: [
+      { step: "diag", p1: "0,0", p2: "1,1", move: "0.667,0.333", beat: 1, dur: 2 },
+      { step: "collapse1", p1: "0,0.5", p2: "1,0.5", move: "0.333,0.167", kind: "reverse", beat: 4, dur: 2 },
+      { step: "collapse2", p1: "0.5,0", p2: "0.5,1", move: "0.833,0.667", kind: "reverse", beat: 7, dur: 2 },
+      { step: "collapse3", p1: "0,1", p2: "0.4142135624,0", move: "0.667,0.069036", kind: "reverse", beat: 10, dur: 2 },
+      { step: "collapse4", p1: "0,1", p2: "1,0.5857864376", move: "0.930964,0.667", kind: "reverse", beat: 13, dur: 2 },
+      { step: "flatten", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.930964,0.333", beat: 16, dur: 2 },
+      { step: "tuck1", p1: "0,1", p2: "0.4142135624,0", move: "0.069036,0.667", kind: "reverse", beat: 19, dur: 2 },
+      { step: "tuck2", p1: "0,1", p2: "1,0.5857864376", move: "0.667,0.930964", kind: "reverse", beat: 22, dur: 2 },
+      { step: "kite1", p1: "0,1", p2: "0.6681786379,0", move: "0.525373,0.274808", pick: 1, beat: 25, dur: 2 },
+      { step: "kite2", p1: "0,1", p2: "1,0.3318213621", move: "0.897812,0.667", beat: 28, dur: 2 },
+      { step: "turn", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.333,0.930964", beat: 31, dur: 2 },
+      { step: "kite3", p1: "0,1", p2: "1,0.3318213621", move: "0.667,0.897812", pick: 1, beat: 34, dur: 2 },
+      { step: "kite4", p1: "0,1", p2: "0.6681786379,0", move: "0.208238,0.583899", pick: 1, beat: 37, dur: 2 },
+      { step: "neck", p1: "0.1345593806,0", p2: "0.4733251916,1", move: "0.906033,0.694263", kind: "reverse", beat: 40, dur: 2 },
+      { step: "tail", p1: "0,0.5266748083", p2: "1,0.8654406193", move: "0.246505,0.203815", kind: "reverse", beat: 43, dur: 2 },
+      { step: "head", p1: "0,0.1274716613", p2: "1,0.8431274379", move: "0.096435,0.080352", kind: "reverse", beat: 46, dur: 2 },
+      { step: "wings", p1: "0,0.1414213562", p2: "0.8585786438,1", move: "0.858,0.377;0.377,0.858", beat: 49, dur: 4, to: 0.5 },
+    ],
+    retime: [
+      { event: "retime", from: 1, to: 1 },
+      { beat: 1, event: "retime", from: 15, to: 23, outFrom: 1, outTo: 16 },
+    ],
+    hydra: [
+      { beat: 1, event: "setCode", code: "src(s0).blend(src(o0).scale(1.003), 0.18).out(o0)" },
+    ],
+  },
+},
   {
     name: "Text",
     code: `// livecodata — text in the 3D scene
