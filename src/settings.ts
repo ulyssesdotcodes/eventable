@@ -88,7 +88,16 @@ const midiEnabled = boolSetting('livecodata.midiEnabled', false)
 export const getMidiEnabled = midiEnabled.get
 export const setMidiEnabled = midiEnabled.set
 
-// Table pane's fraction of the editor+table column height (see pane-divider.tsx).
+// Table pane's fraction of the timeline+table column height (see
+// pane-divider.tsx) — a floor, since it also grows into whatever the
+// content-sized timeline pane above it doesn't want.
 const sidePanelSplit = numberSetting('livecodata.sidePanelSplit', 0.5)
 export const getSidePanelSplit = sidePanelSplit.get
 export const setSidePanelSplit = sidePanelSplit.set
+
+// Side panels' fraction of the app width, desktop only — the twin of the split
+// above on the other axis (see pane-divider.tsx). Defaults to the 33% the
+// stylesheet lays out before a drag.
+const canvasSplit = numberSetting('livecodata.canvasSplit', 0.33)
+export const getCanvasSplit = canvasSplit.get
+export const setCanvasSplit = canvasSplit.set

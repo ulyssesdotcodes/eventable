@@ -354,7 +354,9 @@ function pulseParts(pulses: Row[], frame: number): { num: number; nodes: ExprNod
 // Each setVariable name's keyframe track — its rows in buildPostIndex (frame)
 // order. The one grouping foldVars folds base values over and postGlidePairs
 // pairs glide arrows over, so the strip's pairing can't drift from playback's.
-function varTracks(index: Row[]): Map<string, Row[]> {
+// Exported for the timeline pane's variables section (OQ5: post-only — hydra/
+// bauble/particles fold setVariable last-write-wins, with no track to plot).
+export function varTracks(index: Row[]): Map<string, Row[]> {
   const tracks = new Map<string, Row[]>()
   for (const row of index) {
     if (row.event === 'setVariable' && typeof row.name === 'string') {

@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   numericColumns, beatXOf, computeColRanges,
-  xTicks, tickDecimals, fmtNum, resolveSpec,
+  xTicks, tickDecimals, fmtNum, resolveSpec, pivotChannels, TIMELINE_CHART_STYLE,
 } from '../src/graph-panel.js'
 import { Table } from '../src/dsl.js'
 import type { Row } from '../src/lineage.js'
@@ -59,6 +59,12 @@ test('xTicks picks nice steps across magnitudes', () => {
   assert.deepEqual(xTicks(0, 1000, 4), [0, 200, 400, 600, 800, 1000])
 })
 
+test('xTicks: a zero (or negative) targetCount means no axis — TIMELINE_CHART_STYLE\'s sentinel', () => {
+  assert.deepEqual(xTicks(0, 8, 0), [])
+  assert.deepEqual(xTicks(5, 5, 0), [], 'even the zero-span single-tick case is suppressed')
+  assert.equal(TIMELINE_CHART_STYLE.tickTarget, 0)
+})
+
 test('xTicks steps survive float accumulation (0.1-scale steps stay exact)', () => {
   for (const t of xTicks(0, 0.4, 4)) {
     assert.equal(t, parseFloat(t.toFixed(10)), `tick ${t} carries float noise`)
@@ -70,6 +76,22 @@ test('tickDecimals matches the step size', () => {
   assert.equal(tickDecimals([0, 0.2, 0.4]), 1)
   assert.equal(tickDecimals([0, 0.05]), 2)
   assert.equal(tickDecimals([5]), 0, 'single tick: no decimals')
+})
+
+test('pivotChannels: long-format {id,value,beat} rows become one column per id, holes elsewhere', () => {
+  const rows: Row[] = [
+    { id: 'a', value: 1, beat: 1 },
+    { id: 'b', value: 2, beat: 2 },
+    { id: 'a', value: 3, beat: 3 },
+  ]
+  const { rows: pivoted, cols } = pivotChannels(rows, { idCol: 'id', valueCol: 'value' })
+  assert.deepEqual(cols, ['a', 'b'], 'column order is first-seen id order')
+  assert.deepEqual(pivoted, [
+    { beat: 1, a: 1 },
+    { beat: 2, b: 2 },
+    { beat: 3, a: 3 },
+  ], 'each row carries only its own id\'s column — the other column is a hole')
+  assert.deepEqual(pivotChannels([{ value: 1, beat: 1 }], { idCol: 'id', valueCol: 'value' }), { rows: [], cols: [] }, 'a blank id contributes nothing')
 })
 
 test('fmtNum: integers plain, precision scales down as magnitude grows', () => {

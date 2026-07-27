@@ -8,6 +8,7 @@ import {
   postCodeUpToRow,
   postStateFrames,
   foldVars,
+  varTracks,
   type PostFrame,
 } from '../src/post.js'
 import { evalPostCode, chainSignature, collectLiveValues, sliderDeclsInCode, postVarDecls, type OpChain } from '../src/post-lang.js'
@@ -292,6 +293,19 @@ test('a looping track wraps: a named-ease first keyframe glides in from the last
   // Drop the first row's ease and the last value just holds across the boundary.
   const stepFirst = rows.map((r, i) => (i === 0 ? { ...r, ease: undefined } : r))
   close(vars(stepFirst, 180, seqLen).th, 0.8)
+})
+
+test('varTracks: each setVariable name\'s rows, frame-ordered, for the timeline pane\'s variables section', () => {
+  const rows: Row[] = [
+    { beat: 1, event: 'setCode', code: 'blur(4)' }, // not a setVariable row — excluded
+    { beat: 5, event: 'setVariable', name: 'th', value: 0.5 },
+    { beat: 1, event: 'setVariable', name: 'th', value: 0.2 },
+    { beat: 3, event: 'setVariable', name: 'g', value: 0.9 },
+  ]
+  const tracks = varTracks(buildPostIndex(rows))
+  assert.deepEqual([...tracks.keys()], ['th', 'g'])
+  assert.deepEqual(tracks.get('th')!.map((r) => r.value), [0.2, 0.5], 'frame order, not storage order')
+  assert.deepEqual(tracks.get('g')!.map((r) => r.value), [0.9])
 })
 
 test('pulse adds a decaying (default easeOut) contribution that stacks and expires', () => {

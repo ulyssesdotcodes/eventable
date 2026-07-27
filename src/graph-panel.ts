@@ -84,6 +84,26 @@ export function resolveSpec(spec: GraphSpec): ResolvedSpec {
   return { rows, cols, xOf, hasIndex }
 }
 
+// Long-format log rows ({id, value, beat} — a slider move, a midi note/cc, a
+// setVariable keyframe) pivoted to wide format: one Row per input row,
+// carrying only its own id's column, `cols` in first-seen order. Feed the
+// result straight to chartDataFor(rows, ['beat', ...cols], cols, name) —
+// drawSeriesChart already skips a column's non-numeric (missing) entries and
+// never resets its `started` flag, so gaps between one id's points draw as a
+// connecting line rather than a break, which is what a keyframe track wants.
+export function pivotChannels(rows: Row[], { idCol, valueCol }: { idCol: string; valueCol: string }): { rows: Row[]; cols: string[] } {
+  const cols: string[] = []
+  const seen = new Set<string>()
+  const out: Row[] = rows.flatMap((row) => {
+    const id = row[idCol]
+    if (id == null) return []
+    const key = String(id)
+    if (!seen.has(key)) { seen.add(key); cols.push(key) }
+    return [{ beat: row.beat, [key]: row[valueCol] }]
+  })
+  return { rows: out, cols }
+}
+
 export function chartDataFor(rows: Row[], columns: string[], cols: string[], name: string): ChartData | null {
   if (!rows.length || !cols.length) return null
   const { hasIndex, xOf } = beatXOf(columns)
@@ -92,6 +112,7 @@ export function chartDataFor(rows: Row[], columns: string[], cols: string[], nam
 }
 
 export function xTicks(xMin: number, xMax: number, targetCount: number = 4): number[] {
+  if (!(targetCount > 0)) return [] // 0 is TIMELINE_CHART_STYLE's "no axis" sentinel
   const span = xMax - xMin
   if (span === 0) return [xMin]
   const rough = span / targetCount
@@ -159,6 +180,18 @@ export const SPARKLINE_STYLE: SeriesChartStyle = {
   tickFont: '8px system-ui',
   tickTarget: 3,
   yPadFrac: 0,
+}
+
+// A timeline-pane section band: flush against the shared TimelineAxis drawn
+// once above the whole section list, so no padding and no per-section ticks
+// (tickTarget 0 — see xTicks) — beatToX's own 1..maxBeats+1 axis is what lines
+// the sections up, not each chart's own.
+export const TIMELINE_CHART_STYLE: SeriesChartStyle = {
+  pad: { l: 0, r: 0, t: 3, b: 3 },
+  lineWidth: 1.5,
+  tickFont: '9px system-ui',
+  tickTarget: 0,
+  yPadFrac: 0.08,
 }
 
 export interface DrawSeriesChartOptions {

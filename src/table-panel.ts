@@ -9,6 +9,7 @@ import { chartDataFor, numericColumns, resolveSpec, type GraphSpec, type ChartDa
 import { outViewName, type Table } from './dsl.js'
 import type { Row } from './lineage.js'
 import type { EditableTableStore, ColumnType, EditableColumn } from './editable-tables.js'
+import type { EditorHost, EditTarget } from './editor-host.js'
 
 export const MAX_ROWS = 1000
 export const COLUMN_TYPES: ColumnType[] = ['number', 'string', 'boolean', 'code']
@@ -20,9 +21,14 @@ import { EVENTS_SUFFIX } from './editable-tables.js'
 export { EVENTS_SUFFIX }
 
 export interface TablePanelOptions {
-  // Clicking a code-typed cell routes here (the main editor takes over) instead
-  // of opening an inline input.
-  onEditCell?: (table: string, rowIndex: number, col: string, value: string) => void
+  // The buffer behind a code-typed (or "=") cell: the panel promotes the app's
+  // one CodeMirror into a facade, overlay or mobile popover for it. main.ts
+  // owns the language ladder and what committing means.
+  targetFor: (table: string, rowIndex: number, col: string, value: string) => EditTarget
+  // The app's single roving editor — one host per view (see editor-host.ts).
+  host: EditorHost
+  // Loop length in beats, for the warp map's segment compile.
+  loopBeats: () => number
   onCtrlEnter?: () => void
   // Fired when the shown tab changes (including the initial render), so this
   // replica can announce which table it has open.
@@ -176,9 +182,17 @@ export function chartFor(
 ): ChartData | null {
   if (!name) return null
   let spec = graphByName.get(name)
-  if (!spec && !name.endsWith(EVENTS_SUFFIX) && name !== 'code' && !editableStore.isLog(name)) {
+  // slider/midi are flat per-id logs (R8): numericColumns would merge every
+  // id's column into one meaningless line, now that the sectioned timeline
+  // pane shows the same data correctly grouped by id (pivotChannels).
+  if (!spec && !name.endsWith(EVENTS_SUFFIX) && name !== 'code' && name !== 'slider' && name !== 'midi' && !editableStore.isLog(name)) {
     const t = views.get(name)
-    if (t && t.rows.length) {
+    // A timeline-schema view (an .outTimeline() result is cooked-only, so the
+    // editableStore branch above never sees it) already gets the dedicated D5
+    // warp map below the grid — merging its beats, offsets and rates into one
+    // generic line on top of that is the same duplicate-visualization the
+    // slider/midi exclusion prevents.
+    if (t && t.rows.length && !isTimelineSchema(t.columns)) {
       const numericCols = numericColumns(t.rows, t.columns)
       if (numericCols.length) spec = { table: t, columns: numericCols, viewName: name }
     }
@@ -186,6 +200,41 @@ export function chartFor(
   if (!spec) return null
   const { rows, cols } = resolveSpec(spec)
   return chartDataFor(rows, spec.table.columns, cols, name)
+}
+
+// A table can be edited through the grid's own code chip, or facade-promoted
+// to the main editor — either way, the trigger is the same: some column is
+// typed `code`. Shared with RowInfo's per-row trigger (today a hardcoded
+// bauble/post/hydra ternary) so the two tests can't drift apart.
+export function hasCodeColumn(columns: EditableColumn[]): boolean {
+  return columns.some((c) => c.type === 'code')
+}
+
+// Column names schemas.timeline declares (dsl.ts) — checked by name, not by a
+// literal table name, since a timeline warp can be authored under any name
+// (only .retime()'s argument or the "timeline" convention name it).
+const TIMELINE_SCHEMA_COLS = ['beat', 'event', 'from', 'to', 'outFrom', 'outTo', 'rate', 'loop']
+
+function isTimelineSchema(columnNames: string[]): boolean {
+  const set = new Set(columnNames)
+  return TIMELINE_SCHEMA_COLS.every((c) => set.has(c))
+}
+
+// The table pane's bottom slot, below the grid: a code-bearing editable table
+// gets its rows' facades (D3); a timeline-schema table gets a passive warp map
+// (D5, timelineSegments -> drawSeriesChart) instead; anything else, nothing.
+// 'slider'/'midi' are panel-only synthetic views spliced in by tablesForDisplay
+// (main.ts), never real editableStore tables — R11.
+export function bottomSlotFor(
+  name: string | null,
+  views: Map<string, Table>,
+  editableStore: EditableTableStore,
+): 'facades' | 'warp' | 'none' {
+  if (!name || name === 'slider' || name === 'midi') return 'none'
+  const data = editableStore.get(name)
+  if (data && hasCodeColumn(data.columns)) return 'facades'
+  const columnNames = data ? data.columns.map((c) => c.name) : (views.get(name)?.columns ?? [])
+  return isTimelineSchema(columnNames) ? 'warp' : 'none'
 }
 
 // Display order only: sorted by `beat` (stable) when the table has one. The

@@ -1,6 +1,6 @@
 // Editor support — the non-view half of the code editor: DSL documentation
 // tables, completion sources, and hover-tooltip logic. Anything that builds
-// DOM is injected by the view (ui/editor.tsx) as a factory.
+// DOM is injected by the view (ui/cm-editor.ts) as a factory.
 
 import { EditorView, hoverTooltip, showTooltip, Decoration, WidgetType, type DecorationSet, type Tooltip } from '@codemirror/view'
 import { StateField, StateEffect, type Extension } from '@codemirror/state'
@@ -10,6 +10,7 @@ import type { CompletionContext, CompletionResult, Completion } from '@codemirro
 import { isExprDot, isExprNamespaceDot, isThreeDot, cmCompletionType, completionBoost } from './completion.js'
 import { SAMPLES } from './samples.js'
 import type { Table } from './dsl.js'
+import type { Row } from './lineage.js'
 import type { LangClient } from './lang-client.js'
 import type { LangSignatureHelp } from './lang-service.js'
 import type { CodeLanguage } from './editable-tables.js'
@@ -150,6 +151,7 @@ export const EXPR_METHOD_DOCS: Record<string, DocEntry> = {
 
 export const DSL_BUILTINS = Object.keys(DSL_BUILTIN_DOCS)
 
+// Seeds the "code" table's first fragment row (see programText).
 export const defaultProgram = SAMPLES[0].code
 // The default example's row data lives with the sample, not in the code, so a
 // fresh session must seed the store with it.
@@ -413,9 +415,14 @@ export interface RemoteCursor {
   head: number
 }
 
-// The main program's cell label — the "code" table's single row, in the same
-// table[row].col form editCell uses.
-export const PROGRAM_CELL = 'code[0].code'
+// The program is the "code" table's rows: every non-empty cell is a fragment of
+// one concatenated source, joined in storage order (OQ2). Concatenating rather
+// than executing each fragment separately is what lets a top-level const in one
+// row be visible to the next — the natural thing when a working program is
+// split in two.
+export function programText(rows: Row[]): string {
+  return rows.map((r) => String(r.code ?? '')).filter((s) => s.trim() !== '').join('\n')
+}
 
 class RemoteCursorWidget extends WidgetType {
   constructor(private readonly user: string, private readonly color: string) { super() }

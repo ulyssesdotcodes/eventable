@@ -1,5 +1,5 @@
 import './style.css'
-import { createSignal } from 'solid-js'
+import { createSignal, createMemo, createRoot } from 'solid-js'
 import { initThree } from './three-scene.js'
 import { initHydra } from './hydra-scene.js'
 import { isHydraRow } from './hydra.js'
@@ -9,11 +9,15 @@ import { particleRows, hasSpawner, particleParamsAt, type ParticleParamName } fr
 import { initBauble } from './bauble-scene.js'
 import { initPost } from './post-scene.js'
 import { createSceneVisualizer, createHydraVisualizer, createBaubleVisualizer, createPostVisualizer } from './visualizer.js'
+import type { PassState, VisualizerKind } from './visualizer.js'
+import { sectionsFor, type TimelineSection } from './timeline-sections.js'
 import { mountApp } from './ui/app.js'
-import { createEditor, defaultProgram, defaultTables, defaultTable, PROGRAM_CELL } from './ui/editor.js'
+import { createCmEditor } from './ui/cm-editor.js'
+import { createEditorHost, type EditTarget } from './editor-host.js'
+import { defaultProgram, defaultTables, defaultTable, programText } from './editor-support.js'
 import { createTablePanel } from './ui/table-panel.js'
 import { EVENTS_SUFFIX } from './table-panel.js'
-import { createPlaybackController, type PlaybackController } from './ui/playback-controls.js'
+import { createPlaybackController, type PlaybackController } from './ui/transport.js'
 import { createSessionBar } from './ui/session-bar.js'
 import { createSessionSelector } from './ui/session-selector.js'
 import { createRoomChip } from './ui/room-chip.js'
@@ -25,39 +29,59 @@ import type { CookedSigs } from './replay.js'
 import { randomSeed, localSource } from './event-log.js'
 import { createPresenceChannel, userColor, lastCellEdits } from './presence.js'
 import { Table, outViewName } from './dsl.js'
-import { createEditableTableStore, defaultFor, DISABLED_COL, CLEAR_RUNS_KIND, ACTIVITY_TABLE, isExprCellText, type ColumnType, type SessionRun } from './editable-tables.js'
-import type { ApplyNode } from './branches.js'
+import { createEditableTableStore, defaultFor, DISABLED_COL, CLEAR_RUNS_KIND, ACTIVITY_TABLE, isExprCellText, type ColumnType, type CodeLanguage, type EditableColumn, type SessionRun } from './editable-tables.js'
+import { APPLY_KIND, type ApplyNode } from './branches.js'
 import { createMidiInput, subscribeWebMidi, type MidiInput, type MidiStore } from './midi.js'
 import { createSliderInput, sliderDefs, sameSliderDefs, type SliderDef, type SliderInput } from './sliders.js'
 import { createSliderPanel } from './ui/slider-panel.js'
-import { beatToFrame } from './constants.js'
+import { beatToFrame, DEFAULT_LOOP_BEATS } from './constants.js'
 import { createTapLog } from './tap-log.js'
 import { connectMultiplayer } from './multiplayer.js'
 import type { MultiplayerConnection, MultiplayerStatus } from './multiplayer.js'
 import { PRESENCE_LOG } from './room-core.js'
 import { loopEpochsFromApplies, loopBeatsFromEvents, pausedMsBefore, transportStateFromEvents, playbackOrigin } from './playback.js'
 import type { PlaybackAPI, PlaybackOptions } from './playback.js'
-import type { Row } from './lineage.js'
+import { getLineage, type Row } from './lineage.js'
 import type { PeerPresence } from './ui/table-panel.js'
 
 const dataCache = new Map<string, string>()
 const editableStore = createEditableTableStore()
 
-// The program is itself an editable table "code" (one row: code + seed);
-// "code·events" *is* the run history, and a session is just the store's
-// serialized events — see sessions.ts.
-const CODE_SCHEMA: Record<string, ColumnType> = { code: 'code', seed: 'number' }
+// The program is itself an editable table "code", one fragment per row (see
+// programText); "code·events" *is* the run history, and a session is just the
+// store's serialized events — see sessions.ts. The seed rides the apply record
+// instead of a column, so every fragment row isn't stuck carrying a dead one.
+const CODE_SCHEMA: Record<string, ColumnType> = { code: 'code' }
 
-function setCodeRow(code: string, seed: number): void {
-  if (!editableStore.has('code')) {
-    editableStore.ensure('code', CODE_SCHEMA, [{ code, seed }])
+const codeRows = (): Row[] => editableStore.get('code')?.rows ?? []
+const currentProgram = (): string => programText(codeRows())
+
+// Facade edits write their own cell, so this only has to seed a store with no
+// program yet (a fresh session, an example, a session/room load) — and skip
+// identical writes, or an unchanged re-Apply spams "code·events".
+function setProgram(code: string): void {
+  const rows = editableStore.get('code')?.rows
+  if (!rows) {
+    editableStore.ensure('code', CODE_SCHEMA, [{ code }])
     return
   }
-  // Skip identical writes so re-applying an unchanged program doesn't spam
-  // "code·events" with duplicate rows.
-  const cur = editableStore.get('code')?.rows[0]
-  if (cur && cur.code === code && cur.seed === seed) return
-  editableStore.setRow('code', 0, { code, seed })
+  if (programText(rows) === code) return
+  // A program arriving whole replaces every fragment: writing it into row 0
+  // alone would leave the later rows duplicated onto the end of it.
+  for (let i = rows.length - 1; i > 0; i--) editableStore.removeRow('code', i)
+  editableStore.setRow('code', 0, { code })
+}
+
+// The seed an apply ran with (OQ3), with the legacy code-row `seed` cell as the
+// fallback for sessions recorded before the column moved onto the apply.
+function seedAt(applyId: string | null, rows: Row[]): number {
+  if (applyId != null) {
+    for (const e of editableStore.log.all()) {
+      if (e.kind === APPLY_KIND && e.id === applyId && typeof e.seed === 'number') return e.seed
+    }
+  }
+  const legacy = rows[0]?.seed
+  return typeof legacy === 'number' ? legacy : 0
 }
 
 // Net room membership per the "activity" table's peer-join/leave history
@@ -115,48 +139,106 @@ let playback: PlaybackAPI
 // persistSession can record it, restoring the last-shown table on resume.
 let currentTable: string | null = null
 
-const tablePanel = createTablePanel(editableStore, {
-  onEditCell: (table, rowIndex, col, value) => {
-    // Clicking a code cell should reveal the editor if it's collapsed (the
-    // default on mobile).
-    editor.expand()
-    // The "code" cell is the program itself: clicking it just syncs the main
-    // editor back to the stored value — no cell-target mode.
-    if (table === 'code' && col === 'code') {
-      if (editor.getCode() !== value) editor.setCode(value)
-      return
-    }
-    // Other code-typed cells edit via cell-target mode; committing re-cooks
-    // with the current seed so tweaking a sketch doesn't re-randomize the scene.
-    // Editor language: the column's declared language wins (the only signal
-    // that survives rows being mapped into views); older tables fall back to
-    // sniffing the row — bauble rows share hydra's shape but hold Janet.
-    const data = editableStore.get(table)
-    const colSpec = data?.columns.find((c) => c.name === col)
-    const declaredLang = colSpec?.type === 'code' ? colSpec.language : undefined
-    const lang = declaredLang
-      ?? (colSpec?.type === 'number' && isExprCellText(value) ? 'expr' as const : undefined)
-      ?? (col === 'code' && table === 'bauble' && isBaubleRow(data?.rows[rowIndex]) ? 'bauble' as const : undefined)
-      ?? (col === 'code' && table === 'post' && isPostRow(data?.rows[rowIndex]) ? 'post' as const : undefined)
-      ?? (col === 'code' && isHydraRow(data?.rows[rowIndex]) ? 'hydra' as const : 'dsl' as const)
-    // "=" cells edit without the marker — the buffer must be a plain JS
-    // expression for the 'expr' language service — and commit re-adds it.
-    const isExpr = lang === 'expr'
-    editor.editCell(`${table}[${rowIndex}].${col}`, isExpr ? value.slice(1) : value, (text) => {
-      // A number column reached via cell-target mode: plain numeric (or
-      // blank) text goes back to a number/blank, so deleting the formula
-      // doesn't strand a string in a number column; anything else keeps (or
-      // regains) the "=" marker.
+// The cell the one live CodeMirror is a window onto — peers' cursors are drawn
+// only when on this same cell (see refreshPresenceUI).
+let localCell = ''
+
+// THE one editor: a detached CodeMirror the host reparents into whichever
+// facade/overlay currently owns editing (ui/facade.tsx). No docked pane, no
+// single program buffer.
+const cm = createCmEditor({
+  getViews: () => lastViews,
+  onCaretView: (name) => tablePanel.selectTable(name),
+  getPlayIndex: () => currentPlayIndex,
+  vimMode: getVimMode(),
+  onCursor: (cell, head) => {
+    const cellChanged = cell !== localCell
+    localCell = cell
+    presence?.set({ cell, head })
+    // Switching cells changes which remote cursors are visible *here*; plain
+    // cursor moves only change what peers see of us.
+    if (cellChanged) schedulePresenceRefresh()
+  },
+  // Announce the in-progress buffer (throttled in presence.ts) so peers can
+  // mirror it before it is ever Run.
+  onEdit: (cell, code) => presence?.setLiveCode(cell, code),
+})
+// Escaping a facade hands keyboard focus back to the table it came from.
+const host = createEditorHost(cm, { onDemote: () => tablePanel.focusGrid() })
+
+// Errors land on the promoted target (its facade shows them inline); with
+// nothing promoted they land under the empty label, which is the table pane's
+// own error strip.
+const setError = (msg: string | null): void => host.setError(msg)
+
+// Which language service a code-bearing cell edits in: the column's declared
+// language wins (the only signal that survives rows being mapped into views);
+// older tables fall back to sniffing the row — bauble rows share hydra's shape
+// but hold Janet.
+function cellLanguage(table: string, row: Row | undefined, col: EditableColumn | undefined, value: string): CodeLanguage {
+  if (col?.type === 'code' && col.language) return col.language
+  if (col?.type === 'number' && isExprCellText(value)) return 'expr'
+  if (col?.name !== 'code') return 'dsl'
+  if (table === 'bauble' && isBaubleRow(row)) return 'bauble'
+  if (table === 'post' && isPostRow(row)) return 'post'
+  if (isHydraRow(row)) return 'hydra'
+  return 'dsl'
+}
+
+// The buffer behind one code-bearing (or "=") cell. The table pane builds its
+// facades, expression overlay and mobile popover from these; committing one
+// re-cooks at the *current* seed, so tweaking a sketch never re-randomizes the
+// scene. A "code" row is a program fragment, so its commit re-joins the whole
+// table (see programText) instead of re-running the last cooked text.
+function cellTarget(table: string, rowIndex: number, col: string, value: string): EditTarget {
+  const data = editableStore.get(table)
+  const colSpec = data?.columns.find((c) => c.name === col)
+  const label = `${table}[${rowIndex}].${col}`
+  // The cell's text when this buffer was opened, and the only evidence at
+  // commit time that `rowIndex` still means the same row: a sibling row's
+  // insert/delete (locally, or merged from a peer) splices the array under a
+  // still-open editor, and a merge or scrub refolds it wholesale, so the row
+  // objects can't be held onto either. Advanced by each commit, so applying
+  // twice in a row still works.
+  let baseline = value
+  return {
+    label,
+    lang: cellLanguage(table, data?.rows[rowIndex], colSpec, value),
+    text: value,
+    onCommit: (text) => {
+      // A number column reached through the expression overlay: plain numeric
+      // (or blank) text goes back to a number/blank, so deleting the formula
+      // doesn't strand a string in a number column. The "=" marker itself is
+      // the overlay's business (see ui/facade.tsx).
       const trimmed = text.trim()
       const stored = colSpec?.type !== 'number' ? text
         : trimmed === '' ? ''
-          : Number.isFinite(Number(trimmed)) ? Number(trimmed)
-            : trimmed.startsWith('=') ? trimmed : `=${trimmed}`
+          : Number.isFinite(Number(trimmed)) ? Number(trimmed) : text
+      const liveRow = editableStore.get(table)?.rows[rowIndex]
+      if (!liveRow || String(liveRow[col] ?? '') !== baseline) {
+        host.setError(`${label} changed underneath this edit — it was not applied`, label)
+        return
+      }
       editableStore.setCell(table, rowIndex, col, stored)
-      if (liveCode != null) void evaluate(liveCode, { setError: editor.setError, seed: liveSeed })
-    }, { lang })
+      baseline = String(stored ?? '')
+      const code = table === 'code' ? currentProgram() : liveCode
+      // Bind the label now: the cook is a worker round-trip, and whatever is
+      // promoted when it resolves may be a different cell entirely.
+      if (code != null) void evaluate(code, { setError: (msg) => host.setError(msg, label), seed: liveSeed })
+    },
+  }
+}
+
+const tablePanel = createTablePanel(editableStore, {
+  host,
+  targetFor: cellTarget,
+  loopBeats: () => loopBeatsFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? []) ?? DEFAULT_LOOP_BEATS,
+  onCtrlEnter: () => {
+    // Ctrl-Enter from the grid runs whatever is promoted; with nothing
+    // promoted it is still "Run the program".
+    if (host.promoted()) host.commit()
+    else void evaluate(currentProgram(), { setError, seed: liveSeed })
   },
-  onCtrlEnter: () => editor.run(),
   onSelectTable: (name) => {
     // Remember the shown tab so a save records it and a resume reopens on it
     // (see persistSession / openSession).
@@ -284,11 +366,45 @@ const [playbackCtl, setPlaybackCtl] = createSignal<PlaybackController | null>(nu
 // The applied cook's timeline rows, for the timeline strip's coverage shading
 // — refreshed on every applyCooked, same cadence as the panel's tables.
 const [timelineRows, setTimelineRows] = createSignal<Row[]>([])
-// The applied cook's out views as strip tracks — the same row arrays playback
-// consumes, so the strip's event indicators can't disagree with what will
-// happen. Refreshed on every applyCooked; changing a retime table and
-// applying moves these events.
-const [outTracks, setOutTracks] = createSignal<{ name: string; view: string; rows: Row[] }[]>([])
+// The applied cook, for the timeline pane's bands — the same row arrays
+// playback consumes, so a band's events can't disagree with what will happen.
+// Refreshed on every applyCooked; changing a retime table and applying moves
+// them.
+const [applied, setApplied] = createSignal<{ cooked: CookedData; particleRows: Row[] } | null>(null)
+// Bumped once per coalesced store-change frame (see editableStore.onChange
+// below) — the pane's live warp rows and recorded automation ride it.
+const [storeTick, setStoreTick] = createSignal(0)
+
+const EMPTY_PASSES: Partial<Record<VisualizerKind, PassState>> = {}
+const passKey = (p: Partial<Record<VisualizerKind, PassState>>): string =>
+  Object.entries(p).map(([k, v]) => `${k}${v?.pass}/${v?.loops}`).join(' ')
+
+// The timeline pane's bands. One never-disposed root: these live as long as
+// the app, and the passes memo exists to keep the section list off the
+// per-frame path — vs() hands out a fresh `passes` object every animation
+// frame, but only an actual pass advance may rebuild the bands.
+const sections = createRoot(() => {
+  const passes = createMemo<Partial<Record<VisualizerKind, PassState>>>(
+    () => playbackCtl()?.vs().passes ?? EMPTY_PASSES,
+    EMPTY_PASSES,
+    { equals: (a, b) => passKey(a) === passKey(b) },
+  )
+  return createMemo<TimelineSection[]>(() => {
+    const a = applied()
+    storeTick()
+    if (!a) return []
+    return sectionsFor({
+      cooked: a.cooked,
+      particleRows: a.particleRows,
+      timelineRows: editableStore.get('timeline')?.rows ?? [],
+      sliderRows: sliderInput?.rows() ?? [],
+      // One trace per note+channel: the folded rows key by `note` alone, so
+      // the same note arriving on two channels would merge into one trace.
+      midiRows: midiInput.rows().map((r) => (r.channel == null ? r : { ...r, note: `${r.note}·ch${r.channel}` })),
+      passes: passes(),
+    })
+  })
+})
 const playbackOptions: PlaybackOptions = {
   onTick: (tick, active, srcBeats) => {
     currentPlayIndex = srcBeats
@@ -524,30 +640,25 @@ function diffCooked({ sigs }: CookedData): { scene: boolean; timeline: boolean; 
   return changed
 }
 
-// The strip's out tracks: per consumer kind, the cooked event rows playback
-// will actually use — the arrays applyCooked hands the engine/visualizers, so
-// the strip mirrors what will happen, any .retime() already baked in. 'scene'
-// (pre-rasterized dense frames) has no event rows to show, and 'timeline' IS
-// the warp, drawn as the strip's coverage shading. `view` is the panel tab a
-// track's handle click opens — the "(system)" view when routed, else the
-// bare-named one the consumer fell back to.
-function outTracksFor(cooked: CookedData, particleTableRows: Row[]): { name: string; view: string; rows: Row[] }[] {
-  const viewOf = (kind: string, extra: string[] = []): string => {
-    for (const n of [outViewName(kind), kind, ...extra]) if (cooked.views.has(n)) return n
-    return kind
+// The editable store row a cooked band's row came from, for the timeline
+// pane's drag (see Handle.source). A lineage ref addresses the MATERIALIZED
+// view — ensure()'s visibleRows, disabled rows excluded — while store.setRow
+// takes a storage index, so the visible ordinal is counted back to one. Log
+// tables and views with no store behind them yield nothing, and so stay
+// read-only.
+function resolveSource(row: Row): { table: string; row: number; beat: number } | undefined {
+  for (const ref of getLineage(row)) {
+    if (!editableStore.has(ref.table) || editableStore.isLog(ref.table)) continue
+    const rows = editableStore.get(ref.table)?.rows ?? []
+    let visible = -1
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i][DISABLED_COL] === true) continue
+      if (++visible !== ref.index) continue
+      const beat = rows[i].beat
+      return typeof beat === 'number' ? { table: ref.table, row: i, beat } : undefined
+    }
   }
-  const three = cooked.views.get(outViewName('three')) ?? cooked.views.get('three') ?? cooked.views.get('events')
-  // hydraRows may be sniffed out of the three table when no hydra view exists
-  // (see replay.ts) — those rows already ride the 'three' band and there is
-  // no hydra tab to open, so only a real hydra view earns a band.
-  const hydraRows = cooked.views.has(outViewName('hydra')) || cooked.views.has('hydra') ? cooked.hydraRows : []
-  return [
-    { name: 'three', view: viewOf('three', ['events']), rows: three?.rows ?? [] },
-    { name: 'hydra', view: viewOf('hydra'), rows: hydraRows },
-    { name: 'bauble', view: viewOf('bauble'), rows: cooked.baubleRows },
-    { name: 'post', view: viewOf('post'), rows: cooked.postRows },
-    { name: 'particles', view: viewOf('particles'), rows: particleTableRows },
-  ].filter((t) => t.rows.some((r) => typeof r.beat === 'number'))
+  return undefined
 }
 
 // Render a cooked program and hand its rows to playback. Loop epochs come from
@@ -565,7 +676,7 @@ function applyCooked(cooked: CookedData): void {
   tablePanel.setTables(tablesForDisplay(cooked.views))
   tablePanel.setGraphs(cooked.graphs)
   setTimelineRows(cooked.timelineRows)
-  setOutTracks(outTracksFor(cooked, particleTableRows))
+  setApplied({ cooked, particleRows: particleTableRows })
   // With hydra rows present, hydra's output is the display and it reads the
   // bauble render as s1 — only a bauble-only sketch shows this canvas directly.
   mounts.baubleCanvas.classList.toggle('visible', cooked.baubleRows.length > 0 && cooked.hydraRows.length === 0)
@@ -595,7 +706,7 @@ function persistSession(): void {
     tables: [...lastViews.keys()],
   })
     .then(refreshSelector)
-    .catch((err) => editor.setError(`Session save failed: ${(err as Error).message}`))
+    .catch((err) => setError(`Session save failed: ${(err as Error).message}`))
 }
 
 function refreshSelector(): void {
@@ -674,10 +785,9 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
       setError?.((err as Error).message)
       return
     }
-    if (obsoleteIfProgramChanged) {
-      const current = editableStore.get('code')?.rows[0]?.code
-      if (typeof current === 'string' && current !== code) return
-    }
+    // R7: compare the whole fragment snapshot, not one row — a partially
+    // clobbered room is worse than either side winning outright.
+    if (obsoleteIfProgramChanged && editableStore.has('code') && currentProgram() !== code) return
     setError?.(null)
     liveCode = code
     liveSeed = seed
@@ -689,7 +799,7 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     // *Before* applyCooked renders the table panel, so its first render sees
     // "code" — the onChange reaction that would normally pick up a new table
     // is suppressed by `cooking` right now.
-    setCodeRow(code, seed)
+    setProgram(code)
     // recordApply commits every pending edit as the apply node that *is* the
     // run — BEFORE applyCooked, so the loop epochs it folds already include
     // this apply, re-basing this replica from the very stamp its peers will.
@@ -698,7 +808,9 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     const changed = diffCooked(cooked)
     if (broadcast) {
       const changedKinds = Object.keys(changed).filter((k) => changed[k as keyof typeof changed])
-      editableStore.recordApply({ changed: changedKinds, at: Date.now() })
+      // The seed rides the apply (OQ3) — the replay unit that scrubSession
+      // re-cooks from.
+      editableStore.recordApply({ changed: changedKinds, at: Date.now(), seed })
     }
     syncSessionBar()
     applyCooked(cooked)
@@ -707,47 +819,9 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     cooking--
     // The apply re-baselined the applied code and cleared pending, so the
     // button falls back to disabled until the next edit.
-    editor.refreshCanRun()
+    host.refresh()
   }
 }
-
-// The code cell this editor is a window onto ("code[0].code" is the main
-// program) — peers' cursors are drawn only when on this same cell.
-let localCell: string = PROGRAM_CELL
-
-const editor = createEditor({
-  onRun: evaluate,
-  getViews: () => lastViews,
-  onCaretView: (name) => tablePanel.selectTable(name),
-  getPlayIndex: () => currentPlayIndex,
-  vimMode: getVimMode(),
-  onVimModeChange: setVimMode,
-  midiEnabled,
-  onMidiEnabledChange: (enabled) => {
-    midiEnabled = enabled
-    setMidiEnabled(enabled)
-    if (enabled) ensureMidiSubscription()
-    tablePanel.setTables(tablesForDisplay(lastViews))
-  },
-  onResetHydra: () => { hydraAPI.reinit(); baubleAPI.reinit() },
-  onExport: exportScene,
-  onImport: importScene,
-  onCursor: (cell, head) => {
-    const cellChanged = cell !== localCell
-    localCell = cell
-    presence?.set({ cell, head })
-    // Switching cells changes which remote cursors are visible *here*; plain
-    // cursor moves only change what peers see of us.
-    if (cellChanged) schedulePresenceRefresh()
-  },
-  // Announce the in-progress buffer (throttled in presence.ts) so peers can
-  // mirror it before it is ever Run.
-  onEdit: (cell, code) => presence?.setLiveCode(cell, code),
-  // Escaping a code cell hands keyboard focus back to the table it came from.
-  onExitCell: () => tablePanel.focusGrid(),
-  programDirty: (buffer) => (liveCode == null || buffer !== liveCode) || editableStore.hasPendingEdits(),
-  hasPendingEdits: () => editableStore.hasPendingEdits(),
-})
 
 // --- presence indicators -----------------------------------------------------
 // Fold the presence + store logs into per-peer indicators for the table panel
@@ -764,26 +838,28 @@ function schedulePresenceRefresh(): void {
 }
 
 // --- live typing view --------------------------------------------------------
-// Mirror a peer's in-progress buffer into our editor. Strictly display —
-// nothing cooks until an Apply pulse — and only while our own buffer is
-// pristine (equal to the last applied program or the last text we mirrored),
-// so a local edit in progress is never clobbered. Newest announcement wins.
-let mirroredLiveCode: string | null = null
+// Mirror a peer's in-progress buffer into the cell we have promoted. Strictly
+// display — nothing cooks until an Apply pulse — and only while our own buffer
+// is pristine (unchanged since promotion, or equal to the last text we mirrored
+// into it), so a local edit in progress is never clobbered. Newest announcement
+// wins. Keyed per cell now that every code row is its own editable buffer.
+const mirroredLiveCode = new Map<string, string>()
 function followLiveCode(): void {
-  if (!presence || localCell !== PROGRAM_CELL) return
+  const cell = host.promoted()
+  if (!presence || !cell) return
   const online = onlinePeers()
   const me = localSource()
   let best: { code: string; seq: number } | null = null
   for (const [client, lc] of presence.liveCodes()) {
-    if (client === me || !online.has(client) || lc.cell !== PROGRAM_CELL) continue
+    if (client === me || !online.has(client) || lc.cell !== cell) continue
     if (!best || lc.seq > best.seq) best = { code: lc.code, seq: lc.seq }
   }
   if (!best) return
-  const current = editor.getCode()
+  const current = cm.getCode()
   if (best.code === current) return
-  if (current !== liveCode && current !== mirroredLiveCode) return
-  mirroredLiveCode = best.code
-  editor.setCode(best.code)
+  if (host.dirty(cell) && current !== mirroredLiveCode.get(cell)) return
+  mirroredLiveCode.set(cell, best.code)
+  host.load(best.code)
 }
 
 function refreshPresenceUI(): void {
@@ -805,7 +881,7 @@ function refreshPresenceUI(): void {
       }
     })
   tablePanel.setPresence(peers)
-  editor.setRemoteCursors(
+  cm.setRemoteCursors(
     [...presence.peers().values()]
       .filter((p) => p.client !== me && online.has(p.client) && p.cell != null && p.cell === localCell)
       .map((p) => ({ client: p.client, user: peerLabel(p.client, p.user), color: peerColor(p.client, p.user), head: p.head })),
@@ -823,11 +899,12 @@ let storeRefreshScheduled = false
 editableStore.onChange(() => {
   // An edit just became pending — flip the Run button synchronously, not on the
   // coalesced frame below, so it's enabled the instant a grid Enter commits.
-  if (!cooking) editor.refreshCanRun()
+  if (!cooking) host.refresh()
   if (cooking || storeRefreshScheduled) return
   storeRefreshScheduled = true
   requestAnimationFrame(() => {
     storeRefreshScheduled = false
+    setStoreTick((t) => t + 1)
     tablePanel.setTables(tablesForDisplay(lastViews))
     // A slider may have been declared between cooks — a post cell's slider()
     // lands at frame time, a peer's declaration by merge.
@@ -880,7 +957,7 @@ let scrubEpoch = 0
 async function scrubSession(pos: number): Promise<void> {
   // An empty axis isn't necessarily "nothing to show": a Clear leaves the
   // "code" history untouched, just with no bookmarks — treat it as "show
-  // head". The codeRow check below still no-ops for a genuinely empty session.
+  // head". The blank-program check below still no-ops for an empty session.
   const head = editableStore.currentHead()
   const path = head === null ? editableStore.runs() : editableStore.branchPath()
   const clamped = path.length ? Math.max(0, Math.min(pos, path.length - 1)) : 0
@@ -891,6 +968,12 @@ async function scrubSession(pos: number): Promise<void> {
   // apply id.
   const target = atLatest ? null : head === null ? (path[clamped] as SessionRun) : (path[clamped] as ApplyNode).id
   editableStore.setReplayView(target)
+  // The facades re-read the scrubbed rows on their own, but a promoted row's
+  // buffer is CodeMirror's and would keep showing the pre-scrub text — a
+  // visible split, and an Apply from it would fork the branch with content
+  // from a run the user isn't even looking at. Hand the view back, never
+  // committing: the edit belongs to the head, not to this history.
+  host.demote(false)
   // Tint the bar when resting on an earlier apply of a branching session —
   // an edit/apply here forks a new branch rather than extending.
   sessionBar.setForking(head !== null && !atLatest)
@@ -898,27 +981,23 @@ async function scrubSession(pos: number): Promise<void> {
   // stage, and both must surface on the error strip rather than vanishing as
   // an unhandled rejection.
   try {
-    const codeRow = editableStore.get('code')?.rows[0]
-    if (!codeRow || typeof codeRow.code !== 'string') return
-    const code = codeRow.code
-    const seed = typeof codeRow.seed === 'number' ? codeRow.seed : 0
+    const rows = codeRows()
+    const code = programText(rows)
+    if (!code) return
+    const seed = seedAt(typeof target === 'string' ? target : atLatest ? head : null, rows)
     // A scrub re-cook renders history — it declares nothing, on or off the
     // live head (the run that declared already logged it).
     const { cooked } = await cookInWorker(code, seed, undefined, false)
     if (epoch !== scrubEpoch) return
     liveCode = code
     liveSeed = seed
-    // A scrub previews a past run: keep the caret and scroll put. The selected
-    // table needs nothing extra — fallbackTab holds the tab unless the run's
-    // fold no longer has it.
-    editor.setCode(code, { preserveView: true })
-    editor.setError(null)
+    setError(null)
     // Re-baseline changed-detection so the next Run's apply pulse diffs
     // against the scrubbed view the user sees.
     diffCooked(cooked)
     applyCooked(cooked)
   } catch (err) {
-    if (epoch === scrubEpoch) editor.setError((err as Error).message)
+    if (epoch === scrubEpoch) setError((err as Error).message)
   } finally {
     cooking--
   }
@@ -961,7 +1040,7 @@ async function openSession(id: string): Promise<void> {
     const ok = quietly(() => editableStore.load(events))
     if (!ok) throw new Error('saved session data could not be read')
   } catch (err) {
-    editor.setError(`Could not open session: ${(err as Error).message}`)
+    setError(`Could not open session: ${(err as Error).message}`)
     return
   }
   currentSessionId = id
@@ -989,11 +1068,8 @@ async function openSession(id: string): Promise<void> {
   tablePanel.restoreTable(savedTable)
 
   // Open for editing *before* running: if the program errors when cooked, the
-  // session still ends up genuinely open — editor holding its code, table
-  // panel its editable tables. Editability reads the store directly, so an
-  // empty view map is enough.
-  const codeRow = editableStore.get('code')?.rows[0]
-  if (codeRow && typeof codeRow.code === 'string') editor.setCode(codeRow.code)
+  // session still ends up genuinely open — the code table's facades read the
+  // store directly, so an empty view map is enough.
   lastViews = new Map<string, Table>()
   updateSliderDefs(lastViews)
   tablePanel.setTables(tablesForDisplay(lastViews))
@@ -1011,8 +1087,7 @@ function newSession(): void {
   // open it on that example's relevant table, not whatever a prior resume left
   // pending.
   tablePanel.restoreTable(defaultTable)
-  editor.setCode(defaultProgram)
-  evaluate(defaultProgram, { setError: editor.setError, persist: false, seeds: defaultTables })
+  evaluate(defaultProgram, { setError, persist: false, seeds: defaultTables })
   syncSessionBar()
   refreshSelector()
 }
@@ -1072,9 +1147,8 @@ async function loadSample(sample: Sample): Promise<void> {
   exitRoomMode()
   currentSessionId = sessionStore.newId()
   quietly(() => editableStore.clear())
-  editor.setCode(sample.code)
   tablePanel.restoreTable(sample.table ?? null)
-  await evaluate(sample.code, { setError: editor.setError, persist: false, seeds: sample.tables })
+  await evaluate(sample.code, { setError, persist: false, seeds: sample.tables })
   syncSessionBar()
   refreshSelector()
 }
@@ -1127,16 +1201,20 @@ function currentScene(): Sample {
   return {
     name: known >= 0 ? SAMPLES[known].name : 'My Scene',
     ...(currentTable ? { table: currentTable } : {}),
-    code: editor.getCode(),
+    code: currentProgram(),
     ...(Object.keys(tables).length ? { tables } : {}),
   }
 }
 
 async function exportScene(): Promise<void> {
   try {
+    // currentScene reads the *committed* rows, so a facade still holding an
+    // unapplied edit would export the pre-edit program. Commit is a no-op on a
+    // pristine buffer.
+    if (host.promoted()) host.commit()
     await navigator.clipboard.writeText(serializeSample(currentScene()))
   } catch (err) {
-    editor.setError(`Export failed: ${(err as Error).message}`)
+    setError(`Export failed: ${(err as Error).message}`)
   }
 }
 
@@ -1146,7 +1224,7 @@ async function importScene(): Promise<void> {
     await loadSample(sample)
     setExampleParam(null)
   } catch (err) {
-    editor.setError(`Import failed: ${(err as Error).message}`)
+    setError(`Import failed: ${(err as Error).message}`)
   }
 }
 
@@ -1195,21 +1273,37 @@ const roomChip = createRoomChip({
 // processes it onto the visible hydra-canvas. The playback engine rides on
 // those APIs, so it's built last and pushed into the watched signal.
 const mounts = mountApp(document.getElementById('app') as HTMLElement, {
-  editor,
   tablePanel,
+  chrome: {
+    vimMode: getVimMode(),
+    midiEnabled,
+    setVimMode: (enabled) => { cm.setVimMode(enabled); setVimMode(enabled) },
+    setMidiEnabled: (enabled) => {
+      midiEnabled = enabled
+      setMidiEnabled(enabled)
+      if (enabled) ensureMidiSubscription()
+      tablePanel.setTables(tablesForDisplay(lastViews))
+    },
+    // "Reset visuals": hydra occasionally wedges into a stuck error state that
+    // a canvas resize/regl refresh clears — this triggers that fix manually.
+    resetHydra: () => { hydraAPI.reinit(); baubleAPI.reinit() },
+    exportScene: () => void exportScene(),
+    importScene: () => void importScene(),
+  },
   sessionBar,
   sessionSelector,
   roomChip,
   sliderPanel,
   playback: playbackCtl,
   timelineRows,
-  outTracks,
+  sections,
+  resolveSource,
   onClearRuns: clearRuns,
-  // A timeline-strip drag committed its one setRow — re-run at the current
-  // seed immediately, same as a code-cell commit (onEditCell above), so the
-  // drop applies right away instead of sitting pending.
+  // A timeline-pane drag committed its one setRow — re-run at the current
+  // seed immediately, same as a cell commit (cellTarget above), so the drop
+  // applies right away instead of sitting pending.
   onDragCommit: () => {
-    if (liveCode != null) void evaluate(liveCode, { setError: editor.setError, seed: liveSeed })
+    if (liveCode != null) void evaluate(liveCode, { setError, seed: liveSeed })
   },
 })
 const sceneAPI = initThree(mounts.threeCanvas, mounts.canvasPane)
@@ -1304,13 +1398,12 @@ async function bootRoom(room: string): Promise<void> {
       quietTransport(() => (state === 'paused' ? playback.pause() : playback.play()))
     }
     if (applied) {
-      const latest = editableStore.get('code')?.rows[0] as { code: string; seed: number } | undefined
-      if (latest) {
-        // evaluate() assumes the editor already shows the code it's given —
-        // a remote program needs pushing into the editor ourselves.
-        if (latest.code !== liveCode) editor.setCode(latest.code)
-        void evaluate(latest.code, { setError: editor.setError, seed: latest.seed, broadcast: false })
-      }
+      // The merge already made their fragments ours; re-cook the joined
+      // program at the seed their apply carried.
+      const code = currentProgram()
+      // R7 again: two applies can be in flight at once, and the loser must not
+      // re-write the "code" table back to its own older fragment snapshot.
+      if (code) void evaluate(code, { setError, seed: seedAt(editableStore.currentHead(), codeRows()), broadcast: false, obsoleteIfProgramChanged: true })
     }
     if (presenceChanged) {
       chipStatus(multiplayer?.status ?? 'connecting')
@@ -1340,7 +1433,7 @@ async function firstRun(): Promise<void> {
     // boots the worker, yield (obsoleteIfProgramChanged) instead of
     // clobbering the room.
     tablePanel.restoreTable(defaultTable)
-    await evaluate(editor.getCode(), { setError: editor.setError, persist: false, obsoleteIfProgramChanged: true, seeds: defaultTables })
+    await evaluate(defaultProgram, { setError, persist: false, obsoleteIfProgramChanged: true, seeds: defaultTables })
   }
   syncSessionBar()
   refreshSelector()

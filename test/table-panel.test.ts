@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import {
   formatCell, formatEditableCell, allNames, nextTableName, fallbackTab, chartFor,
   displayOrder, activeRowIndex, viewersOf, tabRingStyle, lastEditors, moveFocus,
-  isCellInert, EVENTS_SUFFIX, type PeerPresence,
+  isCellInert, hasCodeColumn, bottomSlotFor, EVENTS_SUFFIX, type PeerPresence,
 } from '../src/table-panel.js'
 import type { EditableColumn } from '../src/editable-tables.js'
 import { Table } from '../src/dsl.js'
@@ -174,6 +174,29 @@ test('chartFor never auto-charts event histories, code, or log tables', () => {
   assert.equal(chartFor(null, views, new Map(), store), null)
 })
 
+test('chartFor never auto-charts slider/midi: flat per-id logs, not one merged series (R8)', () => {
+  const store = createEditableTableStore()
+  const views = new Map<string, Table>([
+    ['slider', table([{ id: 'a', value: 1, beat: 1 }, { id: 'b', value: 2, beat: 2 }])],
+    ['midi', table([{ note: 'c4', channel: 1, value: 0.5, beat: 1 }])],
+  ])
+  assert.equal(chartFor('slider', views, new Map(), store), null)
+  assert.equal(chartFor('midi', views, new Map(), store), null)
+})
+
+test('chartFor never auto-charts a cooked timeline-schema view — the warp map already draws it', () => {
+  const store = createEditableTableStore()
+  // An .outTimeline() result is materialized into `views` only, never into the
+  // store, so the editableStore branch that suppresses the chart can't see it.
+  const rows: Row[] = [
+    { beat: 1, event: 'retime', from: 1, to: 5, outFrom: 1, outTo: 9, rate: 0.5, loop: 0 },
+    { beat: 9, event: 'loop', from: 1, to: 5, outFrom: 9, outTo: 17, rate: 1, loop: 1 },
+  ]
+  const views = new Map<string, Table>([['timeline (system)', table(rows)]])
+  assert.equal(chartFor('timeline (system)', views, new Map(), store), null)
+  assert.equal(bottomSlotFor('timeline (system)', views, store), 'warp')
+})
+
 test('an explicit .graph() spec wins over auto-charting and picks its columns', () => {
   const store = createEditableTableStore()
   const rows: Row[] = [{ beat: 1, x: 1, y: 10 }, { beat: 2, x: 2, y: 20 }]
@@ -183,6 +206,40 @@ test('an explicit .graph() spec wins over auto-charting and picks its columns', 
   const chart = chartFor('sim', views, graphByName, store)
   assert.ok(chart)
   assert.deepEqual(chart.cols, ['y'])
+})
+
+// --- table pane bottom slot (bottomSlotFor) -----------------------------------
+
+test('bottomSlotFor: code-typed tables get facades, a timeline-schema table (any name) gets the warp map', async () => {
+  const { SCHEMAS } = await import('../src/dsl.js')
+  const store = createEditableTableStore()
+  store.ensure('hydra', SCHEMAS.hydra)
+  store.ensure('warp', SCHEMAS.timeline) // schema-driven, not the literal name "timeline"
+  store.ensure('notes', { beat: 'number', label: 'string' })
+  const views = new Map<string, Table>()
+
+  assert.equal(bottomSlotFor('hydra', views, store), 'facades')
+  assert.equal(bottomSlotFor('warp', views, store), 'warp')
+  assert.equal(bottomSlotFor('notes', views, store), 'none')
+  assert.equal(bottomSlotFor(null, views, store), 'none')
+})
+
+test('bottomSlotFor: slider/midi are synthetic panel views, not store tables (R11)', () => {
+  const store = createEditableTableStore()
+  // Neither is ever editableStore.createTable'd — tablesForDisplay (main.ts)
+  // splices them into `views` directly from the midi/slider input folds.
+  const views = new Map<string, Table>([
+    ['slider', table([{ id: 'a', value: 1, beat: 1 }])],
+    ['midi', table([{ note: 'c4', channel: 1, value: 0.5, beat: 1 }])],
+  ])
+  assert.equal(bottomSlotFor('slider', views, store), 'none')
+  assert.equal(bottomSlotFor('midi', views, store), 'none')
+})
+
+test('hasCodeColumn matches any code-typed column — the same trigger RowInfo keys off', () => {
+  const cols: EditableColumn[] = [{ name: 'beat', type: 'number' }, { name: 'code', type: 'code', language: 'hydra' }]
+  assert.equal(hasCodeColumn(cols), true)
+  assert.equal(hasCodeColumn([{ name: 'beat', type: 'number' }]), false)
 })
 
 // --- rows under the playhead ---------------------------------------------------
