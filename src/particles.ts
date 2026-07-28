@@ -1,4 +1,4 @@
-// livecodata particles — the pure table side of the GPU particle system
+// eventable particles — the pure table side of the GPU particle system
 // (compute/particles.ts is the stateful GPU sim). A view named "particles"
 // opts the sim in: a `spawn` row turns it on, and `setVariable` rows fold onto
 // the sim's parameters at-or-before the playhead like every other event table.

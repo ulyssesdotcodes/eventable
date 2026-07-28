@@ -18,6 +18,10 @@ export interface EditTarget {
   // target whose Apply commits more than its own text (pending grid edits, the
   // whole program) overrides it.
   isDirty?(text: string, baseline: string): boolean
+  // Folds the pending buffer back into the running program, for the sketch
+  // drawn behind this target while it is promoted. Only hydra/post code cells
+  // have one — see main.ts's previewCode and ui/facade.tsx's previewMounts.
+  preview?(text: string): string | null
 }
 
 export interface EditorHost {
@@ -40,7 +44,7 @@ export interface EditorHost {
 
 export function createEditorHost(
   cm: CmEditor,
-  { onDemote }: { onDemote?: (label: string) => void } = {},
+  { onPromote, onDemote }: { onPromote?: (target: EditTarget) => void; onDemote?: (label: string) => void } = {},
 ): EditorHost {
   const [target, setTarget] = createSignal<EditTarget | null>(null)
   const [errors, setErrors] = createSignal<ReadonlyMap<string, string>>(new Map())
@@ -88,6 +92,7 @@ export function createEditorHost(
     cm.setDoc(next.text)
     refresh()
     cm.focus()
+    onPromote?.(next)
   }
 
   cm.setContext({

@@ -8,6 +8,36 @@ import { For, Show, createEffect, onCleanup, onMount, createSignal } from 'solid
 import { highlightInto } from './cm-editor.js'
 import type { EditorHost, EditTarget } from '../editor-host.js'
 
+// Canvases the pending-edit preview draws into — one per language, since each
+// is a GPU surface of its own. They obey the same one-instance rule the editor
+// view does: created once, detached, then reparented behind whichever surface
+// is live (a WebGL/WebGPU context does not survive being recreated). main.ts
+// hands them to initHydra/initPost at boot via app.tsx's CanvasMounts.
+export type PreviewMounts = Record<'hydra' | 'post', HTMLCanvasElement>
+
+function previewCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas')
+  c.className = 'editor-preview'
+  return c
+}
+
+export const previewMounts: PreviewMounts = { hydra: previewCanvas(), post: previewCanvas() }
+
+const previewFor = (t: EditTarget): HTMLCanvasElement | null =>
+  t.preview && (t.lang === 'hydra' || t.lang === 'post') ? previewMounts[t.lang] : null
+
+// Move the target's preview canvas behind `root` while it is live, and out
+// again when it isn't — appendChild, exactly as the editor view is mounted.
+function mountPreview(root: () => HTMLElement, canvas: () => HTMLCanvasElement | null): void {
+  createEffect(() => {
+    const c = canvas()
+    if (!c) return
+    c.classList.add('active')
+    root().appendChild(c)
+    onCleanup(() => { c.classList.remove('active'); c.remove() })
+  })
+}
+
 // Insert targets for the "=" cell token bar; `back` places the caret that
 // many characters from the end (inside quotes/parens).
 export const EXPR_TOKENS: { label: string; insert: string; back: number }[] = [
@@ -73,20 +103,24 @@ function TokenBar(props: { host: EditorHost }) {
 // another facade).
 function PromotedSurface(props: { host: EditorHost; target: EditTarget; onClose: () => void }) {
   let mount!: HTMLDivElement
+  let surface!: HTMLDivElement
   const coarsePointer = window.matchMedia('(pointer: coarse)').matches
   let opened = false
+  const live = (): boolean => props.host.promoted() === props.target.label
+  const preview = (): HTMLCanvasElement | null => live() ? previewFor(props.target) : null
 
   onMount(() => props.host.promote(props.target, mount))
   onCleanup(() => {
-    if (props.host.promoted() === props.target.label) props.host.demote()
+    if (live()) props.host.demote()
   })
   createEffect(() => {
-    if (props.host.promoted() === props.target.label) opened = true
+    if (live()) opened = true
     else if (opened) props.onClose()
   })
+  mountPreview(() => surface, preview)
 
   return (
-    <div class="editor-surface">
+    <div class="editor-surface" classList={{ previewing: !!preview() }} ref={surface}>
       <div class="editor-surface-head">
         <span class="editor-surface-label">{props.target.label}</span>
         <button
@@ -120,7 +154,12 @@ export function CodeFacade(props: {
 }) {
   let mount!: HTMLDivElement
   let pre!: HTMLPreElement
+  let facade!: HTMLDivElement
   const live = (): boolean => props.host.promoted() === props.target.label
+  // onPromote means something else (the mobile popover) hosts the live view for
+  // this row — and the preview goes wherever the view went.
+  const preview = (): HTMLCanvasElement | null =>
+    live() && !props.onPromote ? previewFor(props.target) : null
 
   createEffect(() => {
     if (!live()) highlightInto(pre, props.target.text)
@@ -128,6 +167,7 @@ export function CodeFacade(props: {
   onCleanup(() => {
     if (live()) props.host.demote()
   })
+  mountPreview(() => facade, preview)
 
   const open = (): void => {
     if (props.onPromote) props.onPromote(props.target)
@@ -136,7 +176,7 @@ export function CodeFacade(props: {
 
   return (
     // data-label is how the grid's code chip finds this facade to promote it.
-    <div class="code-facade" classList={{ 'facade-live': live() }} data-lang={props.target.lang} data-label={props.target.label}>
+    <div class="code-facade" classList={{ 'facade-live': live(), previewing: !!preview() }} data-lang={props.target.lang} data-label={props.target.label} ref={facade}>
       <div class="facade-head">
         <span class="facade-label">{props.target.label}</span>
         <button

@@ -2,9 +2,9 @@ import './style.css'
 import { createSignal, createMemo, createRoot } from 'solid-js'
 import { initThree } from './three-scene.js'
 import { initHydra } from './hydra-scene.js'
-import { isHydraRow } from './hydra.js'
+import { isHydraRow, hydraCodeUpToRow } from './hydra.js'
 import { isBaubleRow } from './bauble.js'
-import { isPostRow } from './post.js'
+import { isPostRow, postCodeUpToRow } from './post.js'
 import { particleRows, hasSpawner, particleParamsAt, type ParticleParamName } from './particles.js'
 import { initBauble } from './bauble-scene.js'
 import { initPost } from './post-scene.js'
@@ -143,6 +143,19 @@ let currentTable: string | null = null
 // only when on this same cell (see refreshPresenceUI).
 let localCell = ''
 
+// The promoted hydra/post cell, previewed behind its own code as you type (see
+// EditTarget.preview): the uncommitted text goes back into its table and folds
+// like any other row, so a fragment cell (an `add` chunk) previews as the
+// running sketch it joins — the same fold the row's ⓘ popover shows.
+let preview: { lang: 'hydra' | 'post'; fold: (text: string) => string | null; text: string } | null = null
+// A keystroke must not reach the GPU: each change recompiles a sketch (hydra)
+// or a whole TSL pipeline (post).
+const PREVIEW_DEBOUNCE_MS = 150
+let previewTimer: ReturnType<typeof setTimeout> | undefined
+
+const previewCode = (lang: 'hydra' | 'post'): string | null =>
+  preview?.lang === lang ? preview.fold(preview.text) : null
+
 // THE one editor: a detached CodeMirror the host reparents into whichever
 // facade/overlay currently owns editing (ui/facade.tsx). No docked pane, no
 // single program buffer.
@@ -160,11 +173,33 @@ const cm = createCmEditor({
     if (cellChanged) schedulePresenceRefresh()
   },
   // Announce the in-progress buffer (throttled in presence.ts) so peers can
-  // mirror it before it is ever Run.
-  onEdit: (cell, code) => presence?.setLiveCode(cell, code),
+  // mirror it before it is ever Run, and feed the same text to the preview
+  // behind the code.
+  onEdit: (cell, code) => {
+    presence?.setLiveCode(cell, code)
+    const target = preview
+    if (!target) return
+    clearTimeout(previewTimer)
+    // Writes to the captured target, so a late timer after a demote lands on
+    // the object nothing reads any more.
+    previewTimer = setTimeout(() => { target.text = code; playback.refresh() }, PREVIEW_DEBOUNCE_MS)
+  },
 })
 // Escaping a facade hands keyboard focus back to the table it came from.
-const host = createEditorHost(cm, { onDemote: () => tablePanel.focusGrid() })
+const host = createEditorHost(cm, {
+  onPromote: (t) => {
+    preview = t.preview && (t.lang === 'hydra' || t.lang === 'post')
+      ? { lang: t.lang, fold: t.preview, text: t.text }
+      : null
+    // Promotion is what puts a preview on screen, and a paused playhead draws
+    // no frames of its own — so it needs this nudge to appear.
+    playback.refresh()
+  },
+  onDemote: () => {
+    preview = null
+    tablePanel.focusGrid()
+  },
+})
 
 // Errors land on the promoted target (its facade shows them inline); with
 // nothing promoted they land under the empty label, which is the table pane's
@@ -201,10 +236,19 @@ function cellTarget(table: string, rowIndex: number, col: string, value: string)
   // objects can't be held onto either. Advanced by each commit, so applying
   // twice in a row still works.
   let baseline = value
+  const lang = cellLanguage(table, data?.rows[rowIndex], colSpec, value)
   return {
     label,
-    lang: cellLanguage(table, data?.rows[rowIndex], colSpec, value),
+    lang,
     text: value,
+    // Only hydra and post have something to draw; the fold is the one the row's
+    // ⓘ popover shows, with the pending text spliced back into its row.
+    preview: lang !== 'hydra' && lang !== 'post' ? undefined : (text) => {
+      const rows = editableStore.get(table)?.rows
+      if (!rows) return null
+      const edited = rows.map((r, i) => (i === rowIndex ? { ...r, [col]: text } : r))
+      return (lang === 'post' ? postCodeUpToRow : hydraCodeUpToRow)(edited, rowIndex)
+    },
     onCommit: (text) => {
       // A number column reached through the expression overlay: plain numeric
       // (or blank) text goes back to a number/blank, so deleting the formula
@@ -1309,16 +1353,26 @@ const mounts = mountApp(document.getElementById('app') as HTMLElement, {
 const sceneAPI = initThree(mounts.threeCanvas, mounts.canvasPane)
 // The TSL post stage runs over the three scene BEFORE hydra samples the canvas
 // as s0; three-scene's animate loop drives its render (see setPost).
-const postAPI = initPost({ renderer: sceneAPI.renderer, scene: sceneAPI.scene, camera: sceneAPI.camera })
+const postAPI = initPost({
+  renderer: sceneAPI.renderer,
+  scene: sceneAPI.scene,
+  camera: sceneAPI.camera,
+  preview: mounts.preview.post,
+})
 sceneAPI.setPost(postAPI)
 const baubleAPI = initBauble(mounts.baubleCanvas)
 // The bauble canvas rides along as hydra source s1, so a sketch can composite
 // the SDF render.
-const hydraAPI = initHydra(mounts.hydraCanvas, mounts.threeCanvas, mounts.baubleCanvas)
+const hydraAPI = initHydra(mounts.hydraCanvas, mounts.threeCanvas, [mounts.baubleCanvas], mounts.preview.hydra)
 // Post is registered before hydra: it prepares the scene's post uniforms for
 // the frame hydra then samples.
 const playbackController = createPlaybackController(
-  [createSceneVisualizer(sceneAPI), createPostVisualizer(postAPI), createHydraVisualizer(hydraAPI), createBaubleVisualizer(baubleAPI)],
+  [
+    createSceneVisualizer(sceneAPI),
+    createPostVisualizer(postAPI, () => previewCode('post')),
+    createHydraVisualizer(hydraAPI, () => previewCode('hydra')),
+    createBaubleVisualizer(baubleAPI),
+  ],
   playbackOptions,
 )
 setPlaybackCtl(playbackController)

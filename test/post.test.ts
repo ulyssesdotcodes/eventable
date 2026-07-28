@@ -461,6 +461,7 @@ test('the post visualizer precompiles with the real loopFrames — no state comp
       }
     },
     setFrame(frame): void { if (frame && !precompiled.has(frame.stateId)) lazy++ },
+    setPreview(): void {},
     render: () => false,
     resize(): void {},
     reset(): void {},

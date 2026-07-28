@@ -9,6 +9,7 @@ import { render } from 'solid-js/web'
 import { TimelinePane } from './timeline-pane.js'
 import type { PlaybackController } from './transport.js'
 import { TablePane, type TablePanelController, type PanelChrome } from './table-panel.js'
+import { previewMounts, type PreviewMounts } from './facade.js'
 import { SessionBar, type SessionBarController } from './session-bar.js'
 import { SessionSelector, type SessionSelectorController } from './session-selector.js'
 import { RoomChip, type RoomChipController } from './room-chip.js'
@@ -54,6 +55,10 @@ export interface CanvasMounts {
   threeCanvas: HTMLCanvasElement
   baubleCanvas: HTMLCanvasElement
   hydraCanvas: HTMLCanvasElement
+  // Behind the promoted code facade: the open hydra/post cell's pending code.
+  // Unlike the rest, these live outside the layout — ui/facade.tsx owns them
+  // and reparents them into whichever surface is live.
+  preview: PreviewMounts
 }
 
 function App(props: AppProps & { mounts: CanvasMounts }) {
@@ -135,7 +140,7 @@ function App(props: AppProps & { mounts: CanvasMounts }) {
 // Solid's render is synchronous, so the mounts are populated by the time
 // this returns.
 export function mountApp(root: HTMLElement, props: AppProps): CanvasMounts {
-  const mounts = {} as CanvasMounts
+  const mounts = { preview: previewMounts } as CanvasMounts
   render(() => <App {...props} mounts={mounts} />, root)
   return mounts
 }

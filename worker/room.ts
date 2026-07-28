@@ -1,4 +1,4 @@
-// livecodata multiplayer room — the Durable Object twin of server/server.ts,
+// eventable multiplayer room — the Durable Object twin of server/server.ts,
 // one instance per room name; shared behavior lives in src/room-core.ts.
 // Built on the WebSocket Hibernation API so an idle room costs nothing: the
 // platform may evict the object between messages, so state lives in

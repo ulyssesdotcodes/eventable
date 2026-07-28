@@ -1,4 +1,4 @@
-// livecodata rasterize — Houdini-style bake: expand sparse object events
+// eventable rasterize — Houdini-style bake: expand sparse object events
 // (create/update/color/destroy, keyed by `id`) into a dense frame-indexed
 // cache, one row per alive object per frame, on the FRAMES_PER_BEAT grid.
 // Timing fields (`beat`, `dur`) are in beats, 1-indexed (beat 1 = frame 0).

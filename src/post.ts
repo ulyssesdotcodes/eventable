@@ -1,4 +1,4 @@
-// livecodata post — table-driven TSL post-processing. The "post" view is
+// eventable post — table-driven TSL post-processing. The "post" view is
 // hydra's sibling: a table of events placed on the loop by a 1-indexed `beat`
 // column, folded into ONE running effect chain applied to the rendered scene,
 // then evaluated to an immutable op list (see post-lang.ts). The scene is the

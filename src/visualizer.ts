@@ -160,7 +160,10 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
 // The hydra layer: the sampled sketch is absolute (setSketch replaces the
 // whole program), so there is no reconciliation state to clear. tick() drives
 // hydra's clock from the source position, so scrubbing scrubs the sketch.
-export function createHydraVisualizer(hydraAPI: HydraAPI): Visualizer {
+// `previewCode` is the open hydra cell's uncommitted sketch, folded in place by
+// main.ts (null when there's no such cell): the scene API previews it against
+// this frame's variables and clock. The post visualizer takes the same hook.
+export function createHydraVisualizer(hydraAPI: HydraAPI, previewCode?: () => string | null): Visualizer {
   let index: Row[] = buildHydraIndex([])
   let maxIndex = 0
   let epoch = 0
@@ -184,20 +187,22 @@ export function createHydraVisualizer(hydraAPI: HydraAPI): Visualizer {
       const sketch = hydraFrameAt(index, Math.floor(frameF), loopFrames)
       // Resolve midi/slider bindings, then expose every slider's value as
       // `props.sliders` (an explicit user variable named "sliders" still wins).
-      if (sketch) {
-        const vars = ctx ? resolveBindings(sketch.vars, ctx) : sketch.vars
-        const sliders = ctx?.sliders?.()
-        // $midi lets expr.midi() dynamic args sample the playhead's MIDI
-        // ($-prefix reserved, like $expr); loop is the expr.loop() counter,
-        // merged after the user vars (like hydra's own clock fields) so a
-        // same-named variable can't hide it.
-        const midi = ctx?.midi ? { $midi: ctx.midi } : {}
-        const loop = ctx?.loop ? { loop: ctx.loop() } : {}
-        hydraAPI.setSketch(ctx ? { ...sketch, vars: { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...loop } } : sketch)
-      } else {
-        hydraAPI.setSketch(sketch)
+      // $midi lets expr.midi() dynamic args sample the playhead's MIDI
+      // ($-prefix reserved, like $expr); loop is the expr.loop() counter,
+      // merged after the user vars (like hydra's own clock fields) so a
+      // same-named variable can't hide it.
+      const withCtx = (base: Record<string, unknown>): Record<string, unknown> => {
+        if (!ctx) return base
+        const vars = resolveBindings(base, ctx)
+        const sliders = ctx.sliders?.()
+        const midi = ctx.midi ? { $midi: ctx.midi } : {}
+        const loop = ctx.loop ? { loop: ctx.loop() } : {}
+        return { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...loop }
       }
+      const vars = withCtx(sketch?.vars ?? {})
+      hydraAPI.setSketch(sketch ? { ...sketch, vars } : null)
       hydraAPI.tick(frameF / FPS)
+      if (previewCode) hydraAPI.setPreview(previewCode(), vars)
       return []
     },
     clear(): void {
@@ -256,7 +261,7 @@ export function createBaubleVisualizer(baubleAPI: BaubleAPI): Visualizer {
 // once loopFrames is known), so clear() must not tear it down. applyFrame folds
 // to a precompiled state and writes the frame's live-uniform values;
 // three-scene's animate loop drives the actual render.
-export function createPostVisualizer(postAPI: PostAPI): Visualizer {
+export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => string | null): Visualizer {
   let index: Row[] = buildPostIndex([])
   let maxIndex = 0
   let epoch = 0
@@ -286,22 +291,20 @@ export function createPostVisualizer(postAPI: PostAPI): Visualizer {
       pass = p
       const frameF = offset + srcFrameF
       const frame = postFrameAt(index, Math.floor(frameF), loopFrames)
-      if (frame) {
-        // Live-arg functions read the props object: the folded variables (with
-        // midi/slider bindings resolved), every slider under `p.sliders`, and
-        // the playback clock (time/beat/bpm) merged LAST so they can't be
-        // shadowed — the only clock a chain sees, which keeps post deterministic
-        // under pause/scrub.
-        const vars = ctx ? resolveBindings(frame.vars, ctx) : frame.vars
-        const sliders = ctx?.sliders?.()
-        const clock = { time: frameF / FPS, beat: frameToBeat(frameF), bpm: bpm ?? 60 / DEFAULT_BEAT_SECONDS, loop: ctx?.loop ? ctx.loop() : 0 }
-        // $midi lets expr.midi() live args sample the playhead's MIDI ($-prefix
-        // reserved, like $expr — a user var can't collide).
-        const midi = ctx?.midi ? { $midi: ctx.midi } : {}
-        postAPI.setFrame(frame, { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...clock })
-      } else {
-        postAPI.setFrame(null, {})
-      }
+      // Live-arg functions read the props object: the folded variables (with
+      // midi/slider bindings resolved), every slider under `p.sliders`, and
+      // the playback clock (time/beat/bpm) merged LAST so they can't be
+      // shadowed — the only clock a chain sees, which keeps post deterministic
+      // under pause/scrub.
+      const vars = frame ? (ctx ? resolveBindings(frame.vars, ctx) : frame.vars) : {}
+      const sliders = ctx?.sliders?.()
+      const clock = { time: frameF / FPS, beat: frameToBeat(frameF), bpm: bpm ?? 60 / DEFAULT_BEAT_SECONDS, loop: ctx?.loop ? ctx.loop() : 0 }
+      // $midi lets expr.midi() live args sample the playhead's MIDI ($-prefix
+      // reserved, like $expr — a user var can't collide).
+      const midi = ctx?.midi ? { $midi: ctx.midi } : {}
+      const props = { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...clock }
+      postAPI.setFrame(frame, props)
+      if (previewCode) postAPI.setPreview(previewCode(), props)
       return []
     },
     clear(): void {

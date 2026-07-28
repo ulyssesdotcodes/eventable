@@ -147,7 +147,7 @@ https://github.com/rabbit-ear/rabbit-ear · rabbitear.org
 - JS + shipped .d.ts, zero deps, 206 test files. Dormant since mid-2024 (author
   active on rabbit-ear-app). Dev branch has unreleased `simpleFold`/`reverseFold`/
   `squashFold` ops worth mining.
-- **License blocker:** livecodata is BSD-3-Clause; importing GPL code at runtime
+- **License blocker:** eventable is BSD-3-Clause; importing GPL code at runtime
   makes distributions effectively GPL. Safe uses: design reference, or build-time
   generator whose *data output* ships.
 

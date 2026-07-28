@@ -90,7 +90,7 @@ test('survives an empty, missing, or corrupt store without throwing', async () =
   assert.deepEqual(await createSessionStore(fakeStorage()).list(), [])
 
   const corrupt = fakeStorage()
-  corrupt.setItem('livecodata.sessions', '{not valid json')
+  corrupt.setItem('eventable.sessions', '{not valid json')
   assert.deepEqual(await createSessionStore(corrupt).list(), [], 'corrupt → empty list')
   const store = createSessionStore(corrupt)
   await store.save('a', { events: 'a', tables: [] })
