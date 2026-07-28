@@ -240,6 +240,10 @@ export interface PlaybackAPI {
   // On PlaybackAPI (not just the engine) so main.ts can fold the loop length
   // back out of activity events.
   setLoopBeats(n: number): void
+  // Re-render the frame already on screen, for a change that alters what it
+  // draws without moving the playhead — the editor's pending-edit preview,
+  // which must land while paused too.
+  refresh(): void
 }
 
 export interface PlaybackEngine extends PlaybackAPI {
@@ -596,6 +600,9 @@ export function createPlaybackEngine(
   return {
     load,
     retempo,
+    refresh(): void {
+      if (hasContent()) applyAt(shownPos)
+    },
     currentSourceBeats,
     play,
     pause,

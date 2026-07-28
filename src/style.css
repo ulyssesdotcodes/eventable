@@ -105,6 +105,37 @@ html, body {
   flex-direction: column;
   background: #16213e;
   overflow: hidden;
+  /* Stacking context for the preview below, so its negative z-index paints
+     over this background rather than escaping behind it. */
+  position: relative;
+  z-index: 0;
+}
+
+/* Pending-edit preview: the open hydra/post cell's uncommitted code, drawn
+   behind the code it comes from. Negative z-index puts it under the header,
+   the session bars and the text without lifting any of them. */
+.editor-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  display: none;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.editor-preview.active {
+  display: block;
+}
+
+/* Let the preview through: CodeMirror's theme paints an opaque background and
+   its injected rules outrank a plain selector. A scrim rather than full
+   transparency — the code has to stay readable over a bright sketch. */
+#editor-pane.previewing .cm-editor,
+#editor-pane.previewing .cm-gutters,
+#editor-pane.previewing .cm-panels {
+  background: rgba(22, 33, 62, 0.45) !important;
 }
 
 /* ── Editor/table divider ── */

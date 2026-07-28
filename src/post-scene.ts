@@ -15,7 +15,7 @@ import * as TSL from 'three/tsl'
 import { gaussianBlur } from 'three/addons/tsl/display/GaussianBlurNode.js'
 import { bloom } from 'three/addons/tsl/display/BloomNode.js'
 import { sobel } from 'three/addons/tsl/display/SobelOperatorNode.js'
-import { POST_OPS, forEachLiveArg, collectLiveValues, type OpChain, type OpCall } from './post-lang.js'
+import { POST_OPS, forEachLiveArg, collectLiveValues, evalPostCode, type OpChain, type OpCall } from './post-lang.js'
 import { postFrameAt, postStateFrames, type PostFrame } from './post.js'
 import type { Row } from './lineage.js'
 
@@ -36,6 +36,10 @@ export interface PostAPI {
   // avoid. The visualizer re-programs when it changes.
   setProgram(index: Row[], loopFrames: number): void
   setFrame(frame: PostFrame | null, props: Record<string, unknown>): void
+  // The chain text being edited (null when no post cell is open), drawn to
+  // initPost's `preview` canvas. Half-typed text that fails to compile leaves
+  // the last good preview up.
+  setPreview(code: string | null, props: Record<string, unknown>): void
   render(): boolean
   resize(): void
   reset(): void
@@ -57,7 +61,9 @@ interface Graph {
   chain: OpChain
 }
 
-export function initPost(three: { renderer: THREE.WebGPURenderer; scene: THREE.Scene; camera: THREE.Camera }): PostAPI {
+export function initPost(
+  three: { renderer: THREE.WebGPURenderer; scene: THREE.Scene; camera: THREE.Camera; preview?: HTMLCanvasElement },
+): PostAPI {
   const { renderer, scene, camera } = three
 
   const scenePass = t.pass(scene, camera)
@@ -82,8 +88,9 @@ export function initPost(three: { renderer: THREE.WebGPURenderer; scene: THREE.S
 
   // Build a chain's node graph, collecting live uniforms and prev refs in the
   // deterministic forEachLiveArg order (own live args of each op, then its chain
-  // args) so setFrame binds uniforms positionally.
-  function buildGraph(chain: OpChain): Graph {
+  // args) so setFrame binds uniforms positionally. `sceneColor` is what the
+  // scene() op reads — the preview passes its own renderer's pass.
+  function buildGraph(chain: OpChain, sceneColor: Node = scenePassColor): Graph {
     const uniforms: Node[] = []
     let usesPrev = false
     const live = (init: number): Node => { const u = t.uniform(init); uniforms.push(u); return u }
@@ -97,7 +104,7 @@ export function initPost(three: { renderer: THREE.WebGPURenderer; scene: THREE.S
     function buildOp(op: OpCall, input: Node): Node {
       switch (op.op) {
         case 'scene':
-          return scenePassColor
+          return sceneColor
         case 'prev': {
           ensurePrev()
           usesPrev = true
@@ -328,11 +335,56 @@ export function initPost(three: { renderer: THREE.WebGPURenderer; scene: THREE.S
   const states = new Map<string, State>()
   let active: State | null = null
 
-  function buildState(frame: PostFrame): State {
-    const graph = buildGraph(frame.chain)
-    const state: State = { pipeline: new THREE.RenderPipeline(renderer, graph.node), graph, warmed: false }
-    states.set(frame.stateId, state)
-    return state
+  function buildState(chain: OpChain, into = renderer, sceneColor = scenePassColor): State {
+    const graph = buildGraph(chain, sceneColor)
+    return { pipeline: new THREE.RenderPipeline(into, graph.node), graph, warmed: false }
+  }
+
+  // Pending-edit preview (see setPreview): a second renderer drawing straight
+  // to the editor's canvas. It can't borrow the main target and copy — a WebGPU
+  // canvas snapshot lags a frame, so the mirror shows the real output rather
+  // than the pending chain. Its one state stays out of `states`, so a per-edit
+  // rebuild can't accumulate pipelines.
+  let preview: { code: string; state: State | null } | null = null
+  let previewRenderer: THREE.WebGPURenderer | null = null
+  let previewSceneColor: Node = null
+  let previewReady = false
+
+  // On demand, not from the animate loop: a paused playhead draws no frames, so
+  // whatever invalidates the preview has to redraw it.
+  function renderPreview(): void {
+    if (!preview?.state || !previewReady) return
+    try {
+      preview.state.pipeline.render()
+    } catch (e) {
+      console.error('post: preview render failed', e)
+    }
+  }
+
+  function previewTarget(): THREE.WebGPURenderer | null {
+    const canvas = three.preview
+    if (!canvas) return null
+    // Built on the first previewed edit, so a session that never opens a post
+    // cell pays for none of it.
+    if (!previewRenderer) {
+      const r = new THREE.WebGPURenderer({ canvas, antialias: true })
+      previewRenderer = r
+      // Its own pass over the shared scene: a PassNode owns a render target
+      // sized to its renderer, so the two must not share one.
+      previewSceneColor = t.pass(scene, camera).getTextureNode('output')
+      // The canvas has no size of its own — it fills the editor pane.
+      const fit = (): void => {
+        const { clientWidth: w, clientHeight: h } = canvas
+        if (!w || !h) return
+        r.setSize(w, h, false)
+        renderPreview()
+      }
+      new ResizeObserver(fit).observe(canvas)
+      r.init().then(() => { previewReady = true; fit() }).catch((e) => {
+        console.error('post: preview renderer init failed', e)
+      })
+    }
+    return previewRenderer
   }
 
   // Warm-render each state once (to the canvas — enough to force the backend
@@ -370,7 +422,7 @@ export function initPost(three: { renderer: THREE.WebGPURenderer; scene: THREE.S
         if (!frame || seen.has(frame.stateId)) continue
         seen.add(frame.stateId)
         try {
-          buildState(frame)
+          states.set(frame.stateId, buildState(frame.chain))
         } catch (e) {
           console.error('post: state build failed', e)
         }
@@ -384,7 +436,8 @@ export function initPost(three: { renderer: THREE.WebGPURenderer; scene: THREE.S
       let state = states.get(frame.stateId)
       if (!state) {
         try {
-          state = buildState(frame)
+          state = buildState(frame.chain)
+          states.set(frame.stateId, state)
           warmAll()
         } catch (e) {
           console.error('post: lazy state build failed', e)
@@ -394,6 +447,29 @@ export function initPost(three: { renderer: THREE.WebGPURenderer; scene: THREE.S
       active = state
       beatUniform.value = typeof props.beat === 'number' ? props.beat : 0
       writeUniforms(state.graph, props)
+    },
+
+    setPreview(code, props): void {
+      if (code == null) {
+        preview?.state?.pipeline.dispose()
+        preview = null
+        return
+      }
+      const into = previewTarget()
+      if (!into) return
+      if (preview?.code !== code) {
+        let state = preview?.state ?? null
+        try {
+          const next = buildState(evalPostCode(code), into, previewSceneColor)
+          state?.pipeline.dispose()
+          state = next
+        } catch { /* half-typed chain — hold the last good preview */ }
+        preview = { code, state }
+      }
+      if (!preview.state) return
+      beatUniform.value = typeof props.beat === 'number' ? props.beat : 0
+      writeUniforms(preview.state.graph, props)
+      renderPreview()
     },
 
     render(): boolean {

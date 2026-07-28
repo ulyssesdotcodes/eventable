@@ -7,7 +7,7 @@
 import { createSignal, Show, type Accessor } from 'solid-js'
 import { render } from 'solid-js/web'
 import { PlaybackControls, type PlaybackController } from './playback-controls.js'
-import { EditorPane, type EditorController } from './editor.js'
+import { EditorPane, type EditorController, type PreviewMounts } from './editor.js'
 import { TablePane, type TablePanelController } from './table-panel.js'
 import { SessionBar, type SessionBarController } from './session-bar.js'
 import { SessionSelector, type SessionSelectorController } from './session-selector.js'
@@ -43,6 +43,8 @@ export interface CanvasMounts {
   threeCanvas: HTMLCanvasElement
   baubleCanvas: HTMLCanvasElement
   hydraCanvas: HTMLCanvasElement
+  // Behind the code editor: the open hydra/post cell's pending code.
+  preview: PreviewMounts
 }
 
 function App(props: AppProps & { mounts: CanvasMounts }) {
@@ -84,7 +86,7 @@ function App(props: AppProps & { mounts: CanvasMounts }) {
         </div>
       </div>
       <div id="side-panels" ref={sidePanels}>
-        <EditorPane ctl={props.editor} currentTable={props.tablePanel.current}>
+        <EditorPane ctl={props.editor} currentTable={props.tablePanel.current} preview={props.mounts.preview}>
           <SessionSelector ctl={props.sessionSelector}>
             <RoomChip ctl={props.roomChip} />
             <button
@@ -108,7 +110,7 @@ function App(props: AppProps & { mounts: CanvasMounts }) {
 // Solid's render is synchronous, so the mounts are populated by the time
 // this returns.
 export function mountApp(root: HTMLElement, props: AppProps): CanvasMounts {
-  const mounts = {} as CanvasMounts
+  const mounts = { preview: {} as PreviewMounts } as CanvasMounts
   render(() => <App {...props} mounts={mounts} />, root)
   return mounts
 }
