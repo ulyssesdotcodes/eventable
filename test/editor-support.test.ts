@@ -42,7 +42,7 @@ test('minimalEdit: leaves the shared prefix and suffix untouched', () => {
 function fakeCm() {
   let doc = ''
   let ctx: CmContext | null = null
-  const state = { vimInsert: false, mounted: false }
+  const state = { vimInsert: false, mounted: false, inserts: 0 }
   const cm: CmEditor = {
     dom: null as unknown as HTMLElement,
     setContext: (next) => { ctx = next },
@@ -51,6 +51,7 @@ function fakeCm() {
     mount: () => { state.mounted = true },
     unmount: () => { state.mounted = false },
     focus: () => {},
+    enterInsert: () => { state.inserts++ },
     vimInsertActive: () => state.vimInsert,
     setVimMode: () => {},
     insertSnippet: () => {},
@@ -77,6 +78,7 @@ test('editor host: one target holds the view, and taking it commits what the las
   assert.deepEqual(commits, ['a:one edited'])
   assert.equal(host.promoted(), 'b')
   assert.equal(ctx().lang(), 'expr', 'the view is told which language service to serve')
+  assert.equal(state.inserts, 2, 'every promote enters insert mode — a click means "type here", and vim normal mode would eat the first keystrokes')
 })
 
 test('editor host: committing re-baselines, Escape leaves without committing', () => {

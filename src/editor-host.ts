@@ -92,6 +92,12 @@ export function createEditorHost(
     cm.setDoc(next.text)
     refresh()
     cm.focus()
+    // A promote is an explicit "edit this" click, so typing must insert
+    // immediately — vim's normal mode would eat the first keystrokes as
+    // commands (and with them, any autocompletion). Expr cells append at the
+    // line end, the quick-edit spot; Escape still steps insert → normal →
+    // demote.
+    cm.enterInsert(next.lang === 'expr')
     onPromote?.(next)
   }
 
