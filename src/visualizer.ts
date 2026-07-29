@@ -36,6 +36,33 @@ export interface CookedVisualRows {
   loopEpochs?: LoopEpochs
 }
 
+// A kind's current loop-pass mechanics: how many passes its content spans and
+// which one is showing. {pass:0, loops:1} before any frame is applied.
+export interface PassState {
+  pass: number
+  loops: number
+}
+
+// The four kinds that actually have a Visualizer (LOOP_KINDS minus
+// 'timeline', which is playback.ts's own pass axis, not a visualizer's — see
+// passOffset below).
+export type VisualizerKind = Exclude<(typeof LOOP_KINDS)[number], 'timeline'>
+
+// Pure per-kind pass arithmetic, shared by every multi-loop visualizer:
+// content whose beat count runs past one loop (`max` frames long against a
+// `loopFrames`-long loop) forms later passes, wall-aligned via `passAt` so
+// every replica reaches the same one from its own clock. This is the CONTENT
+// pass — computed in SOURCE space, after playback.ts has already picked the
+// source beat through any timeline warp. It is a different axis from
+// playback.ts's own TIMELINE pass (playback space, before the warp — see
+// PlaybackViewState.timelinePass); conflating the two mis-places content
+// under an active timeline (see risk R1 in the rewrite notes).
+export function passOffset(max: number, loopFrames: number, passAt: (epochMs: number) => number, epoch: number): PassState & { offset: number } {
+  const loops = loopFrames > 0 ? Math.floor(max / loopFrames) + 1 : 1
+  const pass = loops > 1 ? passAt(epoch) % loops : 0
+  return { pass, loops, offset: pass * loopFrames }
+}
+
 export interface VisualizerFrame {
   // Fractional source frame — the playhead sweeps continuously between frames.
   srcFrameF: number
@@ -55,6 +82,8 @@ export interface VisualizerFrame {
 }
 
 export interface Visualizer {
+  // Which LOOP_KINDS entry this is — how the engine keys PlaybackViewState.passes.
+  readonly kind: VisualizerKind
   // Swap in freshly cooked rows. Reconciliation state survives on purpose: a
   // re-cook updates what's on screen in place rather than tearing it down.
   load(cooked: CookedVisualRows): void
@@ -67,6 +96,9 @@ export interface Visualizer {
   clear(): void
   // Nothing to show at all: clear and blank the display.
   blank(): void
+  // This kind's pass/loops as of the last applyFrame — what the engine
+  // surfaces per-kind on PlaybackViewState.passes for timeline sections.
+  currentPass(): PassState
 }
 
 // The Three.js scene: baked scene rows sampled per frame, diffed against the
@@ -77,6 +109,7 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
   // 0 (the Unix epoch) until stamped — the same arbitrary-but-shared reference
   // the no-tap phase anchor uses.
   let epoch = 0
+  let pass: PassState = { pass: 0, loops: 1 }
 
   function clear(): void {
     sceneAPI.reset()
@@ -84,18 +117,19 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
   }
 
   return {
+    kind: 'scene',
     load(cooked): void {
       frameIndex = buildFrameIndex(cooked.sceneRows ?? [])
       if (typeof cooked.loopEpochs?.scene === 'number') epoch = cooked.loopEpochs.scene
     },
     hasContent: () => frameIndex.map.size > 0,
     applyFrame({ srcFrameF, loopFrames, ctx, passAt }): Row[] {
-      // Same pass rule as hydra/bauble: frames land on the loop, so a last
-      // event on beat 21 of a 16-beat loop makes a 32-beat sequence (beat 13,
-      // a plain 16-beat one). The clamp holds the final pose through the last
-      // pass's tail rather than blanking mid-pass.
-      const loops = loopFrames > 0 ? Math.floor(frameIndex.maxFrame / loopFrames) + 1 : 1
-      const offset = loops > 1 ? (passAt(epoch) % loops) * loopFrames : 0
+      // Frames land on the loop, so a last event on beat 21 of a 16-beat loop
+      // makes a 32-beat sequence (beat 13, a plain 16-beat one). The clamp
+      // holds the final pose through the last pass's tail rather than
+      // blanking mid-pass.
+      const { offset, ...p } = passOffset(frameIndex.maxFrame, loopFrames, passAt, epoch)
+      pass = p
       const frameF = Math.min(offset + srcFrameF, frameIndex.maxFrame)
       const baked = sampleFrame(frameIndex, frameF)
       const states = ctx ? baked.map((s) => resolveBindings(s, ctx)) : baked
@@ -119,6 +153,7 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
     },
     clear,
     blank: clear,
+    currentPass: () => pass,
   }
 }
 
@@ -132,8 +167,10 @@ export function createHydraVisualizer(hydraAPI: HydraAPI, previewCode?: () => st
   let index: Row[] = buildHydraIndex([])
   let maxIndex = 0
   let epoch = 0
+  let pass: PassState = { pass: 0, loops: 1 }
 
   return {
+    kind: 'hydra',
     load(cooked): void {
       index = buildHydraIndex(cooked.hydraRows ?? [])
       maxIndex = index.reduce((m, r) => Math.max(m, r.index as number), 0)
@@ -144,8 +181,9 @@ export function createHydraVisualizer(hydraAPI: HydraAPI, previewCode?: () => st
       // floor: an event at exactly beat loopBeats+1 opens a new pass — that's
       // how a later pass is authored. The absolute frame also drives the
       // clock, so transitions animate across passes.
-      const loops = loopFrames > 0 ? Math.floor(maxIndex / loopFrames) + 1 : 1
-      const frameF = (loops > 1 ? (passAt(epoch) % loops) * loopFrames : 0) + srcFrameF
+      const { offset, ...p } = passOffset(maxIndex, loopFrames, passAt, epoch)
+      pass = p
+      const frameF = offset + srcFrameF
       const sketch = hydraFrameAt(index, Math.floor(frameF), loopFrames)
       // Resolve midi/slider bindings, then expose every slider's value as
       // `props.sliders` (an explicit user variable named "sliders" still wins).
@@ -174,6 +212,7 @@ export function createHydraVisualizer(hydraAPI: HydraAPI, previewCode?: () => st
     blank(): void {
       hydraAPI.reset()
     },
+    currentPass: () => pass,
   }
 }
 
@@ -183,8 +222,10 @@ export function createBaubleVisualizer(baubleAPI: BaubleAPI): Visualizer {
   let index: Row[] = buildBaubleIndex([])
   let maxIndex = 0
   let epoch = 0
+  let pass: PassState = { pass: 0, loops: 1 }
 
   return {
+    kind: 'bauble',
     load(cooked): void {
       index = buildBaubleIndex(cooked.baubleRows ?? [])
       maxIndex = index.reduce((m, r) => Math.max(m, r.index as number), 0)
@@ -194,8 +235,9 @@ export function createBaubleVisualizer(baubleAPI: BaubleAPI): Visualizer {
     applyFrame({ srcFrameF, loopFrames, ctx, passAt }): Row[] {
       // Pass derivation mirrors the hydra visualizer's; the absolute frame
       // also drives `t`, keeping (ss t …) transition windows on one clock.
-      const loops = loopFrames > 0 ? Math.floor(maxIndex / loopFrames) + 1 : 1
-      const frameF = (loops > 1 ? (passAt(epoch) % loops) * loopFrames : 0) + srcFrameF
+      const { offset, ...p } = passOffset(maxIndex, loopFrames, passAt, epoch)
+      pass = p
+      const frameF = offset + srcFrameF
       const sketch = baubleFrameAt(index, Math.floor(frameF), loopFrames)
       // NB: unlike hydra there is no props escape hatch — a resolved variable
       // bakes into the compiled script, so a binding that sweeps every frame
@@ -210,6 +252,7 @@ export function createBaubleVisualizer(baubleAPI: BaubleAPI): Visualizer {
     blank(): void {
       baubleAPI.reset()
     },
+    currentPass: () => pass,
   }
 }
 
@@ -222,6 +265,7 @@ export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => strin
   let index: Row[] = buildPostIndex([])
   let maxIndex = 0
   let epoch = 0
+  let pass: PassState = { pass: 0, loops: 1 }
   // The loopFrames setProgram last precompiled against (null = re-program next
   // frame). setProgram enumerates loopFrames-dependent states (wrapped
   // transition windows), but load doesn't carry loopFrames — and setLoopBeats
@@ -230,6 +274,7 @@ export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => strin
   let programmedLoop: number | null = null
 
   return {
+    kind: 'post',
     load(cooked): void {
       index = buildPostIndex(cooked.postRows ?? [])
       maxIndex = index.reduce((m, r) => Math.max(m, r.index as number), 0)
@@ -242,8 +287,9 @@ export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => strin
         postAPI.setProgram(index, loopFrames)
         programmedLoop = loopFrames
       }
-      const loops = loopFrames > 0 ? Math.floor(maxIndex / loopFrames) + 1 : 1
-      const frameF = (loops > 1 ? (passAt(epoch) % loops) * loopFrames : 0) + srcFrameF
+      const { offset, ...p } = passOffset(maxIndex, loopFrames, passAt, epoch)
+      pass = p
+      const frameF = offset + srcFrameF
       const frame = postFrameAt(index, Math.floor(frameF), loopFrames)
       // Live-arg functions read the props object: the folded variables (with
       // midi/slider bindings resolved), every slider under `p.sliders`, and
@@ -267,5 +313,6 @@ export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => strin
     blank(): void {
       postAPI.reset()
     },
+    currentPass: () => pass,
   }
 }

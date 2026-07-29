@@ -6,6 +6,11 @@
 // beats, so beat b sits at elapsed (b - 1). The `timeline` table's own rows
 // already live on this playback axis (identity); every other table's `beat`
 // is a *source* beat, placed onto the axis through `placeBeat`.
+//
+// Sections (see timeline-sections.ts): one sectionLayout call per band, each
+// laying out ONE table at the ONE pass playback is currently showing. The DOM
+// stacks the bands, so nothing here knows how many there are — a section's
+// lanes are only its own overlapping spans.
 
 import type { Row } from './lineage.js'
 import type { EditableColumn } from './editable-tables.js'
@@ -83,6 +88,23 @@ export function gridLines(maxBeats: number, width: number): GridLine[] {
   return lines
 }
 
+// The editable store row a handle writes through: `row` is a storage index
+// into that table, exactly what store.setRow takes.
+export interface HandleSource {
+  table: string
+  row: number
+}
+
+// Trace one of a section's rows back to the editable store row it came from
+// (its lineage refs, resolved by the caller — this module stays store-
+// agnostic), reporting that row's *stored* beat so sectionLayout can check
+// nothing moved it. Undefined for a row with no editable, non-log origin.
+export type ResolveSource = (row: Row) => (HandleSource & { beat: number }) | undefined
+
+// A stored beat and a drawn beat count as the same position within this much —
+// both sides are float arithmetic through the warp.
+const BEAT_EPSILON = 1e-9
+
 // One draggable descriptor. `row` (storage index) is the identity that
 // survives re-sorting and re-derivation mid-drag.
 export interface Handle {
@@ -91,17 +113,12 @@ export interface Handle {
   // Playback-axis position (post placeBeat for non-timeline tables).
   beat: number
   // Far edge of a span — a stored-dur span keeps its length in the row's `dur`
-  // column (a pure move never touches it, an edge drag writes it back); a
-  // `derived` span's edge is computed, not stored.
+  // column (a move never touches it); a fold window's edge is computed from
+  // the neighbouring row instead.
   end?: number
-  // A derived (until-next) span whose length isn't a stored `dur` — the
-  // `timeline` table's windows and a fold table's transition spans. An edge
-  // drag can't write dur back: a start edge just moves the row, and an end
-  // edge with an `endRow` moves that destination instead.
-  derived?: boolean
   // The destination setCode a fold transition wipes toward: the view draws an
-  // arrowhead to its point handle (hover-linking the pair) and an end drag
-  // retargets THAT row's beat. Absent on a wrap tail and on inert transitions.
+  // arrowhead to its point handle, hover-linking the pair. Absent on a wrap
+  // tail and on inert transitions.
   endRow?: number
   // The previous same-name setVariable row an eased keyframe glides from: this
   // (point) handle is the arrival, and the view draws a connector arrow from
@@ -113,12 +130,17 @@ export interface Handle {
   // once) — draggable, but not the "primary" one a click should focus.
   ghost: boolean
   disabled: boolean
-  // Set (> 0) when this placement wrapped past one pass's worth of beats —
-  // an active timeline's span with loops > 1, or (with no timeline) the
-  // GUI loop length — so later content forms another pass instead of
-  // running off the strip. Omitted (not just 0) for the common unwrapped
-  // case, so existing handle-shape assertions don't need to know about it.
+  // Which TIMELINE pass this placement belongs to, set (> 0) only past the
+  // first — dragUpdate needs it to invert the right pass's warp. Omitted (not
+  // just 0) for the common single-pass case, so existing handle-shape
+  // assertions don't need to know about it.
   pass?: number
+  // The store row a drag writes to, when this placement is still sitting on
+  // that row's stored beat. Absent when a warp, a retime or a content-pass
+  // wrap moved it: the handle is where playback shows the event, not where
+  // the row says it is, so writing the drawn beat back would mean something
+  // else (OQ1).
+  source?: HandleSource
 }
 
 // Which pass `beat` falls in, and its beat local to that pass — a beat past
@@ -181,35 +203,50 @@ export function withPreview(rows: Row[], preview: { row: number; values: Record<
   return next
 }
 
-// A handle tagged with the pass group it belongs to, before sub-lane packing
-// resolves its final `lane`. The `group` is internal — stripped from the
-// public Handle stripLayout returns.
-type RawHandle = Handle & { group: number }
+// Which pass of each axis a section is showing. The two are INDEPENDENT (risk
+// R1): `content` is the visualizer's own pass, counted in SOURCE space, where
+// a row whose beat runs past one loop length forms a later pass of its content
+// (visualizer.ts's passOffset); `timeline` is playback's pass through a
+// multi-pass warp, counted in PLAYBACK space, before the map is applied.
+// Conflating them looks right with no timeline and mis-places everything under
+// one — so rows are filtered by `content` BEFORE placeBeat and placements by
+// `timeline` AFTER it.
+export interface SectionPasses {
+  content: number
+  timeline: number
+}
 
-// Every placement's raw handle plus how many pass groups the strip spans.
-// The `timeline` table's own rows are until-next windows (windowsFor), already
-// on the playback axis; every other table's `beat` is a source beat placed via
-// placeBeat, wrapping past one pass into a "pass n" badge. A fold table draws a
-// transition as its fold window (FOLD_WINDOWS) — a wrapped window (its
-// destination earlier in the loop) splits into two arcs; other tables fall
-// back to their `dur` column. An active timeline's passes are the groups.
+const PASS_ZERO: SectionPasses = { content: 0, timeline: 0 }
+
+// One section's placements, at its current pass. The `timeline` table's own
+// rows are until-next windows (windowsFor), already on the playback axis and
+// already pass-local, so picking the current pass is their whole filter. Every
+// other table's `beat` is a source beat: wrapped into its content pass first,
+// then placed via placeBeat, then kept only if it lands in the current
+// timeline pass. A fold table draws a transition as its fold window
+// (FOLD_WINDOWS) — a wrapped window (its destination earlier in the loop)
+// splits into two arcs; other tables fall back to their `dur` column.
 function buildRaw(
-  name: string, rows: Row[], columns: EditableColumn[], timelineRows: Row[], loopBeats?: number,
-): { raw: RawHandle[]; groupCount: number } {
-  const colNames = new Set(columns.map((c) => c.name))
-  const raw: RawHandle[] = []
+  name: string, rows: Row[], columns: EditableColumn[], timelineRows: Row[], loopBeats: number | undefined,
+  passes: SectionPasses, resolveSource?: ResolveSource,
+): Handle[] {
+  const raw: Handle[] = []
 
   if (name === 'timeline') {
     // windowsFor drops disabled rows (their window falls to their neighbors),
-    // so they get no handle. Its spans are derived: an edge belongs to the
-    // neighbouring row, never a stored dur.
+    // so they get no handle. These rows ARE the live store rows, so a
+    // window's index is its storage index.
     for (const w of windowsFor(rows, loopBeats)) {
-      raw.push({ row: w.row, kind: 'span', beat: w.beat, end: w.end, lane: w.lane, group: w.lane, ghost: false, disabled: false, derived: true })
+      if (w.lane !== passes.timeline) continue
+      raw.push({
+        row: w.row, kind: 'span', beat: w.beat, end: w.end, lane: 0,
+        ghost: false, disabled: false, source: { table: name, row: w.row },
+      })
     }
-    const groupCount = raw.reduce((m, h) => Math.max(m, h.group + 1), buildTimeline(timelineRows, loopBeats).loops)
-    return { raw, groupCount }
+    return raw
   }
 
+  const colNames = new Set(columns.map((c) => c.name))
   const segments = timelineSegments(timelineRows, loopBeats)
   const timeline = segments.length ? buildTimeline(timelineRows, loopBeats) : null
   const wrapUnit = timeline ? timeline.beats : loopBeats
@@ -225,88 +262,104 @@ function buildRaw(
     const row = rows[i]
     const beat = num(row.beat)
     if (beat === undefined) continue
+    const src = wrapPass(beat, loopBeats)
+    if (src.pass !== passes.content) continue
     const win = foldWindows?.get(i)
     const glideFrom = glides?.get(i)
     const dur = foldWindows
       ? (win ? win.end - win.start : undefined)
       : colNames.has('dur') ? num(row.dur) : undefined
     const disabled = row.disabled === true
-    const placements = segments.length ? placeBeat(segments, beat) : [{ beat, stretch: 1 }]
+    const store = resolveSource?.(row)
+    // Drawn where the store row says it is → a drag can write the drawn beat
+    // straight back; anywhere else the map moved it and it stays inert.
+    const srcTag = (at: number): { source?: HandleSource } =>
+      store && Math.abs(store.beat - at) < BEAT_EPSILON ? { source: { table: store.table, row: store.row } } : {}
+    const placements = (segments.length ? placeBeat(segments, src.local) : [{ beat: src.local, stretch: 1 }])
+      .map((p) => ({ ...wrapPass(p.beat, wrapUnit, maxPass), stretch: p.stretch }))
+      .filter((p) => p.pass === passes.timeline)
     placements.forEach((p, idx) => {
-      const w = wrapPass(p.beat, wrapUnit, maxPass)
-      const group = timeline ? w.pass : 0
       const common = {
-        row: i, group, lane: group, ghost: idx > 0, disabled,
-        ...(w.pass > 0 ? { pass: w.pass } : {}),
+        row: i, lane: 0, ghost: idx > 0, disabled,
+        ...(p.pass > 0 ? { pass: p.pass } : {}),
       }
       if (dur === undefined) {
-        raw.push({ ...common, kind: 'point', beat: w.local, ...(glideFrom !== undefined ? { glideFrom } : {}) })
+        raw.push({ ...common, kind: 'point', beat: p.local, ...srcTag(p.local), ...(glideFrom !== undefined ? { glideFrom } : {}) })
         return
       }
-      const end = w.local + dur * p.stretch
+      const end = p.local + dur * p.stretch
       if (win && end > loopEnd + 1e-6) {
         // A wrapped fold window runs off the strip's end and re-enters at the
         // start: a tail arc to the loop's end (no arrowhead) and a head arc
         // from the start to the destination (arrowhead), reusing span machinery.
-        raw.push({ ...common, kind: 'span', beat: w.local, end: loopEnd, derived: true })
-        raw.push({ ...common, kind: 'span', beat: 1, end: end - (wrapUnit as number), derived: true, endRow: win.endRow })
+        raw.push({ ...common, kind: 'span', beat: p.local, end: loopEnd, ...srcTag(p.local) })
+        raw.push({ ...common, kind: 'span', beat: 1, end: end - (wrapUnit as number), endRow: win.endRow, ...srcTag(1) })
         return
       }
       raw.push({
-        ...common, kind: 'span', beat: w.local, end,
-        ...(win ? { derived: true as const, ...(win.endRow !== undefined ? { endRow: win.endRow } : {}) } : {}),
+        ...common, kind: 'span', beat: p.local, end, ...srcTag(p.local),
+        ...(win?.endRow !== undefined ? { endRow: win.endRow } : {}),
       })
     })
   }
-  return { raw, groupCount: timeline ? timeline.loops : 1 }
+  return raw
 }
 
-// Greedy interval packing: within each pass group, spans overlapping in their
+// Greedy interval packing within one section: spans overlapping in their
 // [beat, end) range stack into sub-lanes (first-fit by start beat), while
-// points and empty groups sit at the group's base sub-lane. Groups lay out
-// contiguously in pass order, so pass g owns lanes [base[g], base[g + 1]).
-// Writes each handle's packed `lane` back and returns the layout.
-function packLanes(raw: RawHandle[], groupCount: number): { base: number[]; laneCount: number } {
-  const perGroup: RawHandle[][] = Array.from({ length: groupCount }, () => [])
-  for (const h of raw) if (h.group >= 0 && h.group < groupCount) perGroup[h.group].push(h)
-  const base: number[] = []
-  let cursor = 0
-  for (let g = 0; g < groupCount; g++) {
-    base[g] = cursor
-    const spans = perGroup[g]
-      .filter((h) => h.kind === 'span')
-      .sort((a, b) => a.beat - b.beat || (a.end ?? a.beat) - (b.end ?? b.beat) || a.row - b.row)
-    const ends: number[] = []
-    for (const h of spans) {
-      let s = ends.findIndex((e) => e <= h.beat)
-      if (s < 0) { s = ends.length; ends.push(0) }
-      ends[s] = h.end ?? h.beat
-      h.lane = cursor + s
-    }
-    for (const h of perGroup[g]) if (h.kind !== 'span') h.lane = cursor
-    cursor += Math.max(1, ends.length)
+// points sit at lane 0. Writes each handle's packed `lane` back and returns
+// how many lanes the section needs.
+function packLanes(handles: Handle[]): number {
+  const spans = handles
+    .filter((h) => h.kind === 'span')
+    .sort((a, b) => a.beat - b.beat || (a.end ?? a.beat) - (b.end ?? b.beat) || a.row - b.row)
+  const ends: number[] = []
+  for (const h of spans) {
+    let s = ends.findIndex((e) => e <= h.beat)
+    if (s < 0) { s = ends.length; ends.push(0) }
+    ends[s] = h.end ?? h.beat
+    h.lane = s
   }
-  return { base, laneCount: Math.max(1, cursor) }
+  return Math.max(1, ends.length)
 }
 
 export interface StripLayout {
-  // Every placement's public handle, packed lanes written back.
+  // Every placement's handle, packed lanes written back.
   handles: Handle[]
-  // Total lane bands the strip needs — packed sub-lanes included.
+  // Sub-lane bands this section needs — overlapping spans only.
   laneCount: number
-  // The first lane of each pass; pass g spans [passBase[g], passBase[g + 1]).
-  // Length is the pass count, so passBase.length > 1 means a multi-pass strip.
-  passBase: number[]
 }
 
-// The open table's handles and the lane layout they pack into, from one
-// buildRaw + packLanes pass: how many lane bands (packed sub-lanes and all),
-// and where each pass starts — the coverage shading and pass labels key off
-// passBase so a pass's tint spans exactly its sub-lanes.
-export function stripLayout(name: string, rows: Row[], columns: EditableColumn[], timelineRows: Row[], loopBeats?: number): StripLayout {
-  const { raw, groupCount } = buildRaw(name, rows, columns, timelineRows, loopBeats)
-  const { base, laneCount } = packLanes(raw, groupCount)
-  return { handles: raw.map(({ group: _group, ...h }) => h), laneCount, passBase: base }
+// Minimal column specs inferred from cooked rows, which carry no editable
+// schema: every key seen with a non-null value, `event` hoisted first so
+// readouts lead with the row's identity. Enough for meaningfulSummary and
+// buildRaw's dur detection — never for editing.
+export function columnsFromRows(rows: Row[]): EditableColumn[] {
+  const seen = new Map<string, EditableColumn['type']>()
+  for (const r of rows) {
+    for (const [k, v] of Object.entries(r)) {
+      if (v == null || seen.has(k)) continue
+      seen.set(k, typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'boolean' : k === 'code' ? 'code' : 'string')
+    }
+  }
+  const columns = [...seen].map(([name, type]) => ({ name, type }))
+  const ev = columns.findIndex((c) => c.name === 'event')
+  if (ev > 0) columns.unshift(...columns.splice(ev, 1))
+  return columns
+}
+
+// One section's band: the handles for `name`'s rows at the pass playback is
+// showing, and the sub-lanes they pack into. `timelineRows` is whichever warp
+// the section's rows are subject to — the APPLIED cook's for a cooked out
+// view (the rows playback actually consumes), the live store rows for a
+// section being edited. `resolveSource` decides draggability per row (see
+// Handle.source); omit it for a read-only section.
+export function sectionLayout(
+  name: string, rows: Row[], columns: EditableColumn[], timelineRows: Row[], loopBeats?: number,
+  passes: SectionPasses = PASS_ZERO, resolveSource?: ResolveSource,
+): StripLayout {
+  const handles = buildRaw(name, rows, columns, timelineRows, loopBeats, passes, resolveSource)
+  return { handles, laneCount: packLanes(handles) }
 }
 
 export interface CoverageBand {
@@ -318,10 +371,11 @@ export interface CoverageBand {
 
 // One tinted band per compiled segment, its beats mapped from the extended
 // playback axis (see timeline.ts's compile) onto its own pass's local
-// 0..span axis and tagged with which lane that pass is — mirrors stripLayout's
-// content-row wrap. A window that spans a pass boundary (a row in an earlier
-// pass whose next row is a later one) tints the band by its p0's lane; the
-// common case, a pass filled by its own rows, keeps p0 and p1 in one lane.
+// 0..span axis and tagged with which pass that is — mirrors sectionLayout's
+// timeline-pass wrap, so a consumer draws the current pass by filtering
+// `band.lane === passes.timeline`. A window that spans a pass boundary (a row
+// in an earlier pass whose next row is a later one) tints by its p0's pass;
+// the common case, a pass filled by its own rows, keeps p0 and p1 in one.
 export function coverageBands(timelineRows: Row[], loopBeats?: number): CoverageBand[] {
   const timeline = buildTimeline(timelineRows, loopBeats)
   if (!timeline.active) return []
@@ -354,25 +408,17 @@ export function pendingTimelineRows(rows: Row[], appliedRows: Row[]): Set<number
   return pending
 }
 
-export type HitPart = 'start' | 'end' | 'body'
-
-export interface HitResult {
-  row: number
-  part: HitPart
-}
-
-// Wide enough that a fingertip can land on a span's edge to resize it, not
-// just a mouse cursor — the edge shows a resize cursor on hover, so the
-// larger zone is self-correcting for the mouse.
+// Wide enough that a fingertip, not just a mouse cursor, can land on a
+// handle: a point is grabbable across its whole neighbourhood, and a span a
+// little past either edge.
 const EDGE_TOLERANCE_PX = 12
 
-// Which handle (and which part of it) sits under a pointer at `(x, lane)`.
-// Edges win over body within EDGE_TOLERANCE_PX; among body hits a point
-// handle (a precise target) wins over a span's body (a broad one) at the
-// same spot. Null means background — the strip's view treats that as inert
-// (it no longer scrubs).
+// Which handle's row sits under a pointer at `(x, lane)`. A point handle (a
+// precise target) wins over a span's body (a broad one) at the same spot.
+// Null means background — the strip's view treats that as inert (it no
+// longer scrubs).
 interface Candidate {
-  result: HitResult
+  row: number
   priority: number
   dist: number
 }
@@ -384,7 +430,7 @@ function better(prev: Candidate | null, next: Candidate): Candidate {
   return prev
 }
 
-export function hitTest(handles: Handle[], geometry: StripGeometry, x: number, lane: number): HitResult | null {
+export function hitTest(handles: Handle[], geometry: StripGeometry, x: number, lane: number): number | null {
   let best: Candidate | null = null
 
   for (const h of handles) {
@@ -392,34 +438,28 @@ export function hitTest(handles: Handle[], geometry: StripGeometry, x: number, l
     const startX = beatToX(geometry, h.beat)
     if (h.kind === 'span' && h.end !== undefined) {
       const endX = beatToX(geometry, h.end)
-      const dStart = Math.abs(x - startX)
-      const dEnd = Math.abs(x - endX)
-      if (dStart <= EDGE_TOLERANCE_PX) best = better(best, { result: { row: h.row, part: 'start' }, priority: 2, dist: dStart })
-      if (dEnd <= EDGE_TOLERANCE_PX) best = better(best, { result: { row: h.row, part: 'end' }, priority: 2, dist: dEnd })
-      if (x >= startX && x <= endX) {
-        best = better(best, { result: { row: h.row, part: 'body' }, priority: 1, dist: Math.min(dStart, dEnd) })
+      if (x >= startX - EDGE_TOLERANCE_PX && x <= endX + EDGE_TOLERANCE_PX) {
+        best = better(best, { row: h.row, priority: 1, dist: Math.min(Math.abs(x - startX), Math.abs(x - endX)) })
       }
     } else if (Math.abs(x - startX) <= EDGE_TOLERANCE_PX) {
-      best = better(best, { result: { row: h.row, part: 'body' }, priority: 1.5, dist: Math.abs(x - startX) })
+      best = better(best, { row: h.row, priority: 2, dist: Math.abs(x - startX) })
     }
   }
-  return best ? best.result : null
+  return best ? best.row : null
 }
 
-// hitTest only identifies a row+part, not which physical Handle answered it —
-// a row played by a loop event has one ghost per placement, each at its own
-// x, and a drag needs the actual placement grabbed (its beat/end/lane) to
-// compute dBeats against. Re-scans just that row's candidates by the same
-// edge-vs-body distance hitTest itself used; the common case (one placement)
-// short-circuits without the scan.
-export function resolveHandle(handles: Handle[], geometry: StripGeometry, hit: HitResult, x: number, lane: number): Handle | undefined {
-  const candidates = handles.filter((h) => h.row === hit.row && h.lane === lane)
+// hitTest only identifies a row, not which physical Handle answered it — a row
+// played by a loop event has one ghost per placement, each at its own x, and a
+// drag needs the actual placement grabbed (its beat/lane) to compute dBeats
+// against. Re-scans just that row's candidates; the common case (one
+// placement) short-circuits without the scan.
+export function resolveHandle(handles: Handle[], geometry: StripGeometry, row: number, x: number, lane: number): Handle | undefined {
+  const candidates = handles.filter((h) => h.row === row && h.lane === lane)
   if (candidates.length <= 1) return candidates[0]
   let best: Handle | undefined
   let bestDist = Infinity
   for (const h of candidates) {
-    const target = hit.part === 'end' ? (h.end ?? h.beat) : h.beat
-    const dist = Math.abs(x - beatToX(geometry, target))
+    const dist = Math.abs(x - beatToX(geometry, h.beat))
     if (dist < bestDist) { bestDist = dist; best = h }
   }
   return best
@@ -436,16 +476,13 @@ export function snap(beat: number, opts: { mode?: SnapMode } = {}): number {
 }
 
 // Snaps a drag delta so the point it actually moves (`anchor` — the handle's
-// own beat for a move/start drag, its end for an end drag) lands exactly on
-// the snap grid. Snapping the raw delta itself would only land on-grid when
+// own beat) lands exactly on the snap grid. Snapping the raw delta itself would only land on-grid when
 // the handle's starting position already was.
 export function snapDelta(anchor: number, dBeats: number, opts: { mode?: SnapMode } = {}): number {
   return snap(anchor + dBeats, opts) - anchor
 }
 
 export interface DragOptions {
-  // Minimum span (beats) a 'start'/'end' drag may shrink a span to.
-  minSpan?: number
   // Set when dragging a non-'timeline' table's handle under an active
   // timeline: inverts the playback-axis drop position back to the row's
   // stored source beat via sourceBeatAt, so storage matches where the
@@ -458,50 +495,18 @@ export interface DragResult {
   values: Record<string, unknown>
 }
 
-const DEFAULT_MIN_SPAN = 0.25
-
-// The drag reuses hitTest's `part` vocabulary directly: a handle's body is
-// dragged by moving it, an edge ('start'/'end') by resizing that edge.
-export function dragUpdate(handle: Handle, part: HitPart, dBeats: number, opts: DragOptions = {}): DragResult {
-  const minSpan = opts.minSpan ?? DEFAULT_MIN_SPAN
-  const { row, beat, end, pass, derived, endRow } = handle
-  // A wrapped placement's `beat`/`end` are local to its own pass (wrapPass) —
+// Whole-row moves only: a span's length (`dur`) is untouched by a move, so its
+// window keeps the same duration wherever it lands. (Edge resize is not a
+// gesture here — a cooked band's stored duration isn't the dragged row's to
+// resize, and on the warp band an edge belongs to a neighbouring row.)
+export function dragUpdate(handle: Handle, dBeats: number, opts: DragOptions = {}): DragResult {
+  const { row, beat, pass } = handle
+  // A wrapped placement's `beat` is local to its own pass (wrapPass) —
   // sourceBeatAt needs that pass back to re-derive the right extended-axis
   // point, the same `loop` argument buildTimeline's own multi-pass playback
   // uses.
   const toSource = (b: number): number => (opts.timeline?.active ? opts.timeline.sourceBeatAt(b, pass ?? 0) : b)
-
-  if (part === 'body') {
-    // A span's length (`dur`) is untouched by a pure move, so its window
-    // keeps the same duration wherever it lands.
-    const nextBeat = Math.max(1, beat + dBeats)
-    return { row, values: { beat: toSource(nextBeat) } }
-  }
-
-  // A derived span has no stored dur to resize. Its end edge belongs to the
-  // destination setCode (a fold transition's `endRow`): dragging it moves THAT
-  // row's beat. Every other edge just moves this row — the window recomputes.
-  if (derived) {
-    if (part === 'end' && endRow !== undefined) {
-      const nextEnd = Math.max((end ?? beat) + dBeats, beat + minSpan)
-      return { row: endRow, values: { beat: toSource(nextEnd) } }
-    }
-    const nextBeat = Math.max(1, beat + dBeats)
-    return { row, values: { beat: toSource(nextBeat) } }
-  }
-
-  if (part === 'start') {
-    const fixedEnd = end ?? beat
-    const nextBeat = Math.max(1, Math.min(beat + dBeats, fixedEnd - minSpan))
-    if (end !== undefined) {
-      return { row, values: { beat: toSource(nextBeat), dur: toSource(fixedEnd) - toSource(nextBeat) } }
-    }
-    return { row, values: { beat: toSource(nextBeat) } }
-  }
-
-  // part === 'end'
-  const nextEnd = Math.max((end ?? beat) + dBeats, beat + minSpan)
-  return { row, values: { dur: toSource(nextEnd) - toSource(beat) } }
+  return { row, values: { beat: toSource(Math.max(1, beat + dBeats)) } }
 }
 
 // Whether a drag's payload actually changes the stored row — a gesture that

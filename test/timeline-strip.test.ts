@@ -8,7 +8,8 @@ import {
   beatToX,
   xToBeat,
   gridLines,
-  stripLayout,
+  sectionLayout,
+  columnsFromRows,
   hitTest,
   resolveHandle,
   snap,
@@ -22,8 +23,10 @@ import {
   meaningfulSummary,
   type Handle,
 } from '../src/timeline-strip.js'
+import { sectionsFor, sectionBeat, type TimelineSection } from '../src/timeline-sections.js'
 import { hydraTransitionWindows } from '../src/hydra.js'
 import { postSpanWindows, postGlidePairs } from '../src/post.js'
+import type { Row } from '../src/lineage.js'
 import type { EditableColumn } from '../src/editable-tables.js'
 
 const cols = (...names: string[]): EditableColumn[] => names.map((name) => ({ name, type: 'number' }))
@@ -63,7 +66,7 @@ test('handlesFor: timeline rows become until-next span handles; loop picks the l
     { beat: 5, loop: 0 },
     { beat: 1, loop: 1, disabled: true },
   ]
-  const handles = stripLayout('timeline', rows, cols('beat', 'loop'), rows, 8).handles
+  const handles = sectionLayout('timeline', rows, cols('beat', 'loop'), rows, 8).handles
   assert.deepEqual(
     handles.map((h) => ({ row: h.row, kind: h.kind, beat: h.beat, end: h.end, lane: h.lane, disabled: h.disabled })),
     [
@@ -76,7 +79,7 @@ test('handlesFor: timeline rows become until-next span handles; loop picks the l
 
 test('handlesFor: with no timeline defined, a content row is identity — one non-ghost handle at its own beat', () => {
   const rows = [{ beat: 3, dur: 2 }]
-  const handles = stripLayout('three', rows, cols('beat', 'dur'), []).handles
+  const handles = sectionLayout('three', rows, cols('beat', 'dur'), []).handles
   assert.deepEqual(handles, [
     { row: 0, kind: 'span', beat: 3, end: 5, lane: 0, ghost: false, disabled: false },
   ])
@@ -91,7 +94,7 @@ test('handlesFor: a fold transition draws its until-next window as a span (endRo
     { beat: 5, event: 'transition' },
     { beat: 9, event: 'setCode', code: 'noise().out(o0)' },
   ]
-  const handles = stripLayout('hydra', rows, cols('beat'), []).handles
+  const handles = sectionLayout('hydra', rows, cols('beat'), []).handles
   assert.equal(handles.find((h) => h.row === 0)!.kind, 'point', 'setCode is an instant')
   const t = handles.find((h) => h.row === 1)!
   const win = hydraTransitionWindows(rows)[0]
@@ -107,7 +110,7 @@ test('handlesFor: a post pulse draws a bar (mirroring pulseAt); a bare pulse def
     { beat: 6, event: 'pulse', name: 'x', value: 1 }, // blank dur → 1-beat bar
     { beat: 8, event: 'pulse', name: 'x', value: 1, dur: 0, ease: 'step' }, // step gate has extent
   ]
-  const handles = stripLayout('post', rows, cols('beat', 'dur'), []).handles
+  const handles = sectionLayout('post', rows, cols('beat', 'dur'), []).handles
   const barOf = (row: number) => handles.find((h) => h.row === row)!
   assert.equal(barOf(0).kind, 'point', 'a stray dur on a setCode is still a point')
   assert.deepEqual([barOf(1).kind, barOf(1).beat, barOf(1).end], ['span', 3, 5], 'explicit dur bar [beat, beat+dur)')
@@ -124,7 +127,7 @@ test('handlesFor: an eased setVariable stays a point, tagged with the previous s
     { beat: 3, event: 'setVariable', name: 'y', value: 9, ease: 'linear' }, // eased but first of its track: no glide
   ]
   const cols4 = cols('beat')
-  const handles = stripLayout('post', rows, cols4, []).handles
+  const handles = sectionLayout('post', rows, cols4, []).handles
   assert.deepEqual(handles.map((h) => h.kind), ['point', 'point', 'point', 'point'], 'a glide is an arrow, never a bar')
   const glideOf = (row: number) => handles.find((h) => h.row === row)!.glideFrom
   assert.equal(glideOf(1), 0, 'the eased arrival glides from the previous same-name row')
@@ -140,7 +143,7 @@ test('handlesFor: setCode/add/remove/layer in a post table stay points', () => {
     { beat: 3, event: 'remove', name: 'bloom' },
     { beat: 4, event: 'layer', code: 'noise()', mode: 'add' },
   ]
-  const handles = stripLayout('post', rows, cols('beat'), []).handles
+  const handles = sectionLayout('post', rows, cols('beat'), []).handles
   assert.deepEqual(handles.map((h) => h.kind), ['point', 'point', 'point', 'point'])
   assert.ok(handles.every((h) => h.glideFrom === undefined && h.end === undefined))
 })
@@ -148,7 +151,7 @@ test('handlesFor: setCode/add/remove/layer in a post table stay points', () => {
 test('handlesFor: a post pulse bar has parity with postSpanWindows (strip can\'t drift from playback)', () => {
   const rows = [{ beat: 3, event: 'pulse', name: 'x', value: 1, dur: 2 }]
   const win = postSpanWindows(rows).find((w) => w.row === 0)!
-  const bar = stripLayout('post', rows, cols('beat', 'dur'), []).handles.find((h) => h.row === 0)!
+  const bar = sectionLayout('post', rows, cols('beat', 'dur'), []).handles.find((h) => h.row === 0)!
   assert.deepEqual([bar.beat, bar.end], [win.start, win.end], 'bar matches the fold window')
 })
 
@@ -171,7 +174,7 @@ test('handlesFor: a wrapped fold transition (destination earlier in the loop) re
     { beat: 6, event: 'setCode', code: 'b().out(o0)' },
     { beat: 7, event: 'transition' },
   ]
-  const arcs = stripLayout('hydra', rows, cols('beat'), [], 8).handles.filter((h) => h.row === 2)
+  const arcs = sectionLayout('hydra', rows, cols('beat'), [], 8).handles.filter((h) => h.row === 2)
   assert.equal(arcs.length, 2, 'a wrapped window is a tail arc + a head arc')
   const tail = arcs.find((h) => h.endRow === undefined)!
   const head = arcs.find((h) => h.endRow !== undefined)!
@@ -184,59 +187,75 @@ test('handlesFor: a content row played by a loop event gets one handle per place
   const timelineRows = [{ event: 'loop', beat: 1, from: 1, to: 5 }]
   const rows = [{ id: 'a', beat: 1 }]
   // Loop-beats 8 closes the pass at beat 9 — two 4-beat cycles.
-  const handles = stripLayout('hits', rows, cols('beat'), timelineRows, 8).handles
+  const handles = sectionLayout('hits', rows, cols('beat'), timelineRows, 8).handles
   assert.deepEqual(
     handles.map((h) => ({ beat: h.beat, ghost: h.ghost })),
     [{ beat: 1, ghost: false }, { beat: 5, ghost: true }],
   )
 })
 
-// --- handlesFor: phase 5 (lanes + pass wrapping) ----------------------------
+// --- current-pass selection (the two pass axes) ------------------------------
 
-test('handlesFor: a content row placed across a multi-pass timeline lands each ghost in its own pass lane', () => {
-  // Two "loop" passes, each cycling source 1..5 twice across their own
-  // 8-beat span — a content row at source beat 3 (the cycle's midpoint)
-  // lands twice per pass, once per cycle.
-  const timelineRows = [
-    { event: 'loop', beat: 1, from: 1, to: 5, loop: 0 },
-    { event: 'loop', beat: 1, from: 1, to: 5, loop: 1 },
-  ]
-  const rows = [{ beat: 3 }]
-  const handles = stripLayout('hits', rows, cols('beat'), timelineRows, 8).handles
-  assert.deepEqual(
-    handles.map((h) => ({ beat: h.beat, lane: h.lane, ghost: h.ghost })),
-    [
-      { beat: 3, lane: 0, ghost: false },
-      { beat: 7, lane: 0, ghost: true },
-      { beat: 3, lane: 1, ghost: true },
-      { beat: 7, lane: 1, ghost: true },
-    ],
-    'pass 2\'s placements repeat pass 1\'s local shape, just in lane 1',
-  )
-})
-
-test('handlesFor: a content row whose beat runs past loopBeats wraps into a later pass, tagged but still in lane 0', () => {
-  // No timeline defined, so there's no lane to place a later pass into —
-  // only a badge (see notes/timeline-strip-plan.md "Beats past maxBeats").
+test('sectionLayout: a content row past loopBeats shows only in ITS content pass, at its pass-local beat', () => {
+  // No timeline, so the strip's axis is one 8-beat loop: source beat 20 plays
+  // in the third pass of the content, at local beat 4 — and nowhere else.
   const rows = [{ beat: 20 }]
-  const handles = stripLayout('hits', rows, cols('beat'), [], 8).handles
-  assert.deepEqual(
-    handles.map((h) => ({ beat: h.beat, lane: h.lane, pass: h.pass })),
-    [{ beat: 4, lane: 0, pass: 2 }],
-    '(20 - 1) % 8 + 1 == 4, in the third 8-beat pass',
-  )
+  const at = (content: number) => sectionLayout('hits', rows, cols('beat'), [], 8, { content, timeline: 0 }).handles
+  assert.deepEqual(at(2).map((h) => ({ beat: h.beat, lane: h.lane })), [{ beat: 4, lane: 0 }], '(20 - 1) % 8 + 1 == 4')
+  assert.deepEqual(at(0), [], 'the row is simply absent from the passes it does not play in')
+  assert.deepEqual(at(1), [])
 })
 
-// --- laneLayout + sub-lane packing ------------------------------------------
-
-test('laneLayout: a two-pass timeline reserves one lane per pass even with no content handles', () => {
-  const twoPassTimeline = [
-    { event: 'hold', beat: 1, from: 1, loop: 0 },
-    { event: 'hold', beat: 1, from: 1, loop: 1 },
+test('sectionLayout: content pass filters SOURCE beats, timeline pass selects PLACED beats — the two axes are independent', () => {
+  // R1. Pass 0 of the warp holds source beat 3; pass 1 retimes source 1..9
+  // across its own 8 beats. Content pass 0 is source 1..8, content pass 1 is
+  // source 9..16 — a different axis, applied before the warp, not after.
+  const warp = [
+    { event: 'hold', beat: 1, from: 3, loop: 0 },
+    { event: 'retime', beat: 1, from: 1, to: 9, loop: 1 },
   ]
-  const { laneCount, passBase } = stripLayout('scene', [], cols('beat', 'dur'), twoPassTimeline)
-  assert.deepEqual({ laneCount, passBase }, { laneCount: 2, passBase: [0, 1] })
+  const rows = [{ beat: 3 }, { beat: 12 }]
+  const at = (content: number, timeline: number) =>
+    sectionLayout('hits', rows, cols('beat'), warp, 8, { content, timeline }).handles
+      .map((h) => ({ row: h.row, beat: h.beat, pass: h.pass }))
+  assert.deepEqual(at(0, 0), [{ row: 0, beat: 1, pass: undefined }], 'the hold shows source 3 at the top of its pass')
+  assert.deepEqual(at(0, 1), [{ row: 0, beat: 3, pass: 1 }], 'the retime shows the same source beat a quarter in')
+  assert.deepEqual(at(1, 1), [{ row: 1, beat: 4, pass: 1 }], 'source 12 is content-pass 1 local beat 4, placed by the retime')
+  assert.deepEqual(at(1, 0), [], "content pass 1's local beat 4 is nowhere in a pass that holds source 3")
 })
+
+test('sectionLayout: a warp-moved row is inert, a row still on its stored beat carries its store source', () => {
+  // OQ1: dragging survives only where the strip is not remapped. Source 1..5
+  // stretches across the 8-beat pass, so the cooked row at source 1 lands on
+  // beat 1 (untouched, draggable) and the one at source 3 lands on beat 5.
+  const applied = [{ event: 'retime', beat: 1, from: 1, to: 5 }]
+  const store = [{ beat: 1 }, { beat: 3 }]
+  const resolveSource = (r: Row) => {
+    const row = store.findIndex((s) => s.beat === r.beat)
+    return row < 0 ? undefined : { table: 'hydra', row, beat: store[row].beat }
+  }
+  const handles = sectionLayout('hydra', [{ beat: 1 }, { beat: 3 }], cols('beat'), applied, 8,
+    { content: 0, timeline: 0 }, resolveSource).handles
+  assert.deepEqual(
+    handles.map((h) => ({ beat: h.beat, source: h.source })),
+    [{ beat: 1, source: { table: 'hydra', row: 0 } }, { beat: 5, source: undefined }],
+  )
+  assert.equal(sectionLayout('hydra', [{ beat: 1 }], cols('beat'), applied, 8).handles[0].source, undefined,
+    'a section with no source resolver is read-only')
+})
+
+test('sectionLayout: the timeline section keeps live-store-row identity — a window IS its storage row', () => {
+  const rows = [{ beat: 1, loop: 0 }, { beat: 5, loop: 0 }, { beat: 1, loop: 1 }]
+  const pass = (timeline: number) => sectionLayout('timeline', rows, cols('beat', 'loop'), rows, 8, { content: 0, timeline }).handles
+  assert.deepEqual(
+    pass(1).map((h) => ({ row: h.row, beat: h.beat, end: h.end, source: h.source })),
+    [{ row: 2, beat: 1, end: 9, source: { table: 'timeline', row: 2 } }],
+    "only pass 2's own window, at its pass-local beats",
+  )
+  assert.deepEqual(pass(0).map((h) => h.row), [0, 1])
+})
+
+// --- sub-lane packing --------------------------------------------------------
 
 test('sub-lane packing: overlapping spans stack into sub-lanes, disjoint spans share one, deterministically', () => {
   // A plain dur-column table: 1..4 and 3..6 overlap, so they pack into
@@ -247,11 +266,87 @@ test('sub-lane packing: overlapping spans stack into sub-lanes, disjoint spans s
     { beat: 3, dur: 3 },
   ]
   const columns = cols('beat', 'dur')
-  const laneOf = () => stripLayout('scene', rows, columns, []).handles
+  const laneOf = () => sectionLayout('scene', rows, columns, []).handles
     .sort((a, b) => a.beat - b.beat).map((h) => h.lane)
   assert.deepEqual(laneOf(), [0, 1, 0], 'first-fit by start: 1..4 → 0, 3..6 → 1, 7..9 → 0')
   assert.deepEqual(laneOf(), laneOf(), 'deterministic')
-  assert.equal(stripLayout('scene', rows, columns, []).laneCount, 2)
+  assert.equal(sectionLayout('scene', rows, columns, []).laneCount, 2)
+})
+
+// --- out-view sections -------------------------------------------------------
+
+test('out sections: cooked rows place through the APPLIED timeline, not the live rows being edited', () => {
+  // Applied warp stretches source 1..5 across the 8-beat pass; the live store
+  // rows have dropped it (a pending edit). Playback still warps by the applied
+  // rows, so the out section's indicator must sit where playback will show the
+  // beat — source 3, the stretch midpoint, at playback beat 5.
+  const applied = [{ event: 'retime', beat: 1, from: 1, to: 5 }]
+  const cooked = [{ id: 'a', event: 'update', beat: 3 }]
+  assert.equal(sectionLayout('three', cooked, columnsFromRows(cooked), applied, 8).handles[0].beat, 5,
+    'the out view follows the applied warp')
+  assert.equal(sectionLayout('three', cooked, columnsFromRows(cooked), [], 8).handles[0].beat, 3,
+    'a section placed through the live (identity) rows stays at its own beat')
+})
+
+test('out sections: a dur column inferred from cooked rows still draws a bar', () => {
+  const rows = [{ beat: 3, dur: 2 }]
+  const { handles, laneCount } = sectionLayout('three', rows, columnsFromRows(rows), [], 8)
+  assert.deepEqual([handles[0].kind, handles[0].beat, handles[0].end, handles[0].lane], ['span', 3, 5, 0])
+  assert.equal(laneCount, 1, 'a section is only as tall as its own overlapping spans')
+})
+
+test('out sections: a hydra transition span keeps fold-window parity on its own band', () => {
+  const rows = [
+    { beat: 3, event: 'setCode', code: 'osc().out(o0)' },
+    { beat: 5, event: 'transition' },
+    { beat: 9, event: 'setCode', code: 'noise().out(o0)' },
+  ]
+  const { handles } = sectionLayout('hydra', rows, columnsFromRows(rows), [])
+  const t = handles.find((h) => h.row === 1)!
+  const win = hydraTransitionWindows(rows)[0]
+  assert.deepEqual([t.kind, t.beat, t.end, t.endRow], ['span', win.start, win.end, win.endRow])
+})
+
+// --- sectionsFor -------------------------------------------------------------
+
+test('sectionsFor: the warp leads, then one band per out view with placeable rows, then the automation plots', () => {
+  const sections = sectionsFor({
+    cooked: {
+      views: new Map([['hydra', { rows: [] }], ['post', { rows: [] }]]),
+      hydraRows: [{ beat: 1, event: 'setCode', code: 'osc().out(o0)' }],
+      baubleRows: [],
+      postRows: [{ beat: 2, event: 'setVariable', name: 'glow', value: 0.5 }],
+    },
+    particleRows: [],
+    timelineRows: [{ event: 'retime', beat: 1 }],
+    sliderRows: [{ id: 'a', value: 0.5, beat: 1 }],
+    midiRows: [],
+    passes: { hydra: { pass: 1, loops: 2 } },
+  })
+  assert.deepEqual(
+    sections.map((s) => ({ name: s.name, kind: s.kind, view: s.view, drag: s.drag })),
+    [
+      { name: 'timeline', kind: 'timeline', view: 'timeline', drag: 'rows' },
+      { name: 'hydra', kind: 'events', view: 'hydra', drag: 'lineage' },
+      { name: 'post', kind: 'events', view: 'post', drag: 'lineage' },
+      { name: 'slider', kind: 'channel', view: 'slider', drag: 'none' },
+      { name: 'post vars', kind: 'channel', view: 'post', drag: 'none' },
+    ],
+    'bauble/particles/midi have nothing to show, so they get no band',
+  )
+  assert.deepEqual(sections.find((s) => s.name === 'hydra')!.pass, { pass: 1, loops: 2 }, 'each out band carries its own content pass')
+  assert.deepEqual(sections.find((s) => s.name === 'slider')!.channel, { idCol: 'id', valueCol: 'value' })
+  assert.deepEqual(sections.find((s) => s.name === 'post vars')!.rows.map((r) => r.name), ['glow'])
+})
+
+test('sectionBeat: a band with content passes counts its own; a flat one reports the warp\'s pass', () => {
+  const band = (pass: { pass: number; loops: number }): TimelineSection =>
+    ({ name: 'hydra', kind: 'events', view: 'hydra', rows: [], pass, drag: 'lineage' })
+  const at = { srcBeat: 2.5, loopBeats: 8, timelinePass: 1, timelineLoops: 3 }
+  assert.deepEqual(sectionBeat(band({ pass: 2, loops: 3 }), at), { beat: 18.5, pass: 2, loops: 3 },
+    'content pass 2 of an 8-beat loop sits 16 beats past the source beat')
+  assert.deepEqual(sectionBeat(band({ pass: 0, loops: 1 }), at), { beat: 2.5, pass: 1, loops: 3 },
+    'no content passes of its own: playback\'s timeline pass, at the plain source beat')
 })
 
 // --- coverageBands -----------------------------------------------------------
@@ -297,15 +392,15 @@ test('pendingTimelineRows: an unapplied trailing row past the applied cook lengt
 
 // --- hitTest ----------------------------------------------------------------
 
-test('hitTest: an edge wins over the body within tolerance; background misses return null', () => {
+test('hitTest: a span is grabbable across its body and a little past either edge; background misses return null', () => {
   const geometry = { width: 400, maxBeats: 16 }
   const handles: Handle[] = [
     { row: 0, kind: 'span', beat: 1, end: 9, lane: 0, ghost: false, disabled: false },
   ]
   const startX = beatToX(geometry, 1)
   const midX = beatToX(geometry, 5)
-  assert.deepEqual(hitTest(handles, geometry, startX + 2, 0), { row: 0, part: 'start' })
-  assert.deepEqual(hitTest(handles, geometry, midX, 0), { row: 0, part: 'body' })
+  assert.equal(hitTest(handles, geometry, startX - 4, 0), 0, 'just outside the start edge still grabs the span')
+  assert.equal(hitTest(handles, geometry, midX, 0), 0)
   assert.equal(hitTest(handles, geometry, geometry.width, 0), null, 'no handle in lane at that x')
 })
 
@@ -321,27 +416,11 @@ test('snap: quarter-beat by default, whole beats under coarse, unsnapped under f
 
 // --- dragUpdate ----------------------------------------------------------------
 
-test('dragUpdate move on a span only writes beat — dur (a length) rides along, preserving duration', () => {
+test('dragUpdate on a span only writes beat — dur (a length) rides along, preserving duration', () => {
   const handle: Handle = { row: 2, kind: 'span', beat: 5, end: 13, lane: 0, ghost: false, disabled: false }
-  const { row, values } = dragUpdate(handle, 'body', 3)
+  const { row, values } = dragUpdate(handle, 3)
   assert.equal(row, 2)
   assert.deepEqual(values, { beat: 8 })
-})
-
-test('dragUpdate end-edge drag writes dur back, respecting the minimum span', () => {
-  const handle: Handle = { row: 0, kind: 'span', beat: 5, end: 6, lane: 0, ghost: false, disabled: false }
-  // Dragging the end edge far to the left would collapse the span below minSpan.
-  const { values } = dragUpdate(handle, 'end', -10, { minSpan: 0.25 })
-  assert.deepEqual(values, { dur: 0.25 })
-})
-
-test('dragUpdate on a derived transition span: the end edge retargets the destination row, start/move move the transition', () => {
-  const handle: Handle = { row: 1, kind: 'span', beat: 3, end: 8, lane: 0, ghost: false, disabled: false, derived: true, endRow: 2 }
-  const end = dragUpdate(handle, 'end', 2)
-  assert.equal(end.row, 2, 'the end edge belongs to the destination setCode')
-  assert.deepEqual(end.values, { beat: 10 }, 'moves the destination beat, never a dur')
-  assert.deepEqual([dragUpdate(handle, 'start', -1).row, dragUpdate(handle, 'start', -1).values], [1, { beat: 2 }], 'a start edge moves only the transition row')
-  assert.deepEqual(dragUpdate(handle, 'body', 1).values, { beat: 4 })
 })
 
 test('dragUpdate maps a content-table drop back through the timeline sourceBeatAt', () => {
@@ -349,7 +428,7 @@ test('dragUpdate maps a content-table drop back through the timeline sourceBeatA
   const timeline = buildTimeline([{ event: 'retime', beat: 1, from: 1, to: 5 }], 8)
   const handle: Handle = { row: 0, kind: 'point', beat: 1, lane: 0, ghost: false, disabled: false }
   // Drag the handle from playback beat 1 to playback beat 5 (the midpoint).
-  const { values } = dragUpdate(handle, 'body', 4, { timeline })
+  const { values } = dragUpdate(handle, 4, { timeline })
   assert.equal(values.beat, timeline.sourceBeatAt(5), 'stored source beat matches the visual landing spot')
   assert.equal(values.beat, 3)
 })
@@ -362,7 +441,7 @@ test('dragUpdate maps a wrapped ghost back through its own pass, not pass 0', ()
     { event: 'hold', beat: 1, from: 7, loop: 1 },
   ])
   const handle: Handle = { row: 0, kind: 'point', beat: 2, lane: 1, ghost: true, disabled: false, pass: 1 }
-  const { values } = dragUpdate(handle, 'body', 0, { timeline })
+  const { values } = dragUpdate(handle, 0, { timeline })
   assert.equal(values.beat, 7, "pass 2's hold source (7), not pass 1's (3)")
 })
 
@@ -408,7 +487,7 @@ test('resolveHandle: picks the specific ghost placement under the pointer, not j
   ]
   const xNearGhost = beatToX(geometry, 9)
   const hit = hitTest(handles, geometry, xNearGhost, 0)
-  assert.deepEqual(hit, { row: 0, part: 'body' })
+  assert.equal(hit, 0)
   const handle = resolveHandle(handles, geometry, hit!, xNearGhost, 0)
   assert.equal(handle?.ghost, true, 'the ghost placement actually under the pointer, not the primary one')
 })

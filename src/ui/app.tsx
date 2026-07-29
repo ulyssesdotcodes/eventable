@@ -4,34 +4,46 @@
 // an accessor main.ts fills in right after mountApp returns — the engine
 // needs the canvases this render creates.
 
-import { createSignal, Show, type Accessor } from 'solid-js'
+import { createSignal, onCleanup, Show, type Accessor } from 'solid-js'
 import { render } from 'solid-js/web'
-import { PlaybackControls, type PlaybackController } from './playback-controls.js'
-import { EditorPane, type EditorController, type PreviewMounts } from './editor.js'
-import { TablePane, type TablePanelController } from './table-panel.js'
+import { TimelinePane } from './timeline-pane.js'
+import type { PlaybackController } from './transport.js'
+import { TablePane, type TablePanelController, type PanelChrome } from './table-panel.js'
+import { previewMounts, type PreviewMounts } from './facade.js'
 import { SessionBar, type SessionBarController } from './session-bar.js'
 import { SessionSelector, type SessionSelectorController } from './session-selector.js'
 import { RoomChip, type RoomChipController } from './room-chip.js'
 import { SliderPanel, type SliderPanelController } from './slider-panel.js'
 import { PaneDivider } from './pane-divider.js'
 import { Icon } from './icon.js'
+import { getSidePanelSplit, setSidePanelSplit, getCanvasSplit, setCanvasSplit } from '../settings.js'
 import type { Row } from '../lineage.js'
+import type { ResolveSource } from '../timeline-strip.js'
+import type { TimelineSection } from '../timeline-sections.js'
+
+// The canvas/side-panel split only exists in the desktop (row) layout — the
+// stylesheet stacks them vertically below this.
+const DESKTOP_QUERY = '(min-width: 768px)'
 
 export interface AppProps {
-  editor: EditorController
   tablePanel: TablePanelController
+  // The relocated editor-header chrome (D6) — settings + scene import/export.
+  chrome: PanelChrome
   sessionBar: SessionBarController
   sessionSelector: SessionSelectorController
   roomChip: RoomChipController
   sliderPanel: SliderPanelController
   playback: Accessor<PlaybackController | null>
-  // The applied cook's timeline rows, for the strip's coverage shading —
-  // the "applied" half of the live/applied split (see playback's vs/engine).
+  // The applied cook's timeline rows, for the warp band's coverage shading and
+  // pending styling — the "applied" half of the live/applied split.
   timelineRows: Accessor<Row[]>
+  // The timeline pane's bands, rebuilt per cook and per store tick.
+  sections: Accessor<TimelineSection[]>
+  // Traces a cooked row back to the editable store row a drag writes through.
+  resolveSource: ResolveSource
   onClearRuns: () => void
-  // A timeline-strip drag just committed its one store.setRow — re-run so
-  // the drop applies immediately instead of sitting pending (see main.ts's
-  // evaluate()).
+  // A timeline drag just committed its one store.setRow — re-run so the drop
+  // applies immediately instead of sitting pending (see main.ts's evaluate()).
   onDragCommit: () => void
 }
 
@@ -43,16 +55,20 @@ export interface CanvasMounts {
   threeCanvas: HTMLCanvasElement
   baubleCanvas: HTMLCanvasElement
   hydraCanvas: HTMLCanvasElement
-  // Behind the code editor: the open hydra/post cell's pending code.
+  // Behind the promoted code facade: the open hydra/post cell's pending code.
+  // Unlike the rest, these live outside the layout — ui/facade.tsx owns them
+  // and reparents them into whichever surface is live.
   preview: PreviewMounts
 }
 
 function App(props: AppProps & { mounts: CanvasMounts }) {
   let sidePanels: HTMLDivElement | undefined
   let tablePane: HTMLDivElement | undefined
-  // Minimized transport: collapse the whole playback panel (controls + timeline
-  // strip) to a corner icon so the visual output isn't obscured.
-  const [playbackMinimized, setPlaybackMinimized] = createSignal(false)
+  const mq = window.matchMedia(DESKTOP_QUERY)
+  const [desktop, setDesktop] = createSignal(mq.matches)
+  const onMq = (e: MediaQueryListEvent): void => { setDesktop(e.matches) }
+  mq.addEventListener('change', onMq)
+  onCleanup(() => mq.removeEventListener('change', onMq))
   return (
     <>
       <div id="canvas-pane" ref={(el) => (props.mounts.canvasPane = el)}>
@@ -60,33 +76,49 @@ function App(props: AppProps & { mounts: CanvasMounts }) {
         <canvas id="hydra-canvas" ref={(el) => (props.mounts.hydraCanvas = el)} />
         <canvas id="bauble-canvas" ref={(el) => (props.mounts.baubleCanvas = el)} />
         <SliderPanel ctl={props.sliderPanel} />
-        <div id="playback-controls" classList={{ minimized: playbackMinimized() }}>
-          <Show when={props.playback()}>
-            {(p) => (
-              <PlaybackControls
-                vs={p().vs}
-                minimized={playbackMinimized}
-                onToggleMinimize={() => setPlaybackMinimized((m) => !m)}
-                engine={p().engine}
-                tapControl={p().tapControl}
-                timelineRows={props.timelineRows}
-                store={props.tablePanel.store}
-                currentTable={props.tablePanel.current}
-                onSelectRow={(table, row) => props.tablePanel.focusRow(table, row)}
-                presence={props.tablePanel.presence}
-                focusedRow={() => {
-                  const fr = props.tablePanel.focusedRow()
-                  return fr && fr.table === props.tablePanel.current() ? fr.row : null
-                }}
-                onStripRowChange={(row) => props.tablePanel.setStripRow(row)}
-                onDragCommit={props.onDragCommit}
-              />
-            )}
-          </Show>
-        </div>
       </div>
+      <Show when={desktop()}>
+        <PaneDivider
+          axis="row"
+          container={() => sidePanels?.parentElement ?? undefined}
+          pane={() => sidePanels}
+          get={getCanvasSplit}
+          set={setCanvasSplit}
+          label="Resize output and panels"
+        />
+      </Show>
       <div id="side-panels" ref={sidePanels}>
-        <EditorPane ctl={props.editor} currentTable={props.tablePanel.current} preview={props.mounts.preview}>
+        {/* The pane mounts once for the app's lifetime (it is created the one
+            time playback lands and never torn down) — the tradition the old
+            timeline strip kept because anything reading the store's onChange
+            has no unsubscribe. */}
+        <Show when={props.playback()}>
+          {(p) => (
+            <TimelinePane
+              vs={p().vs}
+              engine={p().engine}
+              tapControl={p().tapControl}
+              sections={props.sections}
+              timelineRows={props.timelineRows}
+              store={props.tablePanel.store}
+              resolveSource={props.resolveSource}
+              presence={props.tablePanel.presence}
+              focusedRow={props.tablePanel.focusedRow}
+              onSelectRow={(table, row) => props.tablePanel.focusRow(table, row)}
+              onStripRowChange={(row) => props.tablePanel.setStripRow(row)}
+              onDragCommit={props.onDragCommit}
+              onSelectView={(view) => props.tablePanel.selectTable(view)}
+            />
+          )}
+        </Show>
+        <PaneDivider
+          container={() => sidePanels}
+          pane={() => tablePane}
+          get={getSidePanelSplit}
+          set={setSidePanelSplit}
+          label="Resize timeline and table panes"
+        />
+        <TablePane ctl={props.tablePanel} chrome={props.chrome} ref={(el) => (tablePane = el)}>
           <SessionSelector ctl={props.sessionSelector}>
             <RoomChip ctl={props.roomChip} />
             <button
@@ -99,9 +131,7 @@ function App(props: AppProps & { mounts: CanvasMounts }) {
             </button>
           </SessionSelector>
           <SessionBar ctl={props.sessionBar} />
-        </EditorPane>
-        <PaneDivider container={() => sidePanels} tablePane={() => tablePane} />
-        <TablePane ctl={props.tablePanel} ref={(el) => (tablePane = el)} />
+        </TablePane>
       </div>
     </>
   )
@@ -110,7 +140,7 @@ function App(props: AppProps & { mounts: CanvasMounts }) {
 // Solid's render is synchronous, so the mounts are populated by the time
 // this returns.
 export function mountApp(root: HTMLElement, props: AppProps): CanvasMounts {
-  const mounts = { preview: {} as PreviewMounts } as CanvasMounts
+  const mounts = { preview: previewMounts } as CanvasMounts
   render(() => <App {...props} mounts={mounts} />, root)
   return mounts
 }

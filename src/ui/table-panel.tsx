@@ -6,21 +6,27 @@
 
 import {
   createSignal, createMemo, createEffect, on, onCleanup, untrack,
-  For, Index, Show, type Accessor, type Setter,
+  For, Index, Show, type Accessor, type JSX, type Setter,
 } from 'solid-js'
-import { SERIES_COLORS, computeColRanges, drawSeriesChart, fmtNum, PANEL_CHART_STYLE, type GraphSpec, type ColRange } from '../graph-panel.js'
+import { SERIES_COLORS, chartDataFor, computeColRanges, drawSeriesChart, fmtNum, PANEL_CHART_STYLE, type GraphSpec, type ColRange } from '../graph-panel.js'
 import {
   MAX_ROWS, COLUMN_TYPES, EVENTS_SUFFIX, formatCell, formatEditableCell,
-  allNames, nextTableName, fallbackTab, chartFor, displayOrder, activeRowIndex,
+  allNames, nextTableName, fallbackTab, chartFor, bottomSlotFor, hasCodeColumn,
+  displayOrder, activeRowIndex,
   tabRingStyle, viewersOf, lastEditors, moveFocus, isCellInert,
   type TablePanel, type TablePanelOptions, type PeerPresence, type CellFocus, type FocusDir,
 } from '../table-panel.js'
 import { listenGlobal, focusInput } from './dom.js'
-import { isHydraRow, hydraCodeUpToRow } from '../hydra.js'
-import { isBaubleRow, baubleCodeUpToRow } from '../bauble.js'
-import { isPostRow, postCodeUpToRow } from '../post.js'
+import { hydraCodeUpToRow } from '../hydra.js'
+import { baubleCodeUpToRow } from '../bauble.js'
+import { postCodeUpToRow } from '../post.js'
+import { timelineSegments } from '../timeline.js'
+import { CodeFacade, ExprOverlay, MobileEditorPopover } from './facade.js'
+import { DocsPopover } from './docs-popover.js'
 import { Icon } from './icon.js'
 import type { Table } from '../dsl.js'
+import type { EditTarget } from '../editor-host.js'
+import type { Row } from '../lineage.js'
 import { DISABLED_COL, cellValid, invalidColumns, isExprCellText, type EditableTableStore, type ColumnType, type EditableColumn } from '../editable-tables.js'
 // Registers the "=" cell checker cellValid consults (see editable-tables.ts).
 import '../expr-cell.js'
@@ -41,6 +47,18 @@ function PresenceNames(nameProps: { peers: PeerPresence[] }) {
       )}
     </For>
   )
+}
+
+// The chrome that used to live in the editor pane's header (D6) — settings and
+// scene import/export, relocated verbatim into the table pane.
+export interface PanelChrome {
+  vimMode: boolean
+  midiEnabled: boolean
+  setVimMode(enabled: boolean): void
+  setMidiEnabled(enabled: boolean): void
+  resetHydra(): void
+  exportScene(): void
+  importScene(): void
 }
 
 interface PanelProps extends TablePanelOptions {
@@ -74,7 +92,9 @@ interface PanelProps extends TablePanelOptions {
   stripRow: Accessor<{ table: string; row: number } | null>
 }
 
-function TablePanelView(props: PanelProps) {
+// `children` slots under the header: the session selector / room chip /
+// session bar, relocated from the editor pane.
+function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JSX.Element }) {
   const { store, views, graphs, current, setCurrent, presence } = props
 
   // Presence: announce every tab switch, including the initial one (not
@@ -106,7 +126,15 @@ function TablePanelView(props: PanelProps) {
   const [openColMenu, setOpenColMenu] = createSignal<string | null>(null)
   const [openInfoRow, setOpenInfoRow] = createSignal<string | null>(null)
   const [subView, setSubView] = createSignal<'table' | 'events'>('table')
-  const [graphCollapsed, setGraphCollapsed] = createSignal(window.matchMedia('(max-width: 767px)').matches)
+  // Live, not a one-shot read: the facades below are <Index>-keyed, so their
+  // props are only evaluated once per slot and a frozen `.matches` would keep
+  // routing promotion the wrong way after a resize or rotation.
+  const mobileQuery = window.matchMedia('(max-width: 767px)')
+  const [isMobile, setIsMobile] = createSignal(mobileQuery.matches)
+  const onMobileChange = (e: MediaQueryListEvent): void => { setIsMobile(e.matches) }
+  mobileQuery.addEventListener('change', onMobileChange)
+  onCleanup(() => mobileQuery.removeEventListener('change', onMobileChange))
+  const [graphCollapsed, setGraphCollapsed] = createSignal(mobileQuery.matches)
   // Mobile soft keyboards have no Tab key; on a coarse pointer a cell editor's
   // "next" action walks to the next cell in the row instead of closing to
   // arrow-key navigation (which needs a physical keyboard anyway).
@@ -116,6 +144,16 @@ function TablePanelView(props: PanelProps) {
   // the grid is first driven), and the "/"-opened table picker overlay.
   const [focusedCell, setFocusedCell] = createSignal<CellFocus | null>(null)
   const [pickerOpen, setPickerOpen] = createSignal(false)
+  // At most one anchored "=" overlay and one full-screen mobile editor; both
+  // close on a tab switch and when anything else takes the live view.
+  const [exprCell, setExprCell] = createSignal<{ target: EditTarget; anchor: HTMLElement } | null>(null)
+  const [popoverTarget, setPopoverTarget] = createSignal<EditTarget | null>(null)
+  // The settings menu is position:fixed (not absolute) so the pane's
+  // overflow:hidden can't clip it.
+  const [settingsOpen, setSettingsOpen] = createSignal(false)
+  const [menuPos, setMenuPos] = createSignal<{ top: number; right: number }>({ top: 0, right: 0 })
+  let settingsWrap: HTMLDivElement | undefined
+  let settingsBtn: HTMLButtonElement | undefined
 
   // Hand the controller a way to pull keyboard focus back onto the grid — used
   // after committing an inline edit and when a code cell's editor is escaped.
@@ -128,6 +166,10 @@ function TablePanelView(props: PanelProps) {
     if (openColMenu() != null && !target?.closest?.('.col-settings-wrap')) setOpenColMenu(null)
     if (openInfoRow() != null && !target?.closest?.('.row-info-wrap')) setOpenInfoRow(null)
     if (pickerOpen() && !target?.closest?.('.table-picker')) setPickerOpen(false)
+  })
+
+  listenGlobal(document, 'click', (e) => {
+    if (settingsWrap && !settingsWrap.contains(e.target as Node)) setSettingsOpen(false)
   })
 
   const names = createMemo(() => {
@@ -158,6 +200,8 @@ function TablePanelView(props: PanelProps) {
     setSubView('table')
     setFocusedCell(null)
     setPickerOpen(false)
+    setExprCell(null)
+    setPopoverTarget(null)
   }, { defer: true }))
 
   // A genuine editable table, as opposed to a cooked view or a log table.
@@ -218,7 +262,7 @@ function TablePanelView(props: PanelProps) {
     const target = cols[nextIdx]
     const tv = data.rows[nextRow]?.[target.name]
     if (target.type === 'code' || isExprCellText(tv)) {
-      props.onEditCell?.(table, nextRow, target.name, tv == null ? '' : String(tv))
+      openCell(table, nextRow, target)
       return
     }
     const nextKey = `${nextRow}::${target.name}`
@@ -233,6 +277,30 @@ function TablePanelView(props: PanelProps) {
 
   const scrollCellIntoView = (fc: CellFocus): void => {
     requestAnimationFrame(() => cellEl(fc.row, fc.col)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }))
+  }
+
+  // A code or "=" cell edits in the app's one roving CodeMirror, never an
+  // inline input: a code cell hands the view to its facade in the bottom slot
+  // (focusing the facade is what promotes it), an "=" cell gets an overlay
+  // anchored under its <td>, and on a phone either opens the full-screen
+  // popover instead — the facades are unreadable at that width.
+  function openCell(table: string, rowIndex: number, col: EditableColumn, override?: string): void {
+    const v = override ?? editableData()?.data.rows[rowIndex]?.[col.name]
+    const target = props.targetFor(table, rowIndex, col.name, v == null ? '' : String(v))
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      setPopoverTarget(target)
+      return
+    }
+    if (col.type === 'code') {
+      requestAnimationFrame(() => {
+        const el = bottomEl?.querySelector<HTMLElement>(`.code-facade[data-label="${CSS.escape(target.label)}"] .facade-code`)
+        el?.scrollIntoView({ block: 'nearest' })
+        el?.focus()
+      })
+      return
+    }
+    const anchor = cellEl(rowIndex, col.name)
+    if (anchor) setExprCell({ target, anchor })
   }
 
   // A handle click on the timeline strip lands here: focus the row's first
@@ -268,7 +336,7 @@ function TablePanelView(props: PanelProps) {
     if (!col) return
     const v = ed.data.rows[fc.row]?.[col.name]
     if (col.type === 'code' || (col.type !== 'enum' && isExprCellText(v))) {
-      props.onEditCell?.(ed.name, fc.row, col.name, v == null ? '' : String(v))
+      openCell(ed.name, fc.row, col)
       return
     }
     if (col.type === 'enum') {
@@ -334,6 +402,34 @@ function TablePanelView(props: PanelProps) {
   const chart = createMemo(() => (
     editableData() || (isEditableTable() && subView() === 'events') ? null : chartFor(current(), views(), graphs(), store)
   ))
+
+  // What sits below the grid: one facade per code-bearing row (the `code`
+  // table's rows *are* the program's fragments), a passive warp map for a
+  // timeline-schema table, or nothing.
+  const bottomSlot = createMemo(() => {
+    tick(); views()
+    return subView() === 'events' ? 'none' : bottomSlotFor(current(), views(), store)
+  })
+
+  const codeTargets = createMemo<EditTarget[]>(() => {
+    const ed = editableData()
+    if (!ed || bottomSlot() !== 'facades') return []
+    const codeCols = ed.data.columns.filter((c) => c.type === 'code')
+    return displayOrder(ed.data.rows, ed.data.columns).flatMap((i) =>
+      codeCols.map((c) => {
+        const v = ed.data.rows[i]?.[c.name]
+        return props.targetFor(ed.name, i, c.name, v == null ? '' : String(v))
+      }))
+  })
+
+  // A facade slot is <Index>-keyed by position and labeled by row index, so a
+  // tab switch or a row insert/delete rebinds a live slot to a different row
+  // in place — no unmount, so CodeFacade's onCleanup demote never fires and
+  // the promoted view is left orphaned under a label that now means something
+  // else. Flush it first, while its commit still validates against the cell it
+  // was opened on (see cellTarget in main.ts).
+  const facadeSlots = createMemo(() => `${current()}:${codeTargets().length}`)
+  createEffect(on(facadeSlots, () => props.host.demote(), { defer: true }))
 
   const roRowText = (i: number) =>
     roCols().map((c) => formatCell(c, shownRows()[i]?.[c])).join(' ').toLowerCase()
@@ -424,6 +520,36 @@ function TablePanelView(props: PanelProps) {
     props.playIndex()
     props.playActive()
     if (chart()) drawCurrentChart()
+  })
+
+  // --- warp map (D5) -----------------------------------------------------------
+  // A timeline-schema table's compiled segments, plotted as source beat against
+  // playback beat: the shape of the warp the retimed content rides.
+  let warpCanvas: HTMLCanvasElement | undefined
+  let bottomEl: HTMLDivElement | undefined
+
+  function drawWarp(): void {
+    if (!warpCanvas?.isConnected) return
+    const name = current()
+    if (!name) return
+    const rows = (store.get(name)?.rows ?? views().get(name)?.rows ?? []).filter((r) => r[DISABLED_COL] !== true)
+    const points: Row[] = timelineSegments(rows, props.loopBeats())
+      .flatMap((s) => [{ beat: s.p0, source: s.s0 }, { beat: s.p1, source: s.s1 }])
+    const data = chartDataFor(points, ['beat', 'source'], ['source'], name)
+    if (!data) return
+    drawSeriesChart(warpCanvas, data, computeColRanges(points, ['source'], PANEL_CHART_STYLE.yPadFrac), {
+      playIndex: props.playIndex(),
+    })
+  }
+
+  const warpRo = new ResizeObserver(() => drawWarp())
+  onCleanup(() => warpRo.disconnect())
+  createEffect(() => {
+    tick(); views(); props.playIndex()
+    warpRo.disconnect()
+    if (bottomSlot() !== 'warp') return
+    if (warpCanvas) warpRo.observe(warpCanvas)
+    drawWarp()
   })
 
   // --- editable sub-views ------------------------------------------------------
@@ -609,6 +735,8 @@ function TablePanelView(props: PanelProps) {
 
     // Collaborators whose last edit landed on this cell.
     const editors = () => lastEditors(presence(), table, rowIndex, col.name)
+    // Only read for a code chip's tint; targetFor owns the language ladder.
+    const cellLang = (): string => props.targetFor(table, rowIndex, col.name, String(raw() ?? '')).lang
 
     const focused = () => focusedCell()?.row === rowIndex && focusedCell()?.col === col.name
 
@@ -622,14 +750,10 @@ function TablePanelView(props: PanelProps) {
         onClick={() => {
           setFocusedCell({ row: rowIndex, col: col.name })
           if (editing() || col.type === 'enum') return
-          // "=" expression cells edit like code cells — cell-target mode in
-          // the main editor — never the coercing primitive editors.
-          if (col.type === 'code' || isExprCellText(raw())) {
-            const v = raw()
-            props.onEditCell?.(table, rowIndex, col.name, v == null ? '' : String(v))
-          } else {
-            setEditingCell(key)
-          }
+          // "=" expression cells edit like code cells — in the roving editor —
+          // never the coercing primitive editors.
+          if (col.type === 'code' || isExprCellText(raw())) openCell(table, rowIndex, col)
+          else setEditingCell(key)
         }}
       >
         <Show when={editors().length}>
@@ -656,9 +780,17 @@ function TablePanelView(props: PanelProps) {
           when={col.type !== 'enum' && editing()}
           fallback={
             <Show when={col.type !== 'enum'}>
-              <span class={col.type === 'code' ? 'cell-value cell-code' : 'cell-value'}>
-                {formatEditableCell(col.type, raw())}
-              </span>
+              {/* A code cell is a chip tinted by its language — the same tint
+                  its facade wears below the grid — and clicking it promotes
+                  that facade rather than opening an inline input. */}
+              <Show
+                when={col.type === 'code'}
+                fallback={<span class="cell-value">{formatEditableCell(col.type, raw())}</span>}
+              >
+                <span class="cell-value code-chip" data-lang={cellLang()}>
+                  {formatEditableCell('code', raw())}
+                </span>
+              </Show>
             </Show>
           }
         >
@@ -707,7 +839,7 @@ function TablePanelView(props: PanelProps) {
                     const t = e.currentTarget.value
                     if (t.startsWith('=')) {
                       setEditingCell(null)
-                      props.onEditCell?.(table, rowIndex, col.name, t)
+                      openCell(table, rowIndex, col, t)
                     }
                   }}
                   onKeyDown={(e) => keyHandler(e, commitNum)}
@@ -741,9 +873,18 @@ function TablePanelView(props: PanelProps) {
     )
   }
 
-  // Per-row info button (hydra/bauble rows only): a popover showing the
-  // sketch compiled up to and including this event — the table's name picks
-  // which fold. Mirrors ColHeader's measured fixed-position popover.
+  // Which tables get the per-row ⓘ: the same "has a code-typed column" test the
+  // facade stack uses, plus an `event` column, since the popover shows the
+  // sketch compiled up to and including *this event* (the `code` table's
+  // fragments have no such fold).
+  const rowInfoTable = createMemo(() => {
+    const cols = editableData()?.data.columns
+    return !!cols && hasCodeColumn(cols) && cols.some((c) => c.name === 'event')
+  })
+
+  // Per-row info button: a popover showing the sketch compiled up to and
+  // including this event — the table's name picks which fold. Mirrors
+  // ColHeader's measured fixed-position popover.
   function RowInfo(rowProps: { table: string; rowIndex: number }) {
     const { table, rowIndex } = rowProps
     const infoKey = `${table}::${rowIndex}`
@@ -957,8 +1098,72 @@ function TablePanelView(props: PanelProps) {
             onInput={(e) => setFilter(e.currentTarget.value.toLowerCase())}
           />
           <span class="table-count">{countText()}</span>
+          <DocsPopover currentTable={current} />
+          <div class="settings-wrap" ref={settingsWrap}>
+            <button
+              class="settings-btn"
+              title="Settings"
+              aria-label="Settings"
+              ref={settingsBtn}
+              onClick={(e) => {
+                e.stopPropagation()
+                const opening = !settingsOpen()
+                if (opening && settingsBtn) {
+                  const r = settingsBtn.getBoundingClientRect()
+                  setMenuPos({ top: r.bottom + 4, right: window.innerWidth - r.right })
+                }
+                setSettingsOpen(opening)
+              }}
+            >
+              ⚙
+            </button>
+            <div
+              class="settings-menu"
+              classList={{ open: settingsOpen() }}
+              style={{ top: `${menuPos().top}px`, right: `${menuPos().right}px` }}
+            >
+              <label class="settings-row">
+                <input
+                  type="checkbox"
+                  checked={props.chrome.vimMode}
+                  onChange={(e) => props.chrome.setVimMode(e.currentTarget.checked)}
+                />
+                Vim mode
+              </label>
+              <label class="settings-row">
+                <input
+                  type="checkbox"
+                  checked={props.chrome.midiEnabled}
+                  onChange={(e) => props.chrome.setMidiEnabled(e.currentTarget.checked)}
+                />
+                MIDI
+              </label>
+              <button
+                class="settings-row settings-action"
+                title="Fixes hydra visuals stuck in an error state (same fix as resizing the window)"
+                onClick={() => { props.chrome.resetHydra(); setSettingsOpen(false) }}
+              >
+                Reset visuals
+              </button>
+              <button
+                class="settings-row settings-action"
+                title="Copy the current scene to the clipboard as an example you can paste into samples.ts"
+                onClick={() => { props.chrome.exportScene(); setSettingsOpen(false) }}
+              >
+                Export scene
+              </button>
+              <button
+                class="settings-row settings-action"
+                title="Load a scene from the clipboard (exported from here, or a SAMPLES entry)"
+                onClick={() => { props.chrome.importScene(); setSettingsOpen(false) }}
+              >
+                Import scene
+              </button>
+            </div>
+          </div>
         </div>
       </div>
+      {props.children}
       <div class="tab-content">
         <Show when={pickerOpen()}>
           <TablePicker />
@@ -1076,7 +1281,7 @@ function TablePanelView(props: PanelProps) {
                           }}
                         >
                           <td class="row-actions">
-                            <Show when={ed().name === 'bauble' ? isBaubleRow(ed().data.rows[i]) : ed().name === 'post' ? isPostRow(ed().data.rows[i]) : isHydraRow(ed().data.rows[i])}>
+                            <Show when={rowInfoTable()}>
                               <RowInfo table={ed().name} rowIndex={i} />
                             </Show>
                             <button
@@ -1119,7 +1324,45 @@ function TablePanelView(props: PanelProps) {
             </button>
           </div>
         </Show>
+        {/* Bottom slot (R9: capped and scrollable so it shares the pane's
+            height with the chart above rather than fighting it). */}
+        <div class="table-bottom-slot" ref={bottomEl}>
+          <Show when={bottomSlot() === 'facades'}>
+            <Index each={codeTargets()}>
+              {(target) => (
+                <CodeFacade
+                  host={props.host}
+                  target={target()}
+                  onPromote={isMobile() ? setPopoverTarget : undefined}
+                />
+              )}
+            </Index>
+          </Show>
+          <Show when={bottomSlot() === 'warp'}>
+            <canvas class="warp-canvas" ref={warpCanvas} />
+          </Show>
+        </div>
+        {/* Errors with no promoted target (a session load, a boot cook) — a
+            promoted facade shows its own inline instead. */}
+        <Show when={props.host.error('')}>
+          {(msg) => <div class="editor-error">{msg()}</div>}
+        </Show>
       </div>
+      <Show when={exprCell()}>
+        {(cell) => (
+          <ExprOverlay
+            host={props.host}
+            target={cell().target}
+            anchor={cell().anchor}
+            onClose={() => setExprCell(null)}
+          />
+        )}
+      </Show>
+      <Show when={popoverTarget()}>
+        {(target) => (
+          <MobileEditorPopover host={props.host} target={target()} onClose={() => setPopoverTarget(null)} />
+        )}
+      </Show>
     </>
   )
 }
@@ -1145,7 +1388,7 @@ export interface TablePanelController extends TablePanel, PanelProps {
 
 export function createTablePanel(
   editableStore: EditableTableStore,
-  { onEditCell, onCtrlEnter, onSelectTable }: TablePanelOptions = {},
+  { targetFor, host, loopBeats, onCtrlEnter, onSelectTable }: TablePanelOptions,
 ): TablePanelController {
   const [views, setViews] = createSignal<Map<string, Table>>(new Map())
   const [graphs, setGraphs] = createSignal<Map<string, GraphSpec>>(new Map())
@@ -1175,7 +1418,9 @@ export function createTablePanel(
     userScrolled,
     setUserScrolled,
     presence,
-    onEditCell,
+    targetFor,
+    host,
+    loopBeats,
     onCtrlEnter,
     onSelectTable,
     registerGridFocus(fn: () => void): void {
@@ -1233,10 +1478,15 @@ export function createTablePanel(
   }
 }
 
-export function TablePane(props: { ctl: TablePanelController; ref?: (el: HTMLDivElement) => void }) {
+export function TablePane(props: {
+  ctl: TablePanelController
+  chrome: PanelChrome
+  children?: JSX.Element
+  ref?: (el: HTMLDivElement) => void
+}) {
   return (
     <div id="table-pane" ref={props.ref}>
-      <TablePanelView {...props.ctl} />
+      <TablePanelView {...props.ctl} chrome={props.chrome}>{props.children}</TablePanelView>
     </div>
   )
 }

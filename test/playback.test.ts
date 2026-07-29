@@ -417,11 +417,13 @@ test('the engine feeds ctx.loop() — whole loops since the origin (activity-log
   const time = fakeTime(1000) // session start (origin) at epoch 1000
   let seen: EvalCtx | null = null
   const capture: Visualizer = {
+    kind: 'scene',
     load(): void {},
     hasContent: () => true,
     applyFrame(frame): Row[] { seen = frame.ctx; return [] },
     clear(): void {},
     blank(): void {},
+    currentPass: () => ({ pass: 0, loops: 1 }),
   }
   const engine = createPlaybackEngine([capture], {
     clock: time.clock,
@@ -544,6 +546,44 @@ test('a hydra event past the loop plays once the wall-aligned pass reaches it', 
   time.advance(2 * DEFAULT_BEAT_SECONDS * 1000) // pass 2 wraps back to pass 0
   time.frame()
   assert.equal(sketches.at(-1), 'a.out(o0)', 'the sequence wraps to pass 0')
+})
+
+// --- per-kind pass exposure on viewState (R1: content pass vs timeline pass) -
+
+test("viewState surfaces each kind's own content pass, distinct from the engine's timeline pass", () => {
+  const time = fakeTime(0)
+  const hydra = fakeHydra()
+  const engine = createPlaybackEngine([createHydraVisualizer(hydra)], { clock: time.clock })
+  engine.setLoopBeats(2)
+  // A 2-pass timeline that holds source beat 1 for its entire span: whatever
+  // "current" means here comes purely from the timeline's own pass, never
+  // from content moving. The lone hydra event (beat 1) fits inside a single
+  // 2-beat content pass and stays there regardless.
+  engine.load({
+    sceneRows: [],
+    hydraRows: [{ event: 'setCode', code: 'a', beat: 1 }],
+    timelineRows: [
+      { event: 'hold', beat: 1, from: 1, loop: 0 },
+      { event: 'hold', beat: 1, from: 1, loop: 1 },
+    ],
+  })
+  engine.toggle() // pos 0, timeline pass 0
+  let vs = engine.viewState()
+  assert.equal(vs.timelineActive, true)
+  assert.equal(vs.srcBeat, 1)
+  assert.equal(vs.timelinePass, 0)
+  assert.deepEqual(vs.passes.hydra, { pass: 0, loops: 1 }, 'the lone hydra event fits in one content pass')
+  // One full wall-aligned loop (2 beats @ 0.5 s/beat = 1s) advances the
+  // timeline to its second pass and wraps the playhead back to 0 — but
+  // hydra's content, which only ever spanned one pass, reports the same pass
+  // it always did: the two axes move independently.
+  time.advance(2 * DEFAULT_BEAT_SECONDS * 1000)
+  time.frame()
+  vs = engine.viewState()
+  assert.equal(vs.srcBeat, 1, 'the held timeline keeps showing the same source beat')
+  assert.equal(vs.timelinePass, 1, "the engine's own timeline pass advanced")
+  assert.deepEqual(vs.passes.hydra, { pass: 0, loops: 1 }, "hydra's content pass is unaffected — a different axis")
+  assert.equal(vs.passes.scene, undefined, 'a kind with no registered visualizer reports no pass')
 })
 
 test('the engine supplies ctx.time: a time() binding resolves to source seconds', () => {

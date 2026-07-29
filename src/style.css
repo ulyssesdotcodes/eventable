@@ -97,52 +97,11 @@ html, body {
   z-index: 2;
 }
 
-/* ── Editor pane ── */
-#editor-pane {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: #16213e;
-  overflow: hidden;
-  /* Stacking context for the preview below, so its negative z-index paints
-     over this background rather than escaping behind it. */
-  position: relative;
-  z-index: 0;
-}
-
-/* Pending-edit preview: the open hydra/post cell's uncommitted code, drawn
-   behind the code it comes from. Negative z-index puts it under the header,
-   the session bars and the text without lifting any of them. */
-.editor-preview {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: -1;
-  display: none;
-  opacity: 0.4;
-  pointer-events: none;
-}
-
-.editor-preview.active {
-  display: block;
-}
-
-/* Let the preview through: CodeMirror's theme paints an opaque background and
-   its injected rules outrank a plain selector. A scrim rather than full
-   transparency — the code has to stay readable over a bright sketch. */
-#editor-pane.previewing .cm-editor,
-#editor-pane.previewing .cm-gutters,
-#editor-pane.previewing .cm-panels {
-  background: rgba(22, 33, 62, 0.45) !important;
-}
-
-/* ── Editor/table divider ── */
-/* Table pane's height is set inline (px) by pane-divider.tsx; editor-pane
-   just grows/shrinks to fill whatever's left (flex-basis 0 above). Both
-   default to flex:1 1 0, so before JS runs the split is an even 50/50. */
-#pane-divider {
+/* ── Timeline/table divider ── */
+/* The table pane's flex-basis is set inline (px) by pane-divider.tsx; it also
+   grows, so the timeline pane above can stay content-sized without leaving a
+   gap at the bottom of the column. */
+.pane-divider {
   flex: 0 0 7px;
   cursor: row-resize;
   touch-action: none;
@@ -151,38 +110,18 @@ html, body {
   border-bottom: 1px solid #1a1a2e;
 }
 
-#pane-divider:hover,
-#pane-divider:active {
+.pane-divider:hover,
+.pane-divider:active {
   background: #1a5090;
 }
 
-/* Editor is collapsed to header height (mobile default) — nothing to
-   resize against, so hide the divider and let the table take the rest. */
-#editor-pane.editor-collapsed + #pane-divider {
-  display: none;
-}
-
-#editor-pane.editor-collapsed ~ #table-pane {
-  flex: 1 1 auto !important;
-}
-
-.editor-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px 10px;
-  background: #0f3460;
-  border-bottom: 1px solid #1a1a2e;
-  flex-shrink: 0;
-}
-
-.editor-title {
-  color: #8ca0b8;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  flex: 1;
+/* The same divider on the other axis: the desktop canvas/side-panel split
+   (ui/app.tsx renders it only in the row layout). */
+.pane-divider[aria-orientation='vertical'] {
+  cursor: col-resize;
+  border: none;
+  border-left: 1px solid #1a1a2e;
+  border-right: 1px solid #1a1a2e;
 }
 
 .collapse-btn {
@@ -203,9 +142,9 @@ html, body {
   color: #fff;
 }
 
-/* Settings popover: gear button in the editor header, top-right of the app on
-   desktop. The menu is position:fixed (not absolute) so it isn't clipped by
-   #editor-pane's overflow:hidden when the pane is collapsed to header height. */
+/* Settings popover: gear button in the table pane's header, top-right of the
+   app on desktop. The menu is position:fixed (not absolute) so the pane's
+   overflow:hidden can't clip it. */
 .settings-wrap {
   position: relative;
   margin-left: 8px;
@@ -272,7 +211,7 @@ html, body {
 /* The ℹ button next to the settings gear opens a scrollable reference panel:
    the tables the system uses + the DSL function docs (reused from the same
    dictionaries that feed completion). Fixed-positioned like the settings menu
-   so it isn't clipped by #editor-pane's overflow:hidden. */
+   so the pane's overflow:hidden can't clip it. */
 .docs-btn {
   font-style: normal;
   font-weight: 700;
@@ -448,15 +387,6 @@ html, body {
   font-size: 11.5px;
   line-height: 1.5;
   margin: 2px 0 0;
-}
-
-/* Collapsed: only the header stays visible; the panel shrinks to fit it. */
-#editor-pane.editor-collapsed {
-  flex: 0 0 auto;
-}
-
-#editor-pane.editor-collapsed > *:not(.editor-header) {
-  display: none;
 }
 
 .run-btn {
@@ -822,12 +752,6 @@ html, body {
   color: #fff;
 }
 
-.editor-host {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-
 /* "=" cell token bar — thumb-sized inserts above the editor on touch. */
 .editor-token-bar {
   flex-shrink: 0;
@@ -887,6 +811,209 @@ html, body {
   overflow: auto;
 }
 
+/* ── Code facades ── */
+/* One static, syntax-highlighted stand-in per code-bearing row; clicking one
+   reparents the app's single CodeMirror into its .editor-mount, which is why
+   the mount needs a definite height (the view is height:100%). */
+.editor-mount {
+  display: none;
+  min-height: 0;
+}
+
+.facade-live .editor-mount {
+  display: block;
+  height: 180px;
+}
+
+.code-facade {
+  display: flex;
+  flex-direction: column;
+  border-left: 3px solid #1a5090;
+  border-bottom: 1px solid #0f3460;
+  background: #13294b;
+}
+
+/* Language tint, the same signal the grid's code chip wears. */
+.code-facade[data-lang='hydra'] { border-left-color: #9be09e; }
+.code-facade[data-lang='bauble'] { border-left-color: #e0b25b; }
+.code-facade[data-lang='post'] { border-left-color: #b78ce0; }
+.code-facade[data-lang='expr'] { border-left-color: #5bb6e0; }
+
+.facade-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+}
+
+.facade-label,
+.editor-surface-label {
+  flex: 1;
+  color: #8ca0b8;
+  font-family: monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facade-run {
+  padding: 1px 10px;
+  font-size: 11px;
+}
+
+.facade-code {
+  margin: 0;
+  padding: 2px 10px 6px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #c8d6e5;
+  white-space: pre-wrap;
+  overflow: hidden;
+  max-height: 4.2em;
+  cursor: text;
+}
+
+.facade-live .facade-code {
+  display: none;
+}
+
+/* ── Pending-edit preview ── */
+/* The promoted hydra/post cell's uncommitted code, drawn behind the code it
+   comes from: one canvas per language, reparented into whichever surface is
+   live (ui/facade.tsx) the way the CodeMirror view itself is. Negative z-index
+   puts it under the head and the text without lifting either, so the surface
+   needs a stacking context of its own to paint over its background. */
+.code-facade.previewing,
+.editor-surface.previewing {
+  position: relative;
+  z-index: 0;
+}
+
+.editor-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  display: none;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.editor-preview.active {
+  display: block;
+}
+
+/* Let the preview through: CodeMirror's theme paints an opaque background and
+   its injected rules outrank a plain selector. A scrim rather than full
+   transparency — the code has to stay readable over a bright sketch. */
+.code-facade.previewing .cm-editor,
+.code-facade.previewing .cm-gutters,
+.code-facade.previewing .cm-panels,
+.editor-surface.previewing .cm-editor,
+.editor-surface.previewing .cm-gutters,
+.editor-surface.previewing .cm-panels {
+  background: rgba(22, 33, 62, 0.45) !important;
+}
+
+/* The table pane's bottom slot: the facade stack, or a timeline table's warp
+   map. R9 — it shares the pane's height with the chart above rather than
+   fighting it, so it is capped and scrolls. */
+.table-bottom-slot {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 55%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* The D5 warp map: a timeline table's compiled segments, source beat plotted
+   against playback beat. */
+.warp-canvas {
+  display: block;
+  width: 100%;
+  height: 120px;
+}
+
+/* ── Promoted editor surfaces (expression overlay / mobile popover) ── */
+.editor-surface {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #13294b;
+}
+
+.editor-surface .editor-mount {
+  display: block;
+}
+
+.editor-surface-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: #0f3460;
+}
+
+.editor-surface-close {
+  background: transparent;
+  border: none;
+  color: #8ca0b8;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+/* "=" cells are narrow in the grid but the formula isn't — the overlay is
+   deliberately wider than the cell it anchors to. */
+.expr-overlay {
+  position: fixed;
+  z-index: 30;
+  width: min(520px, calc(100vw - 16px));
+  border: 1px solid #1a5090;
+  border-radius: 6px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.expr-overlay .editor-mount {
+  height: 84px;
+}
+
+/* Phone surface: the facades are unreadable at that width, so promoting fills
+   the viewport (same pattern as the docs popover). */
+.mobile-editor-popover {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: #13294b;
+}
+
+.mobile-editor-popover .editor-surface {
+  flex: 1;
+}
+
+.mobile-editor-popover .editor-mount {
+  flex: 1;
+}
+
+/* Static highlighting (@lezer/highlight's classHighlighter) — the facade's
+   read-only echo of the one-dark palette the live view uses. */
+.facade-code .tok-keyword { color: #c678dd; }
+.facade-code .tok-comment { color: #7d8799; font-style: italic; }
+.facade-code .tok-string { color: #98c379; }
+.facade-code .tok-number,
+.facade-code .tok-bool { color: #d19a66; }
+.facade-code .tok-propertyName { color: #61afef; }
+.facade-code .tok-variableName { color: #e06c75; }
+.facade-code .tok-operator,
+.facade-code .tok-punctuation { color: #56b6c2; }
+
 /* ── Legend styles (shared by tab graph and preview) ── */
 .graph-legend {
   display: flex;
@@ -920,8 +1047,11 @@ html, body {
 }
 
 /* ── Combined table + graph pane ── */
+/* Grows into the slack the content-sized timeline pane leaves; never shrinks,
+   so a divider drag moves the boundary one-for-one (the divider clamps the
+   basis, so the pane above always keeps its minimum). */
 #table-pane {
-  flex: 1 1 0;
+  flex: 1 0 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1549,15 +1679,26 @@ html, body {
   padding: 1px 4px;
 }
 
-/* Code cells: one-line monospace preview; click hands the text to the editor. */
-.cell-code {
+/* Code cells: a one-line chip tinted by the cell's language — the same tint
+   its facade below the grid wears. Clicking it promotes that facade. */
+.code-chip {
+  display: inline-block;
+  max-width: 320px;
+  padding: 0 5px;
+  border-radius: 3px;
+  border-left: 3px solid #1a5090;
+  background: #12203c;
   font-family: monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 320px;
-  color: #9be09e;
+  color: #c8d6e5;
 }
+
+.code-chip[data-lang='hydra'] { border-left-color: #9be09e; color: #9be09e; }
+.code-chip[data-lang='bauble'] { border-left-color: #e0b25b; color: #e0b25b; }
+.code-chip[data-lang='post'] { border-left-color: #b78ce0; color: #b78ce0; }
+.code-chip[data-lang='expr'] { border-left-color: #5bb6e0; color: #5bb6e0; }
 
 /* Enum cells: an always-live dropdown (code-declared columns only) so a value
    is one pick away during a performance, no click-to-edit step. */
@@ -1658,23 +1799,6 @@ html, body {
   padding: 6px 8px;
 }
 
-.editor-back-btn {
-  background: #16213e;
-  color: #8ca0b8;
-  border: 1px solid #1a5090;
-  border-radius: 4px;
-  font-size: 11px;
-  font-family: inherit;
-  padding: 2px 10px;
-  margin-left: 8px;
-  cursor: pointer;
-}
-
-.editor-back-btn:hover {
-  color: #c8d6e5;
-  border-color: #2a70c0;
-}
-
 /* ── Slider overlay ── */
 /* Floats over the visual (top-left), above both canvases. One labelled range
    per slider the program defines; the thumb follows the recorded automation as
@@ -1726,48 +1850,6 @@ html, body {
 }
 
 /* ── Playback controls ── */
-#playback-controls {
-  position: absolute;
-  z-index: 2;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  background: rgba(22, 33, 62, 0.88);
-  border: 1px solid #0f3460;
-  border-radius: 6px;
-  padding: 8px 16px 12px;
-  backdrop-filter: blur(6px);
-  user-select: none;
-  width: 70%;
-  min-width: 220px;
-  max-width: 420px;
-}
-
-/* Minimized: the transport rows + strip hide (the strip stays mounted — see
-   ui/playback-controls.tsx), leaving a single corner icon (.pb-restore-btn)
-   pinned bottom-right so the visual output is clear. The panel chrome
-   (bg/border/blur/padding) drops away — the button carries its own. */
-#playback-controls.minimized {
-  left: auto;
-  right: 16px;
-  transform: none;
-  width: auto;
-  min-width: 0;
-  max-width: none;
-  padding: 0;
-  background: none;
-  border: none;
-  backdrop-filter: none;
-}
-
-#playback-controls.minimized .playback-row,
-#playback-controls.minimized .timeline-strip-wrap {
-  display: none;
-}
-
 .playback-row {
   display: flex;
   align-items: center;
@@ -1800,50 +1882,6 @@ html, body {
   min-width: 44px;
   text-align: right;
   margin-left: auto;
-}
-
-/* Minimize affordance: a quiet chevron riding at the far right of the top row
-   (after #playback-time's auto margin). */
-.pb-minimize-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: #607a96;
-  cursor: pointer;
-  padding: 2px;
-  border-radius: 4px;
-  flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
-}
-
-.pb-minimize-btn:hover {
-  background: #1a5090;
-  color: #fff;
-}
-
-/* The minimized state's sole control — borrows the panel's own frosted chrome
-   and the play button's accent hover so it reads as the same transport. */
-.pb-restore-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  background: rgba(22, 33, 62, 0.88);
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  color: #c8d6e5;
-  cursor: pointer;
-  backdrop-filter: blur(6px);
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.pb-restore-btn:hover {
-  background: #e94560;
-  border-color: #e94560;
-  color: #fff;
 }
 
 /* Loop + tap-beat buttons share the play button's look. */
@@ -1911,13 +1949,143 @@ html, body {
   border-color: #e94560;
 }
 
-/* Timeline strip: replaces the old #scrub-bar range input. The wrap is a
-   plain (overflow: visible) positioning context for the floating drag
-   readout (below), which needs to sit above the strip itself — the strip
-   proper keeps its own overflow:hidden for the coverage/grid/handle layers
-   (see ui/timeline-strip.tsx). Mobile-first: the base size here is the
-   ≤767px touch target; the min-width:768px query below shrinks it for
-   desktop/mouse. */
+/* ── Timeline pane ── */
+/* Top of #side-panels: the transport row, one beat ruler, and one band per
+   section stacked below it (ui/timeline-pane.tsx). Its natural size is its
+   content; the table pane below takes the slack, and squeezes this one only
+   when the divider asks for more than is left. Collapse it when it wants
+   less. */
+#timeline-pane {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #16213e;
+  border-bottom: 1px solid #1a1a2e;
+  overflow: hidden;
+  user-select: none;
+}
+
+.timeline-pane-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #0f3460;
+  border-bottom: 1px solid #1a1a2e;
+}
+
+.timeline-transport {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#timeline-pane.timeline-collapsed .timeline-sections {
+  display: none;
+}
+
+/* Collapsed to its transport row: nothing left to resize against. */
+#timeline-pane.timeline-collapsed + .pane-divider {
+  display: none;
+}
+
+/* The bands' shared positioning context: its content box IS the beat axis
+   every band and the ruler measure against (see beatToX), so it carries no
+   horizontal padding of its own. The pane gives up all the height the divider
+   asks for, and a program can stack ~9 bands, so the stack scrolls rather than
+   clipping its lower bands away with no affordance (as .table-bottom-slot
+   does for the facade stack). */
+.timeline-sections {
+  position: relative;
+  margin: 0 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The one ruler for the whole stack — bands draw their own tick lines but no
+   labels, so the beat numbers are stated once. */
+.timeline-pane-axis {
+  position: relative;
+  flex: 0 0 12px;
+  height: 12px;
+}
+
+/* The one playhead, spanning every band below the ruler. */
+.timeline-pane-playhead {
+  position: absolute;
+  top: 12px;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #e94560;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.timeline-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  line-height: 12px;
+}
+
+.timeline-section-name {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #8fa9c4;
+  font-family: monospace;
+  font-size: 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.timeline-section-name:hover {
+  color: #cfe0f0;
+}
+
+/* This band's own current beat — 'pass n/m · beat x.x', shown only when the
+   band actually has passes to distinguish. */
+.timeline-section-beat {
+  color: #607a96;
+  font-family: monospace;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.timeline-section-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Where this band's content sits on its own axis — under the shared playhead
+   (and so invisible) until a warp makes the two disagree. */
+.timeline-section-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(233, 69, 96, 0.55);
+  pointer-events: none;
+}
+
+/* One section's band. The wrap is a plain (overflow: visible) positioning
+   context for the floating drag readout (below), which needs to sit above the
+   band itself — the band proper keeps its own overflow:hidden for the
+   coverage/grid/handle layers (see ui/timeline-pane.tsx). Mobile-first: the
+   base size here is the ≤767px touch target; the min-width:768px query below
+   shrinks it for desktop/mouse. */
 .timeline-strip-wrap {
   position: relative;
 }
@@ -1925,9 +2093,9 @@ html, body {
 .timeline-strip {
   position: relative;
   width: 100%;
-  height: 56px;
+  height: 36px;
   background: #1a3a5e;
-  border-radius: 4px;
+  border-radius: 3px;
   outline: none;
   touch-action: none;
   overflow: hidden;
@@ -1958,90 +2126,38 @@ html, body {
   white-space: nowrap;
 }
 
-/* Cursor affordances (phase 4 — dragging). Hover states are set from a cheap
-   hitTest on idle pointermove; the dragging states from the live gesture's
-   part, so a resize keeps its cursor even once the pointer strays past the
-   handle's own hit area. user-select is suppressed only while an actual drag
-   is under way — text selection during a fast drag reads as a UI glitch. */
+/* Cursor affordances. The hover state is set from a cheap hitTest on idle
+   pointermove and only on a placement that can actually be written back; the
+   dragging state from the live gesture, so it survives the pointer straying
+   past the handle's own hit area. user-select is suppressed only while an
+   actual drag is under way — text selection during a fast drag reads as a UI
+   glitch. */
 .timeline-strip-hover-grab {
   cursor: grab;
 }
 
-.timeline-strip-hover-resize {
-  cursor: ew-resize;
-}
-
-.timeline-strip-dragging-move,
-.timeline-strip-dragging-resize {
-  user-select: none;
-}
-
 .timeline-strip-dragging-move {
   cursor: grabbing;
-}
-
-.timeline-strip-dragging-resize {
-  cursor: ew-resize;
+  user-select: none;
 }
 
 @media (min-width: 768px) {
   .timeline-strip {
-    height: 44px;
+    height: 28px;
   }
 }
 
-/* Multi-pass timeline (phase 5): the strip grows one lane band per pass,
-   driven by --lane-rows (set from JS, capped at MAX_VISIBLE_LANES — a
-   timeline with more passes than that keeps all its lanes, just thinner,
-   rather than growing the strip unbounded). Single-lane strips never set
-   this class, so their height is exactly the rule above, unchanged. */
+/* A band whose own spans overlap stacks them into sub-lanes (packLanes) and
+   grows to fit, driven by --lane-rows. A single-lane band never sets this
+   class, so its height is exactly the rule above. */
 .timeline-strip-multilane {
-  height: calc(var(--lane-rows, 1) * 28px);
+  height: calc(var(--lane-rows, 1) * 24px);
 }
 
-@media (max-width: 767px) {
+@media (min-width: 768px) {
   .timeline-strip-multilane {
-    height: calc(var(--lane-rows, 1) * 36px);
+    height: calc(var(--lane-rows, 1) * 18px);
   }
-}
-
-/* One band per pass — a subtle top separator (the first pass's band has
-   nothing above it to separate from) and a small label naming the pass.
-   Purely decorative: hit-testing divides the strip's actual rendered height
-   by the same lane count independently (see laneAt in the view). */
-.timeline-strip-lane {
-  position: absolute;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-}
-
-.timeline-strip-lane:not(:first-child) {
-  border-top: 1px solid rgba(143, 169, 196, 0.25);
-}
-
-.timeline-strip-lane-label {
-  position: absolute;
-  right: 3px;
-  top: 1px;
-  color: #607a96;
-  font-size: 9px;
-  font-family: monospace;
-  white-space: nowrap;
-}
-
-.timeline-strip-lane-overflow {
-  position: absolute;
-  left: 3px;
-  top: 1px;
-  z-index: 1;
-  padding: 0 3px;
-  background: #12203c;
-  color: #8fa9c4;
-  font-size: 9px;
-  font-family: monospace;
-  border-radius: 2px;
-  pointer-events: none;
 }
 
 .timeline-strip-coverage {
@@ -2099,21 +2215,11 @@ html, body {
 .timeline-strip-tick-label {
   position: absolute;
   left: 3px;
-  bottom: 2px;
+  bottom: 1px;
   color: #8fa9c4;
-  font-size: 10px;
+  font-size: 9px;
   font-family: monospace;
   white-space: nowrap;
-}
-
-.timeline-strip-playhead {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  margin-left: -1px;
-  background: #e94560;
-  pointer-events: none;
 }
 
 /* Handles for the open editable table's rows (phase 3, read-only — see
@@ -2223,6 +2329,17 @@ html, body {
   border-right: 5px solid #4a9eff;
 }
 
+/* A read-only out-view handle: same event language as the open table's, a
+   shade quieter (it isn't draggable), with a pointer cursor — clicking one
+   opens its view's panel tab. */
+/* A placement with no store row to write back to (warped, retimed, wrapped
+   into a later content pass, or cooked from something uneditable — see
+   Handle.source): a press opens the band's table instead of dragging. */
+.timeline-strip-handle-inert {
+  cursor: pointer;
+  opacity: 0.8;
+}
+
 /* Ghost: a later placement of a row a loop event plays more than once — not
    the primary click target, so it reads as translucent. */
 .timeline-strip-handle-ghost {
@@ -2249,29 +2366,6 @@ html, body {
 .timeline-strip-handle-dragging {
   filter: brightness(1.35);
   z-index: 2;
-}
-
-/* A content row wrapped into a later pass (wrapPass — no lane of its own
-   with no timeline active, see handlesFor) — a small always-on tag, unlike
-   the floating drag readout which only shows mid-gesture. Anchored inside
-   the handle's own box (not above it, like the readout) because a
-   single-lane strip's handle already spans the strip's full height, and
-   `.timeline-strip`'s overflow:hidden (it clips horizontally too, for long
-   labels) would clip anything positioned outside that box. */
-.timeline-strip-handle-pass {
-  position: absolute;
-  top: 1px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 0 3px;
-  background: #12203c;
-  color: #8fa9c4;
-  font-family: monospace;
-  font-size: 8px;
-  line-height: 1.4;
-  border-radius: 2px;
-  white-space: nowrap;
-  pointer-events: none;
 }
 
 /* Unlabeled beat / beat–end tag on the hovered or dragged handle — position

@@ -1,13 +1,13 @@
 // Playback engine — all timing/loop/scrub state, zero DOM. The engine only
 // tells each Visualizer which source frame to reconcile to; the transport view
-// (ui/playback-controls.tsx) is a humble renderer of PlaybackViewState.
+// (ui/transport.tsx) is a humble renderer of PlaybackViewState.
 
 import { buildTimeline, type Timeline } from './timeline.js'
 import { activeLineage } from './lineage.js'
 import type { EvalCtx } from './dsl.js'
 import { FPS, FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS, DEFAULT_LOOP_BEATS, beatsToFrames } from './constants.js'
 import type { Row } from './lineage.js'
-import { LOOP_KINDS, type CookedVisualRows, type LoopEpochs, type Visualizer } from './visualizer.js'
+import { LOOP_KINDS, type CookedVisualRows, type LoopEpochs, type PassState, type Visualizer, type VisualizerKind } from './visualizer.js'
 import { beatSecondsFromTaps } from './tap-log.js'
 
 export interface TapControl {
@@ -59,6 +59,18 @@ export interface PlaybackViewState {
   loopBeats: number
   // Tapped tempo in BPM, or null until two taps establish one.
   bpm: number | null
+  // Each registered visualizer's current CONTENT pass (SOURCE space, after the
+  // timeline warp — see visualizer.ts's passOffset). Keyed by kind; a kind with
+  // no visualizer registered (tests) or particles (no Visualizer of its own —
+  // its section reads srcBeat/timelinePass directly, unwrapped) has no entry.
+  // A section's effective beat for kind K is
+  // passes[K].pass * loopBeats + srcBeat.
+  passes: Partial<Record<VisualizerKind, PassState>>
+  // The engine's own TIMELINE pass, on the extended PLAYBACK axis, BEFORE the
+  // warp: passesSince(timelineEpoch) modulo timeline.loops when the timeline
+  // has more than one pass, else 0. A different axis from each kind's own
+  // entry in `passes` — see risk R1 in the rewrite notes.
+  timelinePass: number
 }
 
 export interface PlaybackOptions {
@@ -311,6 +323,8 @@ export function createPlaybackEngine(
   }
 
   function viewState(): PlaybackViewState {
+    const passes: Partial<Record<VisualizerKind, PassState>> = {}
+    for (const v of visualizers) passes[v.kind] = v.currentPass()
     return {
       state,
       pos: shownPos,
@@ -321,6 +335,8 @@ export function createPlaybackEngine(
       loop,
       loopBeats,
       bpm: tappedBpm(),
+      passes,
+      timelinePass: timelinePassNow(),
     }
   }
 
@@ -329,11 +345,19 @@ export function createPlaybackEngine(
     onViewChange?.(viewState())
   }
 
+  // Which pass of the timeline (the extended PLAYBACK axis, before the warp)
+  // is current. Timeline.sourceBeatAt re-derives the same modulo internally,
+  // so passing this pre-modulo'd value through it is a no-op — computing it
+  // once here is what lets viewState() surface it too.
+  function timelinePassNow(): number {
+    return timeline.loops > 1 ? passesSince(timelineEpoch) % timeline.loops : 0
+  }
+
   // Source beat shown at playhead beat `pos` (0-based elapsed beats): the
   // timeline remaps the 1-indexed playback beat to a 1-indexed source beat
   // (identity with no timeline); a multi-loop timeline also remaps by pass.
   function sourceBeatAt(pos: number): number {
-    return timeline.sourceBeatAt(pos + 1, timeline.loops > 1 ? passesSince(timelineEpoch) : 0)
+    return timeline.sourceBeatAt(pos + 1, timelinePassNow())
   }
 
   function applyAt(pos: number): void {
