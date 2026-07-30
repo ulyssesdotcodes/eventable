@@ -667,6 +667,25 @@ test('record() rides the same log multiplayer syncs — merges in on another rep
   assert.equal(b.get('activity')?.events[1].kind, 'apply')
 })
 
+test("an apply claims a peer's merged un-applied edit, so a later fold can't revert it", () => {
+  const a = createEditableTableStore({ src: 'a' })
+  const b = createEditableTableStore({ src: 'b' })
+  a.createTable('t')
+  a.addRow('t')
+  a.addColumn('t', 'x', 'number')
+  a.recordApply()
+  b.log.merge(a.log.all())
+
+  // B edits without applying; A merges that in and applies on top.
+  b.setCell('t', 0, 'x', 7)
+  a.log.merge(b.log.all())
+  a.recordApply()
+  b.log.merge(a.log.all())
+
+  assert.equal(a.get('t')!.rows[0].x, 7, "A's apply carried the peer's edit")
+  assert.equal(b.get('t')!.rows[0].x, 7, 'and B still reads its own value back')
+})
+
 test('recordApply commits the pending edits as an apply node and grows the branch path', () => {
   const store = createEditableTableStore()
   store.createTable('t')
