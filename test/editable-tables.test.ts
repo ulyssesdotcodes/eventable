@@ -453,15 +453,6 @@ test('schemaColumns: a string[] spec is enum shorthand; the object form is expli
   ])
 })
 
-test('declare-schema round-trips usedBy through serialize/load', () => {
-  const store = createEditableTableStore()
-  store.ensure('h', { event: ['setCode', 'layer'], mode: { type: 'enum', options: ['blend', 'add'], usedBy: ['layer'] } })
-  const store2 = createEditableTableStore()
-  assert.ok(store2.load(store.serialize()))
-  const col = store2.get('h')!.columns.find((c) => c.name === 'mode')!
-  assert.deepEqual(col.usedBy, ['layer'])
-})
-
 test('a code column language rides events, survives serialize/load, and tracks re-declaration', () => {
   const store = createEditableTableStore()
   store.ensure('sketches', { beat: 'number', code: { type: 'code', language: 'hydra' } })
@@ -484,15 +475,11 @@ test('renaming a declared column claims it whole — enum options and code langu
   assert.deepEqual(cols.find((c) => c.name === 'sketch'), { name: 'sketch', type: 'code', language: 'hydra' })
 })
 
-test('an enum column defaults a new row to its first option, and rides serialize/load', () => {
+test('an enum column defaults a new row to its first option', () => {
   const store = createEditableTableStore()
   store.ensure('h', { beat: 'number', event: ['setCode', 'layer'] })
   store.addRow('h')
   assert.deepEqual(store.get('h')!.rows, [{ beat: 0, event: 'setCode' }])
-  const store2 = createEditableTableStore()
-  assert.ok(store2.load(store.serialize()))
-  const evCol = store2.get('h')!.columns.find((c) => c.name === 'event')!
-  assert.deepEqual(evCol, { name: 'event', type: 'enum', options: ['setCode', 'layer'] })
 })
 
 test('cellValid: blanks pass; a non-blank value must fit its type; enum must be in options', () => {

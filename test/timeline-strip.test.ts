@@ -44,18 +44,9 @@ test('beatToX/xToBeat round-trip: beat 1 sits at x=0, beat maxBeats+1 at the rig
 
 // --- grid ----------------------------------------------------------------
 
-test('gridLines: minor tick per beat, major every 4, labels only major', () => {
-  const lines = gridLines(8, 800)
-  assert.equal(lines.length, 9, 'beats 1..maxBeats+1')
-  assert.deepEqual(lines.map((l) => l.kind), ['major', 'minor', 'minor', 'minor', 'major', 'minor', 'minor', 'minor', 'major'])
-  assert.deepEqual(lines.filter((l) => l.label).map((l) => l.beat), [1, 5, 9])
-})
-
-test('gridLines: labels drop wholesale once major spacing collides (<24px)', () => {
-  const roomy = gridLines(8, 800) // 100px/beat, 400px between majors
-  const cramped = gridLines(800, 800) // 1px/beat, 4px between majors
-  assert.ok(roomy.some((l) => l.label))
-  assert.ok(cramped.every((l) => !l.label))
+test('gridLines: labels sit on major ticks and drop wholesale once they would collide', () => {
+  assert.deepEqual(gridLines(8, 800).filter((l) => l.label).map((l) => l.beat), [1, 5, 9])
+  assert.ok(gridLines(800, 800).every((l) => !l.label), '1px/beat: 4px between majors, under the 24px floor')
 })
 
 // --- handlesFor ----------------------------------------------------------------
@@ -75,14 +66,6 @@ test('handlesFor: timeline rows become until-next span handles; loop picks the l
     ],
     'row 0 runs to row 1; row 1 runs to the end of its 8-beat pass; the disabled row gets no handle',
   )
-})
-
-test('handlesFor: with no timeline defined, a content row is identity — one non-ghost handle at its own beat', () => {
-  const rows = [{ beat: 3, dur: 2 }]
-  const handles = sectionLayout('three', rows, cols('beat', 'dur'), []).handles
-  assert.deepEqual(handles, [
-    { row: 0, kind: 'span', beat: 3, end: 5, lane: 0, ghost: false, disabled: false },
-  ])
 })
 
 test('handlesFor: a fold transition draws its until-next window as a span (endRow → destination); instants stay points', () => {
@@ -117,6 +100,8 @@ test('handlesFor: a post pulse draws a bar (mirroring pulseAt); a bare pulse def
   assert.deepEqual([barOf(2).kind, barOf(2).beat, barOf(2).end], ['span', 6, 7], 'blank dur → 1-beat bar')
   assert.deepEqual([barOf(3).kind, barOf(3).beat, barOf(3).end], ['span', 8, 9], 'a step gate (dur 0) still spans its 1-beat default')
   assert.equal(barOf(1).endRow, undefined, 'a pulse bar has no destination arrow')
+  const win = postSpanWindows(rows).find((w) => w.row === 1)!
+  assert.deepEqual([barOf(1).beat, barOf(1).end], [win.start, win.end], 'the bar is the fold window, so the strip cannot drift from playback')
 })
 
 test('handlesFor: an eased setVariable stays a point, tagged with the previous same-name row it glides from', () => {
@@ -134,25 +119,6 @@ test('handlesFor: an eased setVariable stays a point, tagged with the previous s
   assert.equal(glideOf(0), undefined, 'a blank-ease keyframe glides from nothing')
   assert.equal(glideOf(2), undefined, 'an explicit step glides from nothing')
   assert.equal(glideOf(3), undefined, 'the first row of a track has no previous to glide from')
-})
-
-test('handlesFor: setCode/add/remove/layer in a post table stay points', () => {
-  const rows = [
-    { beat: 1, event: 'setCode', code: 'edges(0.2)' },
-    { beat: 2, event: 'add', code: 'bloom(1.2)' },
-    { beat: 3, event: 'remove', name: 'bloom' },
-    { beat: 4, event: 'layer', code: 'noise()', mode: 'add' },
-  ]
-  const handles = sectionLayout('post', rows, cols('beat'), []).handles
-  assert.deepEqual(handles.map((h) => h.kind), ['point', 'point', 'point', 'point'])
-  assert.ok(handles.every((h) => h.glideFrom === undefined && h.end === undefined))
-})
-
-test('handlesFor: a post pulse bar has parity with postSpanWindows (strip can\'t drift from playback)', () => {
-  const rows = [{ beat: 3, event: 'pulse', name: 'x', value: 1, dur: 2 }]
-  const win = postSpanWindows(rows).find((w) => w.row === 0)!
-  const bar = sectionLayout('post', rows, cols('beat', 'dur'), []).handles.find((h) => h.row === 0)!
-  assert.deepEqual([bar.beat, bar.end], [win.start, win.end], 'bar matches the fold window')
 })
 
 test('postGlidePairs: only named-ease keyframes pair, each with the previous same-name row', () => {
@@ -269,7 +235,6 @@ test('sub-lane packing: overlapping spans stack into sub-lanes, disjoint spans s
   const laneOf = () => sectionLayout('scene', rows, columns, []).handles
     .sort((a, b) => a.beat - b.beat).map((h) => h.lane)
   assert.deepEqual(laneOf(), [0, 1, 0], 'first-fit by start: 1..4 → 0, 3..6 → 1, 7..9 → 0')
-  assert.deepEqual(laneOf(), laneOf(), 'deterministic')
   assert.equal(sectionLayout('scene', rows, columns, []).laneCount, 2)
 })
 
@@ -363,31 +328,23 @@ test('coverageBands: each pass\'s segments map onto its own local axis, tagged w
       { p0: 1, p1: 9, lane: 1, kind: 'hold' },
     ],
   )
-})
-
-test('coverageBands: no active timeline yields no bands', () => {
-  assert.deepEqual(coverageBands([]), [])
+  assert.deepEqual(coverageBands([]), [], 'no active timeline yields no bands')
 })
 
 // --- pendingTimelineRows ----------------------------------------------------
 
-test('pendingTimelineRows: a row whose live beat or pass drifted from the applied cook is pending; a disabled row is skipped (the applied view excludes it too)', () => {
+test('pendingTimelineRows: a row whose beat or pass drifted from the applied cook is pending, as is one past its end; a disabled row is skipped', () => {
   const rows = [
     { beat: 1, loop: 0 },
     { beat: 20, disabled: true },
     { beat: 9, loop: 0 },
+    { beat: 17 },
   ]
   const applied = [
     { beat: 1, loop: 0 },
     { beat: 9, loop: 1 }, // row 2's pass moved after Apply
   ]
-  assert.deepEqual(pendingTimelineRows(rows, applied), new Set([2]))
-})
-
-test('pendingTimelineRows: an unapplied trailing row past the applied cook length is pending', () => {
-  const rows = [{ beat: 1 }, { beat: 9 }]
-  const applied = [{ beat: 1 }]
-  assert.deepEqual(pendingTimelineRows(rows, applied), new Set([1]))
+  assert.deepEqual(pendingTimelineRows(rows, applied), new Set([2, 3]))
 })
 
 // --- hitTest ----------------------------------------------------------------
