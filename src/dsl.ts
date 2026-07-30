@@ -458,10 +458,9 @@ export function materialize(t: Table, ctx: MatCtx, memo?: Memo): Row[] {
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface GraphSpec {
-  table?: Table
+  table: Table
   columns: string[]
   viewName?: string | null
-  name?: string
 }
 
 export interface PhysicsEngine {

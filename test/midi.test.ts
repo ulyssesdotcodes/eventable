@@ -7,13 +7,12 @@ import {
 import { buildTimeline } from '../src/timeline.js'
 import { frameToBeat, beatToFrame } from '../src/constants.js'
 import type { Row } from '../src/lineage.js'
-import type { StampedEvent } from '../src/event-log.js'
-import type { MidiStore } from '../src/midi.js'
+import type { LogStore, StampedEvent } from '../src/event-log.js'
 
 const b = (frame: number): number => frameToBeat(frame)
 
 // In-memory stand-in for the editable-table store the app backs MIDI with.
-function fakeStore(): MidiStore {
+function fakeStore(): LogStore {
   const events: StampedEvent[] = []
   let seq = 0
   const listeners: (() => void)[] = []

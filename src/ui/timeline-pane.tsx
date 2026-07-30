@@ -432,7 +432,7 @@ export function TimelinePane(props: {
     })
 
     return (
-      <div class="timeline-section">
+      <div>
         <div class="timeline-section-header">
           <button
             class="timeline-section-name"

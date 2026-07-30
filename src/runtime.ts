@@ -16,15 +16,9 @@ type DefEntry =
   | { kind: 'const'; table: Table }
   | { kind: 'group'; members: string[] }
 
-export interface ResolvedGraph {
-  table: Table
-  columns: string[]
-  viewName?: string | null
-}
-
 export interface RuntimeResult {
   views: Map<string, Table>
-  graphs: ResolvedGraph[]
+  graphs: GraphSpec[]
   deps: Map<string, string[]>
 }
 
@@ -249,14 +243,11 @@ export function createRuntime({ physics, tapRows, editableRows, logRows, defineS
 
     for (const t of cache.values()) materialize(t, matCtx, memo)
 
-    const resolvedGraphs = graphs
-      .map((g): ResolvedGraph | null => {
-        const table = g.table
-          ? (g.viewName ? cache.get(g.viewName) ?? g.table : g.table)
-          : (g.name ? cache.get(g.name) : undefined)
-        return table ? { table, columns: g.columns, viewName: g.viewName ?? g.table?.name } : null
-      })
-      .filter((x): x is ResolvedGraph => x !== null)
+    const resolvedGraphs = graphs.map((g) => ({
+      table: g.viewName ? cache.get(g.viewName) ?? g.table : g.table,
+      columns: g.columns,
+      viewName: g.viewName ?? g.table.name,
+    }))
 
     return { views: cache, graphs: resolvedGraphs, deps }
   }

@@ -354,10 +354,9 @@ const flapDirs = (
 // rotate about the fold line, out of plane, landing on the reflected
 // position at t = 1. Returns [x, y, z] per vertex.
 export const animatedPositions = (
-  outcome: FoldOutcome, t: number,
+  m: Pick<StepMotion, 'Vfrom' | 'line' | 'moving' | 'dirs' | 'FV'>, t: number,
 ): [number, number, number][] => {
-  const { Vfrom, moving, line, dirs } = outcome.anim
-  const FV = outcome.state.FV
+  const { Vfrom, moving, line, dirs, FV } = m
   const [u, d] = line
   const theta = Math.PI * Math.min(1, Math.max(0, t))
   const cos = Math.cos(theta)
@@ -738,22 +737,9 @@ const sampleStepMotion = (m: StepMotion, t: number): {
   // next step's stacking
   sig?: number[]
 } => {
-  const [u, d] = m.line
-  const sense: number[] = m.Vfrom.map(() => 0)
-  for (let fi = 0; fi < m.FV.length; ++fi) {
-    if (!m.moving[fi]) continue
-    for (const vi of m.FV[fi]) sense[vi] = m.dirs[fi]
-  }
-  const rigid = (vi: number, theta: number): [number, number, number] => {
-    const p = m.Vfrom[vi]
-    const h = p[0] * u[0] + p[1] * u[1] - d
-    if (sense[vi] === 0 || Math.abs(h) < 1e-12) return [p[0], p[1], 0]
-    const hh = h * Math.cos(theta)
-    return [p[0] + (hh - h) * u[0], p[1] + (hh - h) * u[1], sense[vi] * h * Math.sin(theta)]
-  }
-  if (m.soft === undefined) {
-    return { pos: m.Vfrom.map((_, vi) => rigid(vi, Math.PI * t)) }
-  }
+  if (m.soft === undefined) return { pos: animatedPositions(m, t) }
+  const start = animatedPositions(m, 0)
+  const end = animatedPositions(m, 1)
   // sample the bake, easing residuals into the exact endpoint geometry
   const { frames, pos: P, zDirs } = m.soft
   const nv = m.Vfrom.length
@@ -765,13 +751,11 @@ const sampleStepMotion = (m: StepMotion, t: number): {
   const b = smooth(0.85, 1, t)
   const pos = m.Vfrom.map((_, vi): [number, number, number] => {
     const out: [number, number, number] = [0, 0, 0]
-    const start = rigid(vi, 0)
-    const end = rigid(vi, Math.PI)
     for (let c = 0; c < 3; ++c) {
       const baked = P[(f0 * nv + vi) * 3 + c] * (1 - fx) + P[(f1 * nv + vi) * 3 + c] * fx
       out[c] = baked +
-        a * (start[c] - P[vi * 3 + c]) +
-        b * (end[c] - P[((frames - 1) * nv + vi) * 3 + c])
+        a * (start[vi][c] - P[vi * 3 + c]) +
+        b * (end[vi][c] - P[((frames - 1) * nv + vi) * 3 + c])
     }
     return out
   })

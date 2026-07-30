@@ -5,7 +5,8 @@
 // (EditableTableStore.isLog) have no fold state worth showing, so they render
 // through the plain read-only path under their bare name.
 
-import { chartDataFor, numericColumns, resolveSpec, type GraphSpec, type ChartData } from './graph-panel.js'
+import { chartDataFor, numericColumns, resolveSpec, type ChartData } from './graph-panel.js'
+import type { GraphSpec } from './dsl.js'
 import { outViewName, type Table } from './dsl.js'
 import type { Row } from './lineage.js'
 import type { EditableTableStore, ColumnType, EditableColumn } from './editable-tables.js'

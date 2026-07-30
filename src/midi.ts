@@ -6,7 +6,7 @@
 // mapping, plus the loop iteration it was recorded in.
 
 import { beatToFrame } from './constants.js'
-import type { StampedEvent } from './event-log.js'
+import type { LogStore, StampedEvent } from './event-log.js'
 import type { Row } from './lineage.js'
 import type { EvalCtx } from './dsl.js'
 
@@ -118,18 +118,8 @@ export function currentMidiRows(events: StampedEvent[]): Row[] {
 
 // ── Live input ───────────────────────────────────────────────────────────────
 
-// The midi log, abstracted to just what the input needs — the exact twin of
-// sliders' SliderStore. main.ts backs this with the editable-table store —
-// riding the store is what makes recorded MIDI sync over multiplayer and
-// persist in the session.
-export interface MidiStore {
-  record(kind: string, payload?: Record<string, unknown>): void
-  events(): StampedEvent[]
-  onChange(cb: () => void): void
-}
-
 export interface MidiInputOptions {
-  store: MidiStore
+  store: LogStore
   // Where new events get stamped: the playhead's content/source position (a
   // 1-indexed beat, Playback.currentSourceBeats) — the coordinate the baked
   // scene is keyed to, so a recorded sweep tracks the timeline mapping.

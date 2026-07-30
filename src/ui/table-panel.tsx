@@ -8,7 +8,7 @@ import {
   createSignal, createMemo, createEffect, on, onCleanup, untrack,
   For, Index, Show, type Accessor, type JSX, type Setter,
 } from 'solid-js'
-import { SERIES_COLORS, chartDataFor, computeColRanges, drawSeriesChart, fmtNum, PANEL_CHART_STYLE, type GraphSpec, type ColRange } from '../graph-panel.js'
+import { SERIES_COLORS, chartDataFor, computeColRanges, drawSeriesChart, fmtNum, PANEL_CHART_STYLE, type ColRange } from '../graph-panel.js'
 import {
   MAX_ROWS, COLUMN_TYPES, EVENTS_SUFFIX, formatCell, formatEditableCell,
   allNames, nextTableName, fallbackTab, chartFor, bottomSlotFor, hasCodeColumn,
@@ -24,7 +24,7 @@ import { timelineSegments } from '../timeline.js'
 import { CodeFacade, ExprOverlay, MobileEditorPopover } from './facade.js'
 import { DocsPopover } from './docs-popover.js'
 import { Icon } from './icon.js'
-import type { Table } from '../dsl.js'
+import type { GraphSpec, Table } from '../dsl.js'
 import type { EditTarget } from '../editor-host.js'
 import type { Row } from '../lineage.js'
 import { DISABLED_COL, cellValid, invalidColumns, isExprCellText, type EditableTableStore, type ColumnType, type EditableColumn } from '../editable-tables.js'
@@ -1073,7 +1073,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   return (
     <>
       <div class="table-pane-header">
-        <div class="table-pane-header-row table-pane-header-titles">
+        <div class="table-pane-header-row">
           <div class="table-tabs">
             <For each={names()}>{(n) => <Tab name={n} />}</For>
           </div>
@@ -1085,7 +1085,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             </For>
           </select>
         </div>
-        <div class="table-pane-header-row table-pane-header-controls">
+        <div class="table-pane-header-row">
           <button
             class="table-tab-add"
             title="Add a new editable table"
@@ -1465,7 +1465,7 @@ export function createTablePanel(
     setGraphs(newSpecs: GraphSpec[] | null): void {
       const byName = new Map<string, GraphSpec>()
       for (const spec of newSpecs ?? []) {
-        const name = spec.viewName ?? spec.table?.name
+        const name = spec.viewName ?? spec.table.name
         if (name) byName.set(name, spec)
       }
       setGraphs(byName)

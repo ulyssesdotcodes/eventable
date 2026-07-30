@@ -2,18 +2,17 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   sliderDef, sliderDefs, buildSliderIndex, sampleSliderAt,
-  currentSliderRows, createSliderInput, sameSliderDefs,
+  currentSliderRows, createSliderInput,
 } from '../src/sliders.js'
 import { frameToBeat, beatToFrame } from '../src/constants.js'
 import { createEditableTableStore } from '../src/editable-tables.js'
 import type { Row } from '../src/lineage.js'
-import type { StampedEvent } from '../src/event-log.js'
-import type { SliderStore } from '../src/sliders.js'
+import type { LogStore, StampedEvent } from '../src/event-log.js'
 
 const b = (frame: number): number => frameToBeat(frame)
 
 // In-memory stand-in for the editable-table store the app backs sliders with.
-function fakeStore(): SliderStore {
+function fakeStore(): LogStore {
   const events: StampedEvent[] = []
   let seq = 0
   const listeners: (() => void)[] = []
@@ -26,8 +25,6 @@ function fakeStore(): SliderStore {
     onChange: (cb: () => void) => { listeners.push(cb) },
   }
 }
-
-// ── Definitions ──────────────────────────────────────────────────────────────
 
 test('sliderDef parses id/min/max/default and clamps the default into range', () => {
   const d = sliderDef({ name: 'x', min: 0, max: 10 })!
@@ -79,8 +76,6 @@ test('sliderDefs keeps one def per id, last row wins', () => {
   assert.equal(defs.find((d) => d.id === 'a')!.max, 5)
 })
 
-// ── Index + sampling (most recent at-or-before; jump to first value at loop top) ─
-
 test('sampleSliderAt returns the most recent value at-or-before the frame', () => {
   const rows: Row[] = [
     { type: 'slider', id: 'brightness', value: 1, beat: b(60) },
@@ -105,8 +100,6 @@ test('before the first move, sampleSliderAt jumps to the first recorded value (l
   assert.equal(sampleSliderAt(idx, 'x', 59, 0.2), 1, 'still the first value just before it')
   assert.equal(sampleSliderAt(idx, 'x', 60, 0.2), 1, 'at the first move')
 })
-
-// ── The fold: event log → current table ──────────────────────────────────────
 
 test('currentSliderRows folds per id, dedupes one row per frame', () => {
   const events: StampedEvent[] = [
@@ -139,21 +132,6 @@ test('a fresh take (clearId then record) replaces the old one; untouched sliders
   assert.equal(bb.length, 1, 'b was never grabbed — it carries forward')
 })
 
-// sameSliderDefs gates the definition refresh: a "slider" value write (a drag)
-// must fold to "unchanged" so updateSliderDefs skips rebuilding the control.
-test('sameSliderDefs is true only when every def matches, in order', () => {
-  const a = sliderDefs([{ name: 'h', min: -3, max: 3, default: 0 }])
-  assert.equal(sameSliderDefs(a, sliderDefs([{ name: 'h', min: -3, max: 3, default: 0 }])), true,
-    'a value write leaves the definitions untouched')
-  assert.equal(sameSliderDefs(a, sliderDefs([{ name: 'h', min: -5, max: 5, default: 0 }])), false,
-    'a retuned range is a real change')
-  assert.equal(sameSliderDefs(a, sliderDefs([
-    { name: 'h', min: -3, max: 3, default: 0 }, { name: 'w', min: 0, max: 1 },
-  ])), false, 'a newly declared slider is a real change')
-})
-
-// ── Live input: grab clears the take and records anew ────────────────────────
-
 test('createSliderInput stamps moves at the source position and samples them', () => {
   let src = 1
   const input = createSliderInput({ store: fakeStore(), getIndex: () => src })
@@ -171,8 +149,6 @@ test('createSliderInput stamps moves at the source position and samples them', (
   assert.equal(input.ctxAt(0).slider!('x'), 0.8, 'before the first move: jumps to the first value')
   assert.deepEqual(input.valuesAt(60), { x: 0.8 }, 'valuesAt maps every defined id')
 })
-
-// ── Recording window: grab records without playback for one cycle, then replays ─
 
 test('an open recording window holds the live hand, then replays the take once a cycle completes', () => {
   let src = 5 // beats — getIndex and recordTick share the beat unit

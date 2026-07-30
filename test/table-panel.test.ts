@@ -9,8 +9,7 @@ import {
   isCellInert, hasCodeColumn, bottomSlotFor, EVENTS_SUFFIX, type PeerPresence,
 } from '../src/table-panel.js'
 import type { EditableColumn } from '../src/editable-tables.js'
-import { Table } from '../src/dsl.js'
-import type { GraphSpec } from '../src/graph-panel.js'
+import { Table, type GraphSpec } from '../src/dsl.js'
 import { createEditableTableStore } from '../src/editable-tables.js'
 import type { Row } from '../src/lineage.js'
 

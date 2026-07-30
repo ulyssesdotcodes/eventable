@@ -25,14 +25,14 @@ import { SAMPLES, sampleIndexForSlug, slugify, serializeSample, parseSample, typ
 import { defaultSessionStore } from './sessions.js'
 import { getVimMode, setVimMode, getMidiEnabled, setMidiEnabled, getUsername, setUsername } from './settings.js'
 import { createCookClient } from './cook-client.js'
-import type { CookedSigs } from './replay.js'
-import { randomSeed, localSource } from './event-log.js'
+import type { CookedResult } from './replay.js'
+import { randomSeed, localSource, type LogStore } from './event-log.js'
 import { createPresenceChannel, userColor, lastCellEdits } from './presence.js'
 import { Table, outViewName } from './dsl.js'
 import { createEditableTableStore, defaultFor, DISABLED_COL, CLEAR_RUNS_KIND, ACTIVITY_TABLE, isExprCellText, type ColumnType, type CodeLanguage, type EditableColumn, type SessionRun } from './editable-tables.js'
 import { APPLY_KIND, type ApplyNode } from './branches.js'
-import { createMidiInput, subscribeWebMidi, type MidiInput, type MidiStore } from './midi.js'
-import { createSliderInput, sliderDefs, sameSliderDefs, type SliderDef, type SliderInput } from './sliders.js'
+import { createMidiInput, subscribeWebMidi, type MidiInput } from './midi.js'
+import { createSliderInput, sliderDefs, type SliderInput } from './sliders.js'
 import { createSliderPanel } from './ui/slider-panel.js'
 import { beatToFrame, DEFAULT_LOOP_BEATS } from './constants.js'
 import { createTapLog } from './tap-log.js'
@@ -328,7 +328,7 @@ let lastTick = 0
 let rewindBaseline = 0
 let midiEnabled = getMidiEnabled()
 
-const logTableStore = (table: string): MidiStore => ({
+const logTableStore = (table: string): LogStore => ({
   record: (kind, payload) => editableStore.record(table, kind, payload),
   events: () => editableStore.log.all().filter((e) => e.table === table),
   onChange: (cb) => editableStore.onChange(cb),
@@ -386,17 +386,11 @@ const sliderPanel = createSliderPanel({
 // Push slider definitions to the overlay and input on every cook. Prefer the
 // cooked "sliders" view, but fall back to the store so a table created by hand
 // in the table panel (never surfaced as a view) still drives the sliders.
-let lastSliderDefs: SliderDef[] = []
 function updateSliderDefs(views: Map<string, Table>): void {
   // The cooked view already reflects ensure()'s disabled-row filtering; the
   // raw fallback needs it applied here.
   const rows = views.get('sliders')?.rows ?? (editableStore.get('sliders')?.rows ?? []).filter((r) => r[DISABLED_COL] !== true)
   const defs = sliderDefs(rows)
-  // onChange fires on every store event, including a drag's "slider" value
-  // writes, which never touch the "sliders" definitions. Skip the churn unless
-  // the defs actually changed.
-  if (sameSliderDefs(defs, lastSliderDefs)) return
-  lastSliderDefs = defs
   sliderPanel.setDefs(defs)
   if (defs.length) ensureSliderInput().setDefs(defs)
   else sliderInput?.setDefs(defs)
@@ -410,7 +404,7 @@ const [timelineRows, setTimelineRows] = createSignal<Row[]>([])
 // playback consumes, so a band's events can't disagree with what will happen.
 // Refreshed on every applyCooked; changing a retime table and applying moves
 // them.
-const [applied, setApplied] = createSignal<{ cooked: CookedData; particleRows: Row[] } | null>(null)
+const [applied, setApplied] = createSignal<{ cooked: CookedResult; particleRows: Row[] } | null>(null)
 // Bumped once per coalesced store-change frame (see editableStore.onChange
 // below) — the pane's live warp rows and recorded automation ride it.
 const [storeTick, setStoreTick] = createSignal(0)
@@ -535,7 +529,7 @@ function recordTransport(kind: 'playback-play' | 'playback-pause'): void {
 // data that the real ensure() below turns into store events.
 const cookClient = createCookClient(new Worker(new URL('cook-worker.js', import.meta.url), { type: 'module' }))
 
-async function cookInWorker(code: string, seed: number, seeds?: Record<string, Row[]>, declareSliders = true): Promise<{ cooked: CookedData; declaredNames: string[] }> {
+async function cookInWorker(code: string, seed: number, seeds?: Record<string, Row[]>, declareSliders = true): Promise<{ cooked: CookedResult; declaredNames: string[] }> {
   const editables = editableStore.listNames().map((name) => ({
     name,
     // Match ensure()'s filtering: disabled rows stay in the table but are
@@ -589,8 +583,6 @@ function multiplayerUrl(): string {
 // the id needs pinning before anything could save under it.
 if (roomName) currentSessionId = roomSessionId(roomName)
 
-import type { GraphSpec } from './graph-panel.js'
-
 let lastViews = new Map<string, Table>()
 // The current program's particle-control rows (see src/particles.ts), folded
 // per tick; refreshed on every applyCooked.
@@ -603,17 +595,6 @@ let liveSeed = 0
 // cook (see cookInWorker), so an export carries their rows as its Sample
 // `tables` even right after a reload.
 let lastDeclaredNames: string[] = []
-
-interface CookedData {
-  views: Map<string, Table>
-  graphs: GraphSpec[]
-  sceneRows: Row[]
-  timelineRows: Row[]
-  hydraRows: Row[]
-  baubleRows: Row[]
-  postRows: Row[]
-  sigs: CookedSigs
-}
 
 // The streaming log tables, under the names their panel tabs wear: the
 // midi/slider folds and event logs, and every editable table's "name·events"
@@ -670,7 +651,7 @@ const lastCookedSigs = { scene: '', timeline: '', hydra: '', bauble: '', post: '
 // onto the apply pulse so the whole room resets the same multi-loop sequences.
 // The worker stamps a graph-hash signature per output (see CookedSigs), so
 // this never serializes the dense rows.
-function diffCooked({ sigs }: CookedData): { scene: boolean; timeline: boolean; hydra: boolean; bauble: boolean; post: boolean } {
+function diffCooked({ sigs }: CookedResult): { scene: boolean; timeline: boolean; hydra: boolean; bauble: boolean; post: boolean } {
   const changed = {
     scene: sigs.scene !== lastCookedSigs.scene,
     timeline: sigs.timeline !== lastCookedSigs.timeline,
@@ -707,7 +688,7 @@ function resolveSource(row: Row): { table: string; row: number; beat: number } |
 // the activity table's apply stamps — the author's clock, NOT this replica's —
 // so late joiners land on the same pass of a multi-loop sequence. The loop
 // length folds from the same stream, so a session load or scrub restores it.
-function applyCooked(cooked: CookedData): void {
+function applyCooked(cooked: CookedResult): void {
   lastViews = cooked.views
   // Before load(): load() fires onTick, which reads the slider input.
   updateSliderDefs(cooked.views)
@@ -819,7 +800,7 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     // already moved us to. At the live head both are no-ops.
     if (broadcast) editableStore.forkFromReplay()
     else editableStore.setReplayView(null)
-    let cooked: CookedData
+    let cooked: CookedResult
     let declaredNames: string[]
     try {
       ({ cooked, declaredNames } = await cookInWorker(code, seed, seeds, broadcast))

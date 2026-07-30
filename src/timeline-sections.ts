@@ -59,7 +59,7 @@ export function sectionBeat(
 // playback, not against a content loop.
 const FLAT: PassState = { pass: 0, loops: 1 }
 
-// The cooked outputs a section list reads — structurally main.ts's CookedData.
+// The cooked outputs a section list reads — a structurally assignable subset of replay.ts's CookedResult.
 export interface CookedSectionData {
   views: ReadonlyMap<string, { rows: Row[] }>
   hydraRows: Row[]

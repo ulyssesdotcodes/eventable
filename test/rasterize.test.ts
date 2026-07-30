@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { rasterizeRows, buildFrameIndex, stateAtFrame, sampleFrame } from '../src/rasterize.js'
+import { rasterizeRows, buildFrameIndex, sampleFrame } from '../src/rasterize.js'
 import { slider, progress, isBinding, evalExpr, type Binding } from '../src/dsl.js'
 import { frameToBeat, framesToBeats } from '../src/constants.js'
 import type { Row } from '../src/lineage.js'
@@ -95,14 +95,14 @@ test('multiple objects each get a row per frame they are alive', () => {
   assert.deepEqual(at1, ['a'])
 })
 
-test('buildFrameIndex + stateAtFrame give O(1) lookups', () => {
+test('buildFrameIndex + sampleFrame give O(1) lookups', () => {
   const rows = rasterizeRows([create({ id: 'a' }), create({ id: 'b' })], mb(5))
   const fi = buildFrameIndex(rows)
   assert.equal(fi.maxFrame, 4)
-  assert.deepEqual(stateAtFrame(fi, 2).map((r) => r.id).sort(), ['a', 'b'])
-  assert.deepEqual(stateAtFrame(fi, 2.9).map((r) => r.id).sort(), ['a', 'b'])
-  assert.deepEqual(stateAtFrame(fi, 99), [])
-  assert.deepEqual(stateAtFrame(fi, -1), [])
+  assert.deepEqual(sampleFrame(fi, 2).map((r) => r.id).sort(), ['a', 'b'])
+  assert.deepEqual(sampleFrame(fi, 2.9).map((r) => r.id).sort(), ['a', 'b'], 'a fractional playhead floors to its cache frame')
+  assert.deepEqual(sampleFrame(fi, 99), [])
+  assert.deepEqual(sampleFrame(fi, -1), [])
 })
 
 test('sampleFrame eases transform fields between cache frames', () => {
@@ -131,10 +131,11 @@ test('sampleFrame does not blend discrete fields (color) or eased ids that vanis
     { id: 'b', event: 'destroy', beat: b(3) },
   ], mb(4))
   const fi = buildFrameIndex(rows)
-  const at = sampleFrame(fi, 1.5)
+  const at = sampleFrame(fi, 2.5)
   const a = at.find((r) => r.id === 'a')!
   assert.equal(a.color, 0x111111, 'color is not interpolated')
-  assert.equal(a.px, 3, 'a eased between frame 1 (px=2) and 2 (px=4)')
+  assert.equal(a.px, 5, 'a eased between frame 2 (px=4) and 3 (px=6)')
+  assert.equal(at.find((r) => r.id === 'b')!.px, 0, 'an id gone at the next frame is held, not eased')
 })
 
 test('empty input yields an empty cache', () => {
@@ -142,16 +143,7 @@ test('empty input yields an empty cache', () => {
   assert.deepEqual(rasterizeRows(null), [])
   const fi = buildFrameIndex([])
   assert.equal(fi.maxFrame, 0)
-  assert.deepEqual(stateAtFrame(fi, 0), [])
-})
-
-test('custom numeric fields hold their last value when the next keyframe omits them', () => {
-  const rows = rasterizeRows([
-    create({ wings: 0 }),
-    { id: 's', event: 'update', beat: b(4), wings: 1 },
-    { id: 's', event: 'update', beat: b(8), px: 3 }, // no wings field
-  ], mb(8))
-  assert.equal(rows.find((r) => r.frame === 6)!.wings, 1, 'held, not re-lerped')
+  assert.deepEqual(sampleFrame(fi, 0), [])
 })
 
 test('an ease function on the destination keyframe shapes the segment', () => {
