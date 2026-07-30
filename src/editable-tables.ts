@@ -1128,7 +1128,15 @@ export function createEditableTableStore({ src }: { src?: string } = {}): Editab
         seen = parent
       }
       const id = mintApplyId()
-      const edits = pending.slice()
+      // An ordinary apply also claims the derived working tail — a peer's edit
+      // merged in since the last apply is un-claimed, and leaving it so lets a
+      // later fold revert it. The union matters: the tail alone would drop a
+      // local edit whose seq sits below a peer's newer apply. A deliberate fork
+      // stays on `pending`, since forkFromReplay's discarded tail is exactly
+      // what must not come back.
+      const edits = forked && head !== null
+        ? pending.slice()
+        : [...new Set([...pending, ...deriveWorkingTail(tree)])]
       // Ensure the activity table exists first — the fold drops events on an
       // unknown table.
       if (!tables.has(ACTIVITY_TABLE)) {

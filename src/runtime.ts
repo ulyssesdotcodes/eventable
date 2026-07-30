@@ -16,15 +16,9 @@ type DefEntry =
   | { kind: 'const'; table: Table }
   | { kind: 'group'; members: string[] }
 
-export interface ResolvedGraph {
-  table: Table
-  columns: string[]
-  viewName?: string | null
-}
-
 export interface RuntimeResult {
   views: Map<string, Table>
-  graphs: ResolvedGraph[]
+  graphs: GraphSpec[]
   deps: Map<string, string[]>
 }
 
@@ -227,13 +221,8 @@ export function createRuntime({ physics, tapRows, editableRows, logRows, defineS
 
     for (const name of defs.keys()) cook(name, null, [])
 
-    // Combined per-consumer output views: every table routed with .outX(),
-    // concatenated beat-sorted (as groups are) under a "(system)" name (see
-    // outViewName) — visible in the panel. Routing takes precedence: replay
-    // reads this view and IGNORES a same-named view — the bare-name lookup is
-    // only the no-routes backwards-compatibility fallback (see replay.ts).
-    // Built after the def cook so routes made inside lazy view fns are
-    // collected too.
+    // Built after the def cook so routes made inside lazy view fns are collected
+    // too; consumers prefer this view over a same-named one (see outViewName).
     for (const [kind, members] of outs) {
       const name = outViewName(kind)
       const combined = Table._fromNode(ctx, {
@@ -249,14 +238,11 @@ export function createRuntime({ physics, tapRows, editableRows, logRows, defineS
 
     for (const t of cache.values()) materialize(t, matCtx, memo)
 
-    const resolvedGraphs = graphs
-      .map((g): ResolvedGraph | null => {
-        const table = g.table
-          ? (g.viewName ? cache.get(g.viewName) ?? g.table : g.table)
-          : (g.name ? cache.get(g.name) : undefined)
-        return table ? { table, columns: g.columns, viewName: g.viewName ?? g.table?.name } : null
-      })
-      .filter((x): x is ResolvedGraph => x !== null)
+    const resolvedGraphs = graphs.map((g) => ({
+      table: g.viewName ? cache.get(g.viewName) ?? g.table : g.table,
+      columns: g.columns,
+      viewName: g.viewName ?? g.table.name,
+    }))
 
     return { views: cache, graphs: resolvedGraphs, deps }
   }

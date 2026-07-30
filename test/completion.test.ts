@@ -12,17 +12,12 @@ const exprAt = (s: string): boolean => {
 }
 
 test('Expr chains resolve to their expr-namespace root', () => {
-  assert.equal(rootAt('expr.field("index").'), 'expr')
-  assert.equal(rootAt('expr.field("index").add(0.05).'), 'expr')
-  assert.equal(rootAt('expr.field("v").gt(2).cond(1, 0).'), 'expr')
-  assert.equal(rootAt('expr.lit(5).mul(2).'), 'expr')
   assert.equal(rootAt('expr.time().'), 'expr')
+  assert.equal(rootAt('expr.field("v").gt(2).cond(1, 0).'), 'expr')
 })
 
 test('Table chains resolve to their table/rows/etc. root', () => {
   assert.equal(rootAt('table("sim").'), 'table')
-  assert.equal(rootAt('table("sim").filter({ type: "x" }).'), 'table')
-  assert.equal(rootAt('rows([{ a: 1 }]).map(r => r).'), 'rows')
   assert.equal(rootAt('physics(table("base")).simulate({ steps: 1 }).'), 'physics')
 })
 

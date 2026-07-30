@@ -11,7 +11,7 @@ import {
   EASINGS, isBinding, isStreamingNode, evalExpr, substituteExpr,
   type Easings, type ExprNode,
 } from './dsl.js'
-import { contentSeqLen, transitionSpan, transitionAt, transitionWindowsIn, type TransitionWindow } from './hydra.js'
+import { amountExpr, contentSeqLen, transitionSpan, transitionAt, transitionWindowsIn, type TransitionWindow } from './hydra.js'
 import { evalPostCode, chainSignature, type OpChain } from './post-lang.js'
 import type { Row } from './lineage.js'
 
@@ -140,17 +140,6 @@ function removeOp(chain: string, name: string): string {
 const LAYER_AMOUNT = new Set(['blend'])
 const LAYER_MODES = new Set(['blend', 'add', 'mult', 'diff', 'mask'])
 
-// A layer amount as a code fragment: a number is a literal; any other non-empty
-// string is a per-frame props expression (hydra-identical).
-function amountExpr(value: unknown): string {
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
-  const s = typeof value === 'string' ? value.trim() : ''
-  if (s === '') return '0.5'
-  const n = Number(s)
-  if (!Number.isNaN(n)) return String(n)
-  return s.includes('=>') ? `(${s})` : `(p) => (${s})`
-}
-
 // Apply one chain-shape event — everything that mutates the chain string.
 // setVariable/pulse/transition leave it unchanged (handled elsewhere).
 function applyPostShape(code: string, row: Row): string {
@@ -165,7 +154,7 @@ function applyPostShape(code: string, row: Row): string {
     case 'layer':
       if (c !== '') {
         const mode = typeof row.mode === 'string' && LAYER_MODES.has(row.mode) ? row.mode : 'blend'
-        const amt = LAYER_AMOUNT.has(mode) ? `, ${amountExpr(row.value)}` : ''
+        const amt = LAYER_AMOUNT.has(mode) ? `, ${amountExpr(row.value, 'p')}` : ''
         return `${code === '' ? 'scene()' : code}.${mode}(${c}${amt})`
       }
       return code
@@ -354,7 +343,7 @@ function pulseParts(pulses: Row[], frame: number): { num: number; nodes: ExprNod
 // Each setVariable name's keyframe track — its rows in buildPostIndex (frame)
 // order. The one grouping foldVars folds base values over and postGlidePairs
 // pairs glide arrows over, so the strip's pairing can't drift from playback's.
-// Exported for the timeline pane's variables section (OQ5: post-only — hydra/
+// Exported for the timeline pane's variables section (post-only — hydra/
 // bauble/particles fold setVariable last-write-wins, with no track to plot).
 export function varTracks(index: Row[]): Map<string, Row[]> {
   const tracks = new Map<string, Row[]>()

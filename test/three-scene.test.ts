@@ -13,28 +13,18 @@ test('geometryDims merges shape defaults with the row\'s own fields', () => {
   assert.deepEqual(geometryDims('sphere', {}), { hx: undefined, hy: undefined, hz: undefined, r: 0.3, h: undefined })
 })
 
-test('geometryChanged is false when neither shape nor size moved (plain position/color update)', () => {
-  const dims = geometryDims('box', { hx: 0.04, hy: 0.35, hz: 0.22 })
-  assert.equal(geometryChanged('box', dims, { shape: 'box', hx: 0.04, hy: 0.35, hz: 0.22, px: 1, py: 2 }), false)
-})
-
-test('geometryChanged is true when a dimension changes — house-of-cards thickness edit', () => {
-  const dims = geometryDims('box', { hx: 0.04, hy: 0.35, hz: 0.22 })
-  assert.equal(geometryChanged('box', dims, { shape: 'box', hx: 0.3, hy: 0.35, hz: 0.22 }), true)
-})
-
-test('geometryChanged is true when the shape itself changes on the same id', () => {
-  const dims = geometryDims('sphere', { r: 0.3 })
-  assert.equal(geometryChanged('sphere', dims, { shape: 'box', hx: 0.25, hy: 0.25, hz: 0.25 }), true)
-  // ...and true again switching back, so it isn't a one-way latch.
-  const boxDims = geometryDims('box', { hx: 0.25, hy: 0.25, hz: 0.25 })
-  assert.equal(geometryChanged('box', boxDims, { shape: 'sphere', r: 0.3 }), true)
-})
-
-test('geometryChanged falls back to the previous shape when a row omits it', () => {
-  const dims = geometryDims('box', { hx: 0.04, hy: 0.35, hz: 0.22 })
-  assert.equal(geometryChanged('box', dims, { hx: 0.04, hy: 0.35, hz: 0.22 }), false)
-  assert.equal(geometryChanged('box', dims, { hx: 0.5, hy: 0.35, hz: 0.22 }), true)
+test('geometryChanged fires only when the shape or a dimension moved', () => {
+  const box = geometryDims('box', { hx: 0.04, hy: 0.35, hz: 0.22 })
+  assert.equal(geometryChanged('box', box, { shape: 'box', hx: 0.04, hy: 0.35, hz: 0.22, px: 1, py: 2 }), false)
+  // The house-of-cards thickness edit: one dimension moving forces a rebuild.
+  assert.equal(geometryChanged('box', box, { shape: 'box', hx: 0.3, hy: 0.35, hz: 0.22 }), true)
+  // A row that omits shape keeps the previous one rather than defaulting.
+  assert.equal(geometryChanged('box', box, { hx: 0.04, hy: 0.35, hz: 0.22 }), false)
+  assert.equal(geometryChanged('box', box, { hx: 0.5, hy: 0.35, hz: 0.22 }), true)
+  // Reshaping the same id rebuilds both ways, so it isn't a one-way latch.
+  const sphere = geometryDims('sphere', { r: 0.3 })
+  assert.equal(geometryChanged('sphere', sphere, { shape: 'box', hx: 0.25, hy: 0.25, hz: 0.25 }), true)
+  assert.equal(geometryChanged('box', box, { shape: 'sphere', r: 0.3 }), true)
 })
 
 test('textParams stringifies text and fills in defaults', () => {

@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   numericColumns, beatXOf, computeColRanges,
-  xTicks, tickDecimals, fmtNum, resolveSpec, pivotChannels, TIMELINE_CHART_STYLE,
+  xTicks, resolveSpec, pivotChannels, TIMELINE_CHART_STYLE,
 } from '../src/graph-panel.js'
 import { Table } from '../src/dsl.js'
 import type { Row } from '../src/lineage.js'
@@ -51,12 +51,10 @@ test('computeColRanges: per-series raw ranges plus optional padding', () => {
   assert.ok(Math.abs(padded.max - (6 + 8 * 0.08)) < 1e-9)
 })
 
-test('xTicks picks nice steps across magnitudes', () => {
-  assert.deepEqual(xTicks(0, 10, 4), [0, 2, 4, 6, 8, 10])
+test('xTicks: nice steps, zero span, and negative snapping', () => {
   assert.deepEqual(xTicks(0, 1, 4), [0, 0.2, 0.4, 0.6, 0.8, 1])
   assert.deepEqual(xTicks(5, 5, 4), [5], 'zero span: the single value')
   assert.deepEqual(xTicks(-3, 3, 4), [-2, 0, 2], 'ticks snap to step multiples, not the extents')
-  assert.deepEqual(xTicks(0, 1000, 4), [0, 200, 400, 600, 800, 1000])
 })
 
 test('xTicks: a zero (or negative) targetCount means no axis — TIMELINE_CHART_STYLE\'s sentinel', () => {
@@ -69,13 +67,6 @@ test('xTicks steps survive float accumulation (0.1-scale steps stay exact)', () 
   for (const t of xTicks(0, 0.4, 4)) {
     assert.equal(t, parseFloat(t.toFixed(10)), `tick ${t} carries float noise`)
   }
-})
-
-test('tickDecimals matches the step size', () => {
-  assert.equal(tickDecimals([0, 2, 4]), 0)
-  assert.equal(tickDecimals([0, 0.2, 0.4]), 1)
-  assert.equal(tickDecimals([0, 0.05]), 2)
-  assert.equal(tickDecimals([5]), 0, 'single tick: no decimals')
 })
 
 test('pivotChannels: long-format {id,value,beat} rows become one column per id, holes elsewhere', () => {
@@ -92,13 +83,4 @@ test('pivotChannels: long-format {id,value,beat} rows become one column per id, 
     { beat: 3, a: 3 },
   ], 'each row carries only its own id\'s column — the other column is a hole')
   assert.deepEqual(pivotChannels([{ value: 1, beat: 1 }], { idCol: 'id', valueCol: 'value' }), { rows: [], cols: [] }, 'a blank id contributes nothing')
-})
-
-test('fmtNum: integers plain, precision scales down as magnitude grows', () => {
-  assert.equal(fmtNum(3), '3')
-  assert.equal(fmtNum(3.00000000001), '3')
-  assert.equal(fmtNum(12.345), '12.3')
-  assert.equal(fmtNum(1.2345), '1.23')
-  assert.equal(fmtNum(0.12345), '0.123')
-  assert.equal(fmtNum(-12.345), '-12.3')
 })

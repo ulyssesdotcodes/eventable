@@ -5,7 +5,7 @@
 // lives in a WebGPU storage buffer and is advanced by a TSL compute kernel each
 // frame — nothing touches the CPU. This is a live, stateful simulation (not a
 // baked table), so for now it lives as a hardcoded sprite in the three scene
-// rather than as a DSL table. See notes/particles-integration-plan.md.
+// rather than as a DSL table.
 //
 // WebGPU ONLY: compute shaders don't exist under the WebGL2 fallback backend,
 // so the caller must only build this when renderer.backend.isWebGPUBackend.

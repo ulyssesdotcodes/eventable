@@ -69,7 +69,7 @@ export interface PlaybackViewState {
   // The engine's own TIMELINE pass, on the extended PLAYBACK axis, BEFORE the
   // warp: passesSince(timelineEpoch) modulo timeline.loops when the timeline
   // has more than one pass, else 0. A different axis from each kind's own
-  // entry in `passes` — see risk R1 in the rewrite notes.
+  // entry in `passes`.
   timelinePass: number
 }
 
@@ -93,14 +93,8 @@ export interface PlaybackOptions {
   // Fired when setLoopBeats actually changes the loop length — main.ts records
   // it on the activity table so the count syncs and replays with the session.
   onLoopBeats?: (n: number) => void
-  // Wall→musical clock shift: total ms the transport has spent paused before
-  // wallMs (this module's own pausedMsBefore fold, over the live activity
-  // events — main.ts wires it). Every wall timestamp the engine feeds into
-  // the wall-aligned math — "now", the tap anchor, a loop's shared apply
-  // stamp — passes through this first, so resuming continues from the paused
-  // musical moment instead of losing the paused span to the wall-aligned
-  // snap. Absent (tests, and any caller with no transport log) means "never
-  // paused" — today's behavior exactly.
+  // Wall→musical shift: this module's own pausedMsBefore fold over the
+  // activity events (main.ts wires it). Absent means never paused.
   pausedMsBefore?: (wallMs: number) => number
 }
 
@@ -191,8 +185,7 @@ export function transportStateFromEvents(events: Row[]): TransportState | null {
 // (the instant of pausing, not yet any elapsed pause). The machine is
 // idempotent on a repeated same-kind event (two authors racing to record the
 // same transition), not just main.ts's recorder: a redundant pause/play is a
-// no-op here too. A lone leading play (or no events at all) contributes
-// zero — the "never paused" default every un-augmented caller keeps.
+// no-op here too. A lone leading play (or no events at all) contributes zero.
 export function pausedMsBefore(events: Row[], t: number): number {
   let paused = 0
   let pauseStart: number | null = null
@@ -275,13 +268,9 @@ export function createPlaybackEngine(
   const epochNow = clock?.epochNow ?? ((): number => Date.now())
   const raf = clock?.raf ?? ((cb: () => void): void => { requestAnimationFrame(cb) })
 
-  // Wall→musical: subtract however much of `wallMs` was spent paused. Every
-  // wall-clock instant the wall-aligned math touches goes through this first
-  // (see wallAlignedPhase/passesSince below), so a resume continues from the
-  // paused musical moment and a loop wrap agrees with it, instead of the
-  // paused span reappearing as a snap-forward jump. Absent the callback
-  // (tests, solo with no transport log) this is the identity — today's
-  // un-paused behavior exactly.
+  // Wall→musical: every wall instant the wall-aligned math touches goes through
+  // this first (wallAlignedPhase/passesSince below), so a resume continues from
+  // the paused musical moment instead of the paused span reappearing as a jump.
   const musical = (wallMs: number): number => wallMs - (pausedMsBeforeCb?.(wallMs) ?? 0)
 
   let state: PlayState = 'idle'
@@ -605,16 +594,12 @@ export function createPlaybackEngine(
     raf(tick)
   }
 
-  // No-op if already playing (or nothing loaded) — safe to call from any
-  // state, unlike toggle(). main.ts calls this directly to mirror a peer's
-  // transport event, not just from the local Play button.
   function play(): void {
     if (!hasContent() || state === 'playing') return
     if (state === 'paused') resume()
     else startFresh()
   }
 
-  // play()'s mirror image: no-op if already paused (or nothing loaded).
   function pause(): void {
     if (!hasContent() || state === 'paused') return
     if (state === 'playing') pauseNow()

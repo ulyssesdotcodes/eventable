@@ -2,14 +2,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   initialState, foldStep, lineThrough, animatedPositions, compileFoldTable,
-  foldTablePositions, FoldError,
-  type FoldOutcome, type FoldSpec, type FoldState, type Line, type Vec2,
+  foldTablePositions, FoldError, type FoldOutcome, type Vec2,
 } from '../src/fold-engine.js'
+import { CRANE } from './util/crane.js'
 import { M } from '../src/vendor/flatfolder/math.js'
 import { X } from '../src/vendor/flatfolder/conversion.js'
 import { COMP } from '../src/vendor/linefolder/compute.js'
 
 const near = (a: number, b: number, tol = 1e-9): boolean => Math.abs(a - b) < tol
+const motion = (out: FoldOutcome) => ({ ...out.anim, FV: out.state.FV })
 
 test('diagonal fold: two faces, valid layer order, exact reflection', () => {
   const st = initialState()
@@ -34,9 +35,9 @@ test('diagonal fold: two faces, valid layer order, exact reflection', () => {
 test('animatedPositions: hinge swing from flat to the folded state', () => {
   const st = initialState()
   const out = foldStep(st, { line: lineThrough([0, 0], [1, 1]), move: [[0.9, 0.1]] })
-  const at0 = animatedPositions(out, 0)
-  const at1 = animatedPositions(out, 1)
-  const mid = animatedPositions(out, 0.5)
+  const at0 = animatedPositions(motion(out), 0)
+  const at1 = animatedPositions(motion(out), 1)
+  const mid = animatedPositions(motion(out), 0.5)
   for (let i = 0; i < out.state.V.length; ++i) {
     // t=0 matches the pre-fold flat coords; t=1 matches the folded state
     assert.ok(near(at0[i][0], out.anim.Vfrom[i][0]) && near(at0[i][1], out.anim.Vfrom[i][1]))
@@ -84,33 +85,12 @@ test('verifier errors: bad marker, degenerate move sets, unknown kind', () => {
   }), FoldError)
 })
 
-// The 16 validated folds of the traditional crane (fold lines and flap
-// markers extracted from line-folder's example sequence, MIT, and replayed
-// exactly against it — see notes/origami-research.md §8).
-const CRANE: { line: Line; move: Vec2[]; kind?: string; pick?: number }[] = [
-  { line: [[0.7071067812, -0.7071067812], 0], move: [[0.666667, 0.333333]] },
-  { line: [[0, 1], 0.5], move: [[0.333333, 0.166667]], kind: 'Inside Reverse' },
-  { line: [[1, 0], 0.5], move: [[0.833333, 0.666667]], kind: 'Inside Reverse' },
-  { line: [[0.9238795325, 0.3826834324], 0.3826834324], move: [[0.666667, 0.069036]], kind: 'Inside Reverse' },
-  { line: [[0.3826834324, 0.9238795325], 0.9238795325], move: [[0.930964, 0.666667]], kind: 'Inside Reverse' },
-  { line: [[0.7071067812, -0.7071067812], -0.2071067812], move: [[0.930964, 0.333333]] },
-  { line: [[0.9238795325, 0.3826834324], 0.3826834324], move: [[0.069036, 0.666667]], kind: 'Inside Reverse' },
-  { line: [[0.3826834324, 0.9238795325], 0.9238795325], move: [[0.666667, 0.930964]], kind: 'Inside Reverse' },
-  { line: [[0.8314696123, 0.555570233], 0.555570233], move: [[0.525373, 0.274808]], pick: 1 },
-  { line: [[0.555570233, 0.8314696123], 0.8314696123], move: [[0.897812, 0.666667]] },
-  { line: [[-0.7071067812, 0.7071067812], 0.2071067812], move: [[0.333333, 0.930964]] },
-  { line: [[0.555570233, 0.8314696123], 0.8314696123], move: [[0.666667, 0.897812]], pick: 1 },
-  { line: [[-0.8314696123, -0.555570233], -0.555570233], move: [[0.208238, 0.583899]], pick: 1 },
-  { line: [[0.94712842, -0.3208547274], 0.1274450135], move: [[0.906033, 0.694263]], kind: 'Inside Reverse' },
-  { line: [[-0.3208547274, 0.94712842], 0.498828679], move: [[0.246505, 0.203815]], kind: 'Inside Reverse' },
-  { line: [[-0.5819756983, 0.8132061772], 0.1036607424], move: [[0.096435, 0.080352]], kind: 'Inside Reverse' },
-]
 const CRANE_FACES = [2, 4, 6, 8, 10, 11, 13, 15, 20, 25, 26, 31, 36, 44, 52, 60]
 
 test('the 16-fold crane sequence solves exactly, step by step', () => {
   let st = initialState()
   CRANE.forEach((spec, i) => {
-    const out = foldStep(st, spec as FoldSpec)
+    const out = foldStep(st, spec)
     assert.equal(out.state.FV.length, CRANE_FACES[i], `step ${i + 1} face count`)
     assert.ok(out.state.layers.length === out.state.FV.length, `step ${i + 1} layers`)
     if (spec.kind !== undefined) assert.equal(out.type, spec.kind, `step ${i + 1} kind`)
@@ -174,7 +154,7 @@ test('swing direction follows the target stacking (both picks of a fold)', () =>
     const still = out.anim.moving.findIndex((m) => !m)
     const endsOnTop = out.state.layers[mover] > out.state.layers[still]
     const vi = out.state.sheet.findIndex((p) => near(p[0], 1) && near(p[1], 0))
-    const midZ = animatedPositions(out, 0.5)[vi][2]
+    const midZ = animatedPositions(motion(out), 0.5)[vi][2]
     assert.equal(Math.sign(midZ), endsOnTop ? 1 : -1, 'flap swings on its landing side')
   }
 })
@@ -183,14 +163,14 @@ test('independent flaps in one step swing to the sides they land on', () => {
   // the crane's wings fold both sheets in one step: the front wing lands
   // on top of the body, the back wing underneath — they must mirror
   let st = initialState()
-  for (const spec of CRANE) st = foldStep(st, spec as FoldSpec).state
+  for (const spec of CRANE) st = foldStep(st, spec).state
   const out = foldStep(st, {
     line: [[-0.7071067811865475, 0.7071067811865475], 0.1],
     move: [[0.858, 0.377], [0.377, 0.858]],
   })
   const senses = new Set(out.anim.dirs.filter((_, fi) => out.anim.moving[fi]))
   assert.deepEqual([...senses].sort(), [-1, 1], 'the two wings get opposite senses')
-  const mid = animatedPositions(out, 0.5)
+  const mid = animatedPositions(motion(out), 0.5)
   const zs = mid.map((p) => p[2]).filter((z) => Math.abs(z) > 1e-6)
   assert.ok(zs.some((z) => z > 0) && zs.some((z) => z < 0), 'wings mirror in ±z')
 })
@@ -205,7 +185,7 @@ test('a moving face straddling the fold line stays rigid mid-swing', () => {
   const d3 = (a: number[], b: number[]): number =>
     Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
   for (const t of [0.25, 0.5, 0.75]) {
-    const P = animatedPositions(out, t)
+    const P = animatedPositions(motion(out), t)
     for (const F of out.state.FV) {
       for (let j = 0; j < F.length; ++j) {
         const a = F[j], b = F[(j + 1) % F.length]
@@ -220,7 +200,7 @@ test('a moving face straddling the fold line stays rigid mid-swing', () => {
 
 test('layer indices match flat-folder\'s own per-cell stacking (crane)', () => {
   let st = initialState()
-  for (const spec of CRANE) st = foldStep(st, spec as FoldSpec).state
+  for (const spec of CRANE) st = foldStep(st, spec).state
   const [FOLD, CELL] = COMP.V_FV_2_FOLD_CELL(st.V, st.FV)
   const { Ff } = FOLD
   const CD = X.CF_edges_2_CD(CELL.CF, st.FO.map(([f1, f2, o]) =>
@@ -253,7 +233,7 @@ test('nudges are continuous across every step boundary (crane)', () => {
     return inside
   }
   for (const spec of CRANE) {
-    const out = foldStep(st, spec as FoldSpec)
+    const out = foldStep(st, spec)
     for (let fi = 0; fi < out.state.FV.length; ++fi) {
       const F = out.state.FV[fi]
       const c: Vec2 = [0, 0]

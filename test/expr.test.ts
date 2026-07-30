@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Table, createDSL, field, lit, slider, progress, hashOf, isStreamingNode, evalExpr } from '../src/dsl.js'
+import { Table, createDSL, field, lit, midi, slider, progress, hashOf, isStreamingNode, evalExpr } from '../src/dsl.js'
 import { getLineage, withLineage, type Row } from '../src/lineage.js'
 import { buildTimeline } from '../src/timeline.js'
 
@@ -56,34 +56,25 @@ test('unsubstituted progress() is streaming and reads 1 — the graceful degrade
   assert.equal(evalExpr(progress().node, {}, 0), 1)
 })
 
-test('call-node specs hash stably: identical equal, different fn or args differ', () => {
-  const a = t([{ v: 1 }]).map({ v: field('v').clamp(0, 1) })
-  const b = t([{ v: 1 }]).map({ v: field('v').clamp(0, 1) })
-  const c = t([{ v: 1 }]).map({ v: field('v').clamp(0, 2) })
-  const d = t([{ v: 1 }]).map({ v: field('v').abs() })
-  assert.equal(hashOf(a), hashOf(b))
-  assert.notEqual(hashOf(a), hashOf(c))
-  assert.notEqual(hashOf(a), hashOf(d))
+test('hashOf is structural: same graph+input hash equal, any change differs', () => {
+  const base = t([{ v: 1 }]).map({ v: field('v').clamp(0, 1) })
+  assert.equal(hashOf(base), hashOf(t([{ v: 1 }]).map({ v: field('v').clamp(0, 1) })))
+  assert.notEqual(hashOf(base), hashOf(t([{ v: 1 }]).map({ v: field('v').clamp(0, 2) })), 'arg')
+  assert.notEqual(hashOf(base), hashOf(t([{ v: 1 }]).map({ v: field('v').abs() })), 'fn')
+  assert.notEqual(hashOf(base), hashOf(t([{ v: 2 }]).map({ v: field('v').clamp(0, 1) })), 'input rows')
+  const filt = t([{ v: 1 }]).filter(field('v').gt(1))
+  assert.notEqual(hashOf(filt), hashOf(t([{ v: 1 }]).filter(field('v').gt(2))), 'filter spec')
+  // Retargeting a midi binding must invalidate the cook memo — the one axis
+  // here with a user-visible failure mode.
+  const bind = t([{ id: 'x' }]).derive({ amount: midi('c4') })
+  assert.equal(hashOf(bind), hashOf(t([{ id: 'x' }]).derive({ amount: midi('c4') })))
+  assert.notEqual(hashOf(bind), hashOf(t([{ id: 'x' }]).derive({ amount: midi('e4') })), 'midi note')
 })
 
 test('Expr verbs carry lineage forward', () => {
   const base = new Table([withLineage({ v: 5 }, [{ table: 'src', index: 0 }])])
   const out = base.filter(field('v').gt(1)).map({ v: field('v') })
   assert.deepEqual(getLineage(out.rows[0]), [{ table: 'src', index: 0 }])
-})
-
-test('identical op-graphs hash equal; differing specs hash differently', () => {
-  const a = t([{ v: 1 }]).filter(field('v').gt(1))
-  const b = t([{ v: 1 }]).filter(field('v').gt(1))
-  const c = t([{ v: 1 }]).filter(field('v').gt(2))
-  assert.equal(hashOf(a), hashOf(b))
-  assert.notEqual(hashOf(a), hashOf(c))
-})
-
-test('a changed input changes the hash (Merkle propagation)', () => {
-  const a = t([{ v: 1 }]).map({ v: field('v') })
-  const b = t([{ v: 2 }]).map({ v: field('v') })
-  assert.notEqual(hashOf(a), hashOf(b))
 })
 
 // time is an absolute UTC epoch ms (see tap-log.ts), not time-since-first-tap —

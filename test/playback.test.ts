@@ -2,24 +2,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { wallAlignedTick, wallAlignedLoop, loopEpochsFromApplies, loopBeatsFromEvents } from '../src/playback.js'
 
-test('wallAlignedTick is 0 exactly at the anchor instant', () => {
-  assert.equal(wallAlignedTick(1000, 1000, 4), 0)
-})
-
-test('wallAlignedTick advances linearly with elapsed wall time', () => {
+test('wallAlignedTick: phase since the anchor, wrapped into [0, loopSeconds), 0 for a non-positive loop', () => {
+  assert.equal(wallAlignedTick(1000, 1000, 4), 0, 'at the anchor instant')
   assert.equal(wallAlignedTick(1000 + 1500, 1000, 4), 1.5)
-})
-
-test('wallAlignedTick wraps into [0, loopSeconds) past one loop', () => {
   assert.equal(wallAlignedTick(1000 + 4500, 1000, 4), 0.5)
   assert.equal(wallAlignedTick(1000 + 4000 * 3 + 500, 1000, 4), 0.5, 'wraps across multiple loops the same way')
-})
-
-test('wallAlignedTick handles "now" before the anchor (still non-negative)', () => {
-  assert.equal(wallAlignedTick(1000 - 500, 1000, 4), 3.5)
-})
-
-test('wallAlignedTick returns 0 for a non-positive loop length', () => {
+  assert.equal(wallAlignedTick(1000 - 500, 1000, 4), 3.5, 'before the anchor: still non-negative')
   assert.equal(wallAlignedTick(5000, 1000, 0), 0)
   assert.equal(wallAlignedTick(5000, 1000, -4), 0)
 })
@@ -253,35 +241,20 @@ test('retempo re-anchors to the new tapped tempo without moving a paused playhea
 
 // --- pausedMsBefore — the wall→musical clock shift ---------------------------
 
-test('pausedMsBefore sums closed pause/play pairs elapsed before t', () => {
+test('pausedMsBefore sums paused wall time before t (open pauses included, junk `at` ignored)', () => {
   const events: Row[] = [
     { kind: 'playback-pause', at: 1000 },
-    { kind: 'playback-play', at: 1500 },
+    { kind: 'playback-pause' },             // junk rows interleaved between valid
+    { kind: 'playback-play', at: 1500 },    // pairs must not perturb the fold
+    { kind: 'playback-pause', at: NaN },
     { kind: 'playback-pause', at: 2000 },
     { kind: 'playback-play', at: 2200 },
   ]
   assert.equal(pausedMsBefore(events, 1000), 0, 'right at the pause boundary, no elapsed pause yet')
   assert.equal(pausedMsBefore(events, 1500), 500)
   assert.equal(pausedMsBefore(events, 3000), 700, 'both closed pairs: 500 + 200')
-})
-
-test('pausedMsBefore counts an open (unclosed) pause up to t', () => {
-  const events: Row[] = [{ kind: 'playback-pause', at: 1000 }]
-  assert.equal(pausedMsBefore(events, 1000), 0)
-  assert.equal(pausedMsBefore(events, 4000), 3000)
-})
-
-test('pausedMsBefore ignores events with a missing or invalid at', () => {
-  const events: Row[] = [
-    { kind: 'playback-pause' }, // no `at`
-    { kind: 'playback-pause', at: 'nope' }, // not a number
-    { kind: 'playback-pause', at: NaN },
-  ]
-  assert.equal(pausedMsBefore(events, 9000), 0)
-})
-
-test('pausedMsBefore treats a lone leading play (or no events at all) as zero pause', () => {
-  assert.equal(pausedMsBefore([{ kind: 'playback-play', at: 1000 }], 9000), 0)
+  assert.equal(pausedMsBefore([{ kind: 'playback-pause', at: 1000 }], 4000), 3000, 'an open pause counts up to t')
+  assert.equal(pausedMsBefore([{ kind: 'playback-play', at: 1000 }], 9000), 0, 'a lone leading play is zero')
   assert.equal(pausedMsBefore([], 9000), 0)
 })
 
@@ -311,11 +284,8 @@ test('transportStateFromEvents reads the latest event by at (not encounter order
 
 // --- playbackOrigin — the musical grid's origin absent a tap tempo -----------
 
-test('playbackOrigin prefers a tap anchor over anything on the activity table', () => {
-  assert.equal(playbackOrigin([{ kind: 'session-start', at: 100 }], 999), 999)
-})
-
-test('playbackOrigin falls back to the earliest session-start; a playback-play is never an origin', () => {
+test('playbackOrigin: tap anchor, else earliest session-start, else the epoch', () => {
+  assert.equal(playbackOrigin([{ kind: 'session-start', at: 100 }], 999), 999, 'a tap anchor wins')
   assert.equal(
     playbackOrigin([{ kind: 'session-start', at: 500 }, { kind: 'playback-play', at: 900 }], null),
     500,
@@ -324,9 +294,6 @@ test('playbackOrigin falls back to the earliest session-start; a playback-play i
   // A recorded play is usually a resume — adopting it would re-base the grid
   // mid-session (the snap-at-wrap regression), so solo stays epoch-anchored.
   assert.equal(playbackOrigin([{ kind: 'playback-play', at: 700 }], null), 0)
-})
-
-test('playbackOrigin is the Unix epoch with no taps and no activity events (or only invalid ones)', () => {
   assert.equal(playbackOrigin([], null), 0)
   assert.equal(playbackOrigin([{ kind: 'session-start' }, { kind: 'playback-play', at: 'x' }], null), 0)
 })
@@ -443,50 +410,33 @@ test('the engine feeds ctx.loop() — whole loops since the origin (activity-log
 
 // --- wallAlignedLoop — the quotient companion to wallAlignedTick -------------
 
-test('wallAlignedLoop counts completed loops since the anchor', () => {
+test('wallAlignedLoop: completed loops since the anchor — the quotient to wallAlignedTick\'s remainder', () => {
   assert.equal(wallAlignedLoop(1000, 1000, 4), 0)
   assert.equal(wallAlignedLoop(1000 + 3999, 1000, 4), 0, 'still inside the first loop')
   assert.equal(wallAlignedLoop(1000 + 4000, 1000, 4), 1, 'increments exactly at the wrap')
   assert.equal(wallAlignedLoop(1000 + 4000 * 3 + 500, 1000, 4), 3)
-})
-
-test('wallAlignedLoop and wallAlignedTick are the quotient/remainder of one division', () => {
-  const anchorMs = 1000, loopSeconds = 4, nowMs = anchorMs + 10500
-  const elapsed = (nowMs - anchorMs) / 1000
-  assert.equal(
-    wallAlignedLoop(nowMs, anchorMs, loopSeconds) * loopSeconds + wallAlignedTick(nowMs, anchorMs, loopSeconds),
-    elapsed,
-  )
-})
-
-test('wallAlignedLoop returns 0 for a non-positive loop length', () => {
+  assert.equal(wallAlignedLoop(11500, 1000, 4) * 4 + wallAlignedTick(11500, 1000, 4), 10.5, 'quotient + remainder is the whole elapsed span')
   assert.equal(wallAlignedLoop(5000, 1000, 0), 0)
   assert.equal(wallAlignedLoop(5000, 1000, -4), 0)
 })
 
 // --- loopEpochsFromApplies — shared loop epochs from stamped apply pulses ----
 
-test('loopEpochsFromApplies keeps the newest apply stamp per changed kind', () => {
-  const epochs = loopEpochsFromApplies([
+test('loopEpochsFromApplies keeps the newest stamp per changed kind, ignoring unstamped and non-apply events', () => {
+  assert.deepEqual(loopEpochsFromApplies([
     { kind: 'apply', changed: ['scene', 'hydra'], at: 1000 },
     { kind: 'apply', changed: ['scene'], at: 5000 },
-  ])
-  assert.deepEqual(epochs, { scene: 5000, hydra: 1000 })
-})
-
-test('loopEpochsFromApplies ignores non-apply events and unstamped (legacy) pulses', () => {
-  const epochs = loopEpochsFromApplies([
+  ]), { scene: 5000, hydra: 1000 })
+  assert.deepEqual(loopEpochsFromApplies([
     { kind: 'peer-join', at: 1 },
     { kind: 'session-start' },
     { kind: 'apply' }, // legacy pulse, no stamp
     { kind: 'apply', changed: ['timeline'], at: 2000 },
     { kind: 'apply', changed: [], at: 9000 }, // a run that changed nothing
-  ])
-  assert.deepEqual(epochs, { timeline: 2000 })
-})
-
-test('a stamped apply without a changed list counts for every kind', () => {
-  assert.deepEqual(loopEpochsFromApplies([{ kind: 'apply', at: 7 }]), { scene: 7, timeline: 7, hydra: 7, bauble: 7, post: 7 })
+  ]), { timeline: 2000 })
+  // Omitting `changed` is how evaluate() spells "every kind" on a fresh log.
+  assert.deepEqual(loopEpochsFromApplies([{ kind: 'apply', at: 7 }]),
+    { scene: 7, timeline: 7, hydra: 7, bauble: 7, post: 7 })
 })
 
 // --- loopBeatsFromEvents — the loop length folded off the activity table -----

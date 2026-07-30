@@ -3,7 +3,7 @@
 // behavior, driven directly — cook-worker.ts is only a postMessage shell).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { packRows, unpackRows, packCooked, unpackCooked } from '../src/cook-transfer.js'
+import { packRows, unpackRows, unpackCooked } from '../src/cook-transfer.js'
 import { createCookService, type CookResponse } from '../src/cook-service.js'
 import { createCookClient, type WorkerLike } from '../src/cook-client.js'
 import { getLineage, withLineage, type Row } from '../src/lineage.js'

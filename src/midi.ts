@@ -6,24 +6,11 @@
 // mapping, plus the loop iteration it was recorded in.
 
 import { beatToFrame } from './constants.js'
-import type { StampedEvent } from './event-log.js'
+import type { LogStore, StampedEvent } from './event-log.js'
 import type { Row } from './lineage.js'
 import type { EvalCtx } from './dsl.js'
 
-const SEMITONES: Record<string, number> = {
-  c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11,
-}
 const SHARP_NAMES = ['c', 'c#', 'd', 'd#', 'e', 'f', 'f#', 'g', 'g#', 'a', 'a#', 'b']
-
-// "c4" / "C#4" / "db3" → MIDI note number (C4 = 60), or null if unparseable.
-export function noteToNumber(name: string): number | null {
-  const m = /^([a-g])([#b]?)(-?\d+)$/i.exec(String(name).trim())
-  if (!m) return null
-  const base = SEMITONES[m[1].toLowerCase()]
-  const accidental = m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0
-  const octave = parseInt(m[3], 10)
-  return (octave + 1) * 12 + base + accidental
-}
 
 // MIDI note number → canonical lower-case note name (sharps), e.g. 60 → "c4".
 export function numberToNote(n: number): string {
@@ -102,10 +89,12 @@ export function sampleMidiAt(index: MidiIndex, note: string, channel: number | n
 }
 
 // ── The fold: event log → current table ─────────────────────────────────────
-// Per note: only the events from the most recent loop it was recorded in — a
-// new take replaces the old, untouched notes carry forward — deduped to one
-// row per (channel, frame) so a burst at one source frame collapses to the
-// last value. Pure; the log is never rewritten.
+// Per note: the events of its latest take — a take ends when the recorder's
+// pass tag CHANGES, in log order. The tag is per-replica, so it is compared for
+// difference, never magnitude: a peer's counter or a reloaded page's fresh 0 is
+// a different take, not a stale one. Deduped to one row per (channel, frame) so
+// a burst at one source frame collapses to the last value. Pure; the log is
+// never rewritten.
 export function currentMidiRows(events: StampedEvent[]): Row[] {
   const perNote = new Map<string, { loop: number; byKey: Map<string, Row> }>()
   for (const e of events) {
@@ -114,12 +103,7 @@ export function currentMidiRows(events: StampedEvent[]): Row[] {
     const note = e.note as string
     const loop = (e.loop as number | undefined) ?? 0
     let entry = perNote.get(note)
-    if (!entry || loop > entry.loop) {
-      entry = { loop, byKey: new Map() }
-      perNote.set(note, entry)
-    } else if (loop < entry.loop) {
-      continue // stale (shouldn't happen with a monotonic loop counter)
-    }
+    if (!entry || loop !== entry.loop) { entry = { loop, byKey: new Map() }; perNote.set(note, entry) }
     const frame = beatToFrame((e.beat as number | undefined) ?? 1)
     entry.byKey.set(`${e.channel as number}:${frame}`, {
       type: 'midi', note, noteNum: e.noteNum, channel: e.channel,
@@ -134,18 +118,8 @@ export function currentMidiRows(events: StampedEvent[]): Row[] {
 
 // ── Live input ───────────────────────────────────────────────────────────────
 
-// The midi log, abstracted to just what the input needs — the exact twin of
-// sliders' SliderStore. main.ts backs this with the editable-table store —
-// riding the store is what makes recorded MIDI sync over multiplayer and
-// persist in the session.
-export interface MidiStore {
-  record(kind: string, payload?: Record<string, unknown>): void
-  events(): StampedEvent[]
-  onChange(cb: () => void): void
-}
-
 export interface MidiInputOptions {
-  store: MidiStore
+  store: LogStore
   // Where new events get stamped: the playhead's content/source position (a
   // 1-indexed beat, Playback.currentSourceBeats) — the coordinate the baked
   // scene is keyed to, so a recorded sweep tracks the timeline mapping.
@@ -162,8 +136,8 @@ export interface MidiInput {
   eventRows(): Row[]
   clear(): void
   // Per-frame evaluation context for resolveBindings: midi(note) samples the
-  // folded table at `srcFrame`.
-  ctxAt(srcFrame: number): EvalCtx
+  // folded table at `srcFrame`. Null with nothing recorded.
+  ctxAt(srcFrame: number): EvalCtx | null
   // Feed a raw message (exposed for the browser listener and for tests).
   feed(data: ArrayLike<number>): void
 }
@@ -195,9 +169,9 @@ export function createMidiInput({ store, getIndex, getLoop }: MidiInputOptions):
       .filter((e) => e.kind === 'midi' || e.kind === 'clear')
       .map(({ kind, seq, t, loop, beat, note, channel, value }) => ({ seq, t, kind, loop, beat, note, channel, value })),
     clear: () => store.record('clear'),
-    ctxAt: (srcFrame: number): EvalCtx => ({
-      midi: (note, channel) => sampleMidiAt(idx(), note, channel, srcFrame),
-    }),
+    ctxAt: (srcFrame: number): EvalCtx | null => (rows().length
+      ? { midi: (note, channel) => sampleMidiAt(idx(), note, channel, srcFrame) }
+      : null),
     feed,
   }
 }
@@ -215,11 +189,6 @@ export function subscribeWebMidi(input: Pick<MidiInput, 'feed'>): void {
     return
   }
   access.call(navigator).then((midi) => {
-    const inputs = [...midi.inputs.values()]
-    console.log('[midi] access granted, inputs:', inputs.length)
-    for (const device of inputs) {
-      console.log('[midi] subscribing to input:', (device as unknown as { name?: string }).name ?? device)
-      device.onmidimessage = (e) => input.feed(e.data)
-    }
+    for (const device of midi.inputs.values()) device.onmidimessage = (e) => input.feed(e.data)
   }).catch((err) => { console.warn('[midi] access denied:', err) })
 }

@@ -88,7 +88,9 @@ export function initHydra(
       const fn = new Function(...scopeKeys, code)
       fn(...scopeValues)
     } catch (err) {
-      console.error('hydra sketch error:', err)
+      // Only the applied sketch: the preview instance compiles half-typed text
+      // by design (post-scene setPreview does the same).
+      if (preview) console.error('hydra sketch error:', err)
     }
   }
 

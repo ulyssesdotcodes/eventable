@@ -56,7 +56,7 @@ export type VisualizerKind = Exclude<(typeof LOOP_KINDS)[number], 'timeline'>
 // source beat through any timeline warp. It is a different axis from
 // playback.ts's own TIMELINE pass (playback space, before the warp — see
 // PlaybackViewState.timelinePass); conflating the two mis-places content
-// under an active timeline (see risk R1 in the rewrite notes).
+// under an active timeline.
 export function passOffset(max: number, loopFrames: number, passAt: (epochMs: number) => number, epoch: number): PassState & { offset: number } {
   const loops = loopFrames > 0 ? Math.floor(max / loopFrames) + 1 : 1
   const pass = loops > 1 ? passAt(epoch) % loops : 0

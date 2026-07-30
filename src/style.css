@@ -1076,14 +1076,6 @@ html, body {
   justify-content: space-between;
 }
 
-.table-pane-title {
-  color: #8ca0b8;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .table-tabs {
   display: none;
   gap: 4px;
@@ -2329,9 +2321,6 @@ html, body {
   border-right: 5px solid #4a9eff;
 }
 
-/* A read-only out-view handle: same event language as the open table's, a
-   shade quieter (it isn't draggable), with a pointer cursor — clicking one
-   opens its view's panel tab. */
 /* A placement with no store row to write back to (warped, retimed, wrapped
    into a later content pass, or cooked from something uneditable — see
    Handle.source): a press opens the band's table instead of dragging. */

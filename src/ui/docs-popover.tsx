@@ -198,7 +198,7 @@ export function DocsPopover(props: { currentTable?: Accessor<string | null> }) {
   const activeHelp = () => DSL_HELP.find((d) => d.id === tab())
 
   return (
-    <div class="settings-wrap docs-wrap" ref={wrap}>
+    <div class="settings-wrap" ref={wrap}>
       <button
         class="settings-btn docs-btn"
         title="DSL reference & tables"

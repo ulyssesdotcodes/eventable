@@ -4,7 +4,7 @@
 // surfaces. Range computation is deliberately a pure pre-step (computeColRanges)
 // so legends can reuse the numbers without a second scan.
 
-import type { Table } from './dsl.js'
+import type { GraphSpec, Table } from './dsl.js'
 import type { Row } from './lineage.js'
 
 export const SERIES_COLORS = [
@@ -14,13 +14,6 @@ export const SERIES_COLORS = [
 const PLAYHEAD_COLOR = '#e94560'
 const ACTIVE_ROW_COLOR = '#e9a23b'
 const TICK_LABEL_COLOR = '#607a96'
-
-export interface GraphSpec {
-  table: Table
-  columns: string[]
-  viewName?: string | null
-  name?: string
-}
 
 export interface ResolvedSpec {
   rows: Row[]

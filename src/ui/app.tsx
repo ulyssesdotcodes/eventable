@@ -27,7 +27,6 @@ const DESKTOP_QUERY = '(min-width: 768px)'
 
 export interface AppProps {
   tablePanel: TablePanelController
-  // The relocated editor-header chrome (D6) — settings + scene import/export.
   chrome: PanelChrome
   sessionBar: SessionBarController
   sessionSelector: SessionSelectorController

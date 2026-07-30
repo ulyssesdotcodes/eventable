@@ -65,7 +65,7 @@ export function Transport(props: {
       </div>
       <Show when={props.tapControl}>
         {(tap) => (
-          <div class="playback-row tap-row">
+          <div class="playback-row">
             <button
               id="tap-beat-btn"
               title="Tap a beat to set the tempo — the whole loop plays at it"

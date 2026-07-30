@@ -416,7 +416,7 @@ export interface RemoteCursor {
 }
 
 // The program is the "code" table's rows: every non-empty cell is a fragment of
-// one concatenated source, joined in storage order (OQ2). Concatenating rather
+// one concatenated source, joined in storage order. Concatenating rather
 // than executing each fragment separately is what lets a top-level const in one
 // row be visible to the next — the natural thing when a working program is
 // split in two.

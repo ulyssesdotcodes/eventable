@@ -8,7 +8,7 @@ import {
   createSignal, createMemo, createEffect, on, onCleanup, untrack,
   For, Index, Show, type Accessor, type JSX, type Setter,
 } from 'solid-js'
-import { SERIES_COLORS, chartDataFor, computeColRanges, drawSeriesChart, fmtNum, PANEL_CHART_STYLE, type GraphSpec, type ColRange } from '../graph-panel.js'
+import { SERIES_COLORS, chartDataFor, computeColRanges, drawSeriesChart, fmtNum, PANEL_CHART_STYLE, type ColRange } from '../graph-panel.js'
 import {
   MAX_ROWS, COLUMN_TYPES, EVENTS_SUFFIX, formatCell, formatEditableCell,
   allNames, nextTableName, fallbackTab, chartFor, bottomSlotFor, hasCodeColumn,
@@ -24,7 +24,7 @@ import { timelineSegments } from '../timeline.js'
 import { CodeFacade, ExprOverlay, MobileEditorPopover } from './facade.js'
 import { DocsPopover } from './docs-popover.js'
 import { Icon } from './icon.js'
-import type { Table } from '../dsl.js'
+import type { GraphSpec, Table } from '../dsl.js'
 import type { EditTarget } from '../editor-host.js'
 import type { Row } from '../lineage.js'
 import { DISABLED_COL, cellValid, invalidColumns, isExprCellText, type EditableTableStore, type ColumnType, type EditableColumn } from '../editable-tables.js'
@@ -49,8 +49,7 @@ function PresenceNames(nameProps: { peers: PeerPresence[] }) {
   )
 }
 
-// The chrome that used to live in the editor pane's header (D6) — settings and
-// scene import/export, relocated verbatim into the table pane.
+// Settings and scene import/export, rendered in the table pane's header.
 export interface PanelChrome {
   vimMode: boolean
   midiEnabled: boolean
@@ -92,8 +91,7 @@ interface PanelProps extends TablePanelOptions {
   stripRow: Accessor<{ table: string; row: number } | null>
 }
 
-// `children` slots under the header: the session selector / room chip /
-// session bar, relocated from the editor pane.
+// `children` slots under the header: session selector / room chip / session bar.
 function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JSX.Element }) {
   const { store, views, graphs, current, setCurrent, presence } = props
 
@@ -427,9 +425,16 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   // in place — no unmount, so CodeFacade's onCleanup demote never fires and
   // the promoted view is left orphaned under a label that now means something
   // else. Flush it first, while its commit still validates against the cell it
-  // was opened on (see cellTarget in main.ts).
-  const facadeSlots = createMemo(() => `${current()}:${codeTargets().length}`)
-  createEffect(on(facadeSlots, () => props.host.demote(), { defer: true }))
+  // was opened on (see cellTarget in main.ts). Keyed on the promoted cell's own
+  // text, not the row count: an append (a peer's, or the local "+ row") leaves
+  // that cell alone and must not demote a half-typed buffer.
+  createEffect(on(codeTargets, (next, prev) => {
+    const label = props.host.promoted()
+    if (!label) return
+    const after = next.find((t) => t.label === label)
+    const before = prev?.find((t) => t.label === label)
+    if (!after || (before && before.text !== after.text)) props.host.demote()
+  }, { defer: true }))
 
   const roRowText = (i: number) =>
     roCols().map((c) => formatCell(c, shownRows()[i]?.[c])).join(' ').toLowerCase()
@@ -522,7 +527,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     if (chart()) drawCurrentChart()
   })
 
-  // --- warp map (D5) -----------------------------------------------------------
+  // --- warp map ----------------------------------------------------------------
   // A timeline-schema table's compiled segments, plotted as source beat against
   // playback beat: the shape of the warp the retimed content rides.
   let warpCanvas: HTMLCanvasElement | undefined
@@ -544,13 +549,13 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
 
   const warpRo = new ResizeObserver(() => drawWarp())
   onCleanup(() => warpRo.disconnect())
+  // Split like the chart pair above: re-observing an element fires the
+  // observer's initial notification, so a combined effect drew twice per frame.
   createEffect(() => {
-    tick(); views(); props.playIndex()
     warpRo.disconnect()
-    if (bottomSlot() !== 'warp') return
-    if (warpCanvas) warpRo.observe(warpCanvas)
-    drawWarp()
+    if (bottomSlot() === 'warp' && warpCanvas) warpRo.observe(warpCanvas)
   })
+  createEffect(() => { tick(); views(); props.playIndex(); drawWarp() })
 
   // --- editable sub-views ------------------------------------------------------
 
@@ -1066,7 +1071,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   return (
     <>
       <div class="table-pane-header">
-        <div class="table-pane-header-row table-pane-header-titles">
+        <div class="table-pane-header-row">
           <div class="table-tabs">
             <For each={names()}>{(n) => <Tab name={n} />}</For>
           </div>
@@ -1078,7 +1083,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             </For>
           </select>
         </div>
-        <div class="table-pane-header-row table-pane-header-controls">
+        <div class="table-pane-header-row">
           <button
             class="table-tab-add"
             title="Add a new editable table"
@@ -1324,7 +1329,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             </button>
           </div>
         </Show>
-        {/* Bottom slot (R9: capped and scrollable so it shares the pane's
+        {/* Bottom slot (capped and scrollable so it shares the pane's
             height with the chart above rather than fighting it). */}
         <div class="table-bottom-slot" ref={bottomEl}>
           <Show when={bottomSlot() === 'facades'}>
@@ -1458,7 +1463,7 @@ export function createTablePanel(
     setGraphs(newSpecs: GraphSpec[] | null): void {
       const byName = new Map<string, GraphSpec>()
       for (const spec of newSpecs ?? []) {
-        const name = spec.viewName ?? spec.table?.name
+        const name = spec.viewName ?? spec.table.name
         if (name) byName.set(name, spec)
       }
       setGraphs(byName)

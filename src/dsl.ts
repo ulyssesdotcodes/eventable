@@ -12,7 +12,7 @@
 
 import { rasterizeRows } from './rasterize.js'
 import { timelineSegments, placeBeat } from './timeline.js'
-import { withLineage, carry, unionLineage, getLineage, type Row } from './lineage.js'
+import { withLineage, carry, unionLineage, type Row } from './lineage.js'
 import { FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS } from './constants.js'
 import { compileFoldTable, foldValueAt, type FoldTableProgram } from './fold-engine.js'
 import type { Schema } from './editable-tables.js'
@@ -291,10 +291,12 @@ export function evalExpr(n: ExprNode, row: Row, i: number, ctx?: EvalCtx): unkno
 // unchanged when nothing below it matched — source nodes live inside memoized
 // rows, so an in-place rewrite would freeze the first frame's values into the
 // cook memo.
-export function substituteExpr(n: ExprNode, sub: { progress?: number; fields?: Row }): ExprNode {
+export function substituteExpr(n: ExprNode, sub: { progress?: number; fields?: Row; idx?: number }): ExprNode {
   switch (n.k) {
     case 'progress':
       return sub.progress !== undefined ? { k: 'lit', v: sub.progress } : n
+    case 'idx':
+      return sub.idx !== undefined ? { k: 'lit', v: sub.idx } : n
     case 'field': {
       if (!sub.fields) return n
       const v = sub.fields[n.name]
@@ -338,7 +340,10 @@ export const isBinding = (v: unknown): v is Binding =>
 
 // Exported for expr-cell.ts: "=" cells bake with exactly derive()'s semantics.
 export function bakeExpr(node: ExprNode, row: Row, i: number): unknown {
-  return isStreamingNode(node) ? { $expr: node } : evalExpr(node, row, i)
+  // idx() is not streaming, so it never reaches resolveBindings' per-frame ctx —
+  // bake it into the deferred node or every row would resolve it as 0. Only on
+  // this branch: the other one runs per field per row in the cook hot loop.
+  return isStreamingNode(node) ? { $expr: substituteExpr(node, { idx: i }) } : evalExpr(node, row, i)
 }
 
 // Returns the same row object when there's nothing to resolve.
@@ -453,10 +458,9 @@ export function materialize(t: Table, ctx: MatCtx, memo?: Memo): Row[] {
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface GraphSpec {
-  table?: Table
+  table: Table
   columns: string[]
   viewName?: string | null
-  name?: string
 }
 
 export interface PhysicsEngine {
@@ -640,6 +644,9 @@ export class Table {
   filter(pred: Record<string, unknown> | Expr): Table {
     if (pred instanceof Expr) {
       const node = pred.node
+      if (isStreamingNode(node)) {
+        throw new Error('filter() cannot read a live source (midi/slider/time/loop/progress) — row presence is decided at cook time. Gate a value instead: derive({ on: expr.slider("gate") }).')
+      }
       return this._xf('filterE', { pred }, (ins) => ins[0].filter((r, i) => evalExpr(node, r, i)).map(recarry), false)
     }
     if (typeof pred === 'function') {
