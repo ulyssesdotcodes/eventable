@@ -216,12 +216,6 @@ export function createEventLog(
   }
 }
 
-export function foldEvents<S>(events: StampedEvent[], reducer: (state: S, event: StampedEvent) => S, initial: S): S {
-  let state = initial
-  for (const e of events) state = reducer(state, e)
-  return state
-}
-
 /** Unsigned 32-bit run seed for the DSL's per-view PRNGs (see runtime.ts). */
 export function randomSeed(): number {
   return (Math.random() * 0x100000000) >>> 0

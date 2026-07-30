@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  Table, field, midi, slider, time, loop, isBinding, isStreamingNode, resolveBindings, hashOf, type Expr,
+  Table, field, idx, midi, slider, time, loop, isBinding, isStreamingNode, resolveBindings, hashOf, type Expr,
 } from '../src/dsl.js'
 import { rasterizeRows } from '../src/rasterize.js'
 import { buildMidiIndex, sampleMidiAt, midiRow, decodeMidi } from '../src/midi.js'
@@ -124,4 +124,14 @@ test('a midi binding in a hydra setVariable event survives to hydraFrameAt and r
 
   const resolved = resolveBindings(frame!.vars, { midi: () => 0.6 })
   assert.equal(resolved.speed, 0.6)
+})
+
+test('filter() rejects a streaming predicate — row presence is decided at cook time', () => {
+  assert.throws(() => t([{ v: 1 }]).filter(slider('gate').gt(0.5)), /live source/)
+})
+
+test('idx() inside a streaming expression bakes per row rather than resolving to 0', () => {
+  const rows = t([{}, {}, {}]).derive({ y: idx().mul(10).add(slider('h')) }).rows
+  const ctx = { slider: () => 1 }
+  assert.deepEqual(rows.map((r) => resolveBindings(r, ctx).y), [1, 11, 21])
 })

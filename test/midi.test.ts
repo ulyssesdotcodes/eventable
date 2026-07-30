@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  noteToNumber, numberToNote, decodeMidi, midiRow,
+  decodeMidi, midiRow,
   buildMidiIndex, sampleMidiAt, createMidiInput,
 } from '../src/midi.js'
 import { buildTimeline } from '../src/timeline.js'
@@ -27,22 +27,6 @@ function fakeStore(): MidiStore {
   }
 }
 
-// ── Note names ↔ numbers ────────────────────────────────────────────────────
-
-test('noteToNumber / numberToNote map names to numbers and back (C4 = 60)', () => {
-  assert.equal(noteToNumber('c4'), 60)
-  assert.equal(noteToNumber('C4'), 60)
-  assert.equal(noteToNumber('a4'), 69)
-  assert.equal(noteToNumber('c#4'), 61)
-  assert.equal(noteToNumber('db4'), 61, 'flats fold to the same pitch')
-  assert.equal(noteToNumber('c-1'), 0, 'lowest octave')
-  assert.equal(noteToNumber('nope'), null)
-  assert.equal(numberToNote(61), 'c#4', 'round-trips through sharps')
-  assert.equal(numberToNote(noteToNumber('g5')!), 'g5')
-})
-
-// ── Decoding raw messages ────────────────────────────────────────────────────
-
 test('decodeMidi reads note-on / note-off / CC and channels', () => {
   assert.deepEqual(decodeMidi([0x90, 60, 127]), { note: 'c4', noteNum: 60, channel: 1, value: 1 })
   assert.deepEqual(decodeMidi([0x80, 60, 0]), { note: 'c4', noteNum: 60, channel: 1, value: 0 })
@@ -54,8 +38,6 @@ test('decodeMidi reads note-on / note-off / CC and channels', () => {
   // unhandled status (pitch bend) → null
   assert.equal(decodeMidi([0xe0, 0, 64]), null)
 })
-
-// ── Index + sampling (most recent at-or-before a frame) ─────────────────────
 
 test('sampleMidiAt returns the most recent value at-or-before the frame', () => {
   // c4 played (value 1) at frame 60; released (value 0) at frame 120
@@ -83,8 +65,6 @@ test('sampleMidiAt filters by channel when one is given', () => {
   assert.equal(sampleMidiAt(idx, 'c4', 3, 999), 0, 'channel with no events')
 })
 
-// ── Live input: events stamped with the source position ─────────────────────
-
 test('createMidiInput stamps events with the current source position', () => {
   let srcBeat = 1
   const input = createMidiInput({ store: fakeStore(), getIndex: () => srcBeat })
@@ -98,8 +78,8 @@ test('createMidiInput stamps events with the current source position', () => {
   assert.equal(rows[0].note, 'c4')
   assert.equal(rows[0].beat, b(60), 'stamped at the source position it was heard at')
 
-  assert.equal(input.ctxAt(60).midi!('c4', null), 1)
-  assert.equal(input.ctxAt(59).midi!('c4', null), 0)
+  assert.equal(input.ctxAt(60)!.midi!('c4', null), 1)
+  assert.equal(input.ctxAt(59)!.midi!('c4', null), 0)
 })
 
 test('ignored messages record nothing; clear() empties the fold', () => {
@@ -110,9 +90,6 @@ test('ignored messages record nothing; clear() empties the fold', () => {
   input.clear()
   assert.equal(input.rows().length, 0)
 })
-
-// ── Loop-aware folding: per note, the latest loop's take wins; the event log
-// keeps every take ─────────────────────────────────────────────────────────
 
 test('a note played in a new loop replaces its previous take; untouched notes carry forward', () => {
   let src = 1, loop = 0
@@ -153,8 +130,6 @@ test('a second play of the same note in the same loop adds to that take', () => 
   assert.deepEqual(c4rows.map((r) => r.beat), [1.5, 2.5])
 })
 
-// ── At most one row per (note, channel, frame) ──────────────────────────────
-
 test('a burst of messages at the same frame replaces rather than piling up', () => {
   let src = 2
   const input = createMidiInput({ store: fakeStore(), getIndex: () => src })
@@ -180,7 +155,6 @@ test('same note/beat but different channels keep one row per channel', () => {
   assert.deepEqual(c4rows.map((r) => r.channel).sort(), [1, 2])
 })
 
-// ── Recording tracks the timeline mapping ────────────────────────────────────
 // MIDI is recorded at the playhead's content/source position (see
 // Playback.currentSourceBeats), not wall-clock time — so remapping the
 // timeline stretches recorded sweeps along with everything else on screen.

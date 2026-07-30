@@ -315,12 +315,6 @@ function clearTaps(): void {
 
 let currentPlayIndex = 0
 
-// Live MIDI rides the shared editable-table store, so recordings sync and
-// persist like any other table; events are stamped with the playhead's source
-// position so a recorded sweep follows the timeline mapping. Only the
-// *hardware* side is opt-in (Web MIDI pops a browser permission prompt) — the
-// fold always exists, so peer- or session-recorded MIDI plays back regardless.
-let loopCount = 0
 // Whether the reset button's rewind is armed; stepping happens in onTick every
 // REWIND_STEP_BEATS of playhead beats.
 let rewinding = false
@@ -341,6 +335,8 @@ const logTableStore = (table: string): MidiStore => ({
 })
 
 const midiStore = logTableStore('midi')
+
+let loopCount = 0
 
 const midiInput: MidiInput = createMidiInput({
   store: midiStore,
@@ -493,7 +489,7 @@ const playbackOptions: PlaybackOptions = {
   tapControl: { tap: recordTap, clear: clearTaps, rows: tapRows, anchor: tapAnchor },
   // Not gated on the local hardware toggle: the recording may be a peer's or
   // a saved session's.
-  midiCtxAt: (srcFrame) => (midiInput.rows().length ? midiInput.ctxAt(srcFrame) : null),
+  midiCtxAt: (srcFrame) => midiInput.ctxAt(srcFrame),
   sliderCtxAt: (srcFrame) => (sliderInput && sliderInput.defs().length ? sliderInput.ctxAt(srcFrame) : null),
   onLoopBeats: (n) => recordLoopBeats(n),
   pausedMsBefore: (wallMs) => pausedMsBefore(editableStore.get(ACTIVITY_TABLE)?.events ?? [], wallMs),
@@ -630,16 +626,18 @@ function logTables(): Array<{ name: string; rows: Row[] }> {
   const logs: Array<{ name: string; rows: Row[] }> = []
   // Folded MIDI take + raw log, once anything has been recorded — locally, by
   // a peer, or in the loaded session.
-  if (midiInput.rows().length) {
-    logs.push({ name: 'midi', rows: midiInput.rows() })
+  const midiRows = midiInput.rows()
+  if (midiRows.length) {
+    logs.push({ name: 'midi', rows: midiRows })
     logs.push({ name: 'midi' + EVENTS_SUFFIX, rows: midiInput.eventRows() })
   }
   // Folded slider automation + raw log, only once something is recorded — an
   // empty pair just clutters the panel and can't be deleted, being synthetic.
   // ("sliders" itself is the definitions table, shown like any other view.)
-  if (sliderInput && sliderInput.rows().length) {
-    logs.push({ name: 'slider', rows: sliderInput.rows() })
-    logs.push({ name: 'slider' + EVENTS_SUFFIX, rows: sliderInput.eventRows() })
+  const sliderRows = sliderInput?.rows() ?? []
+  if (sliderRows.length) {
+    logs.push({ name: 'slider', rows: sliderRows })
+    logs.push({ name: 'slider' + EVENTS_SUFFIX, rows: sliderInput!.eventRows() })
   }
   for (const name of editableStore.listNames()) {
     // The "slider"/"midi" log tables back recorded automation — surfaced
@@ -657,7 +655,7 @@ function logTables(): Array<{ name: string; rows: Row[] }> {
 // comes and goes with the take and always shows the recording.
 function tablesForDisplay(views: Map<string, Table>): Map<string, Table> {
   const display = new Map(views)
-  if (!display.has('taps')) display.set('taps', new Table(tapRows()))
+  if (tapRows().length && !display.has('taps')) display.set('taps', new Table(tapRows()))
   for (const { name, rows } of logTables()) {
     const alwaysShow = name === 'slider' || name === 'slider' + EVENTS_SUFFIX
     if (!alwaysShow && display.has(name)) continue
@@ -852,9 +850,13 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     const changed = diffCooked(cooked)
     if (broadcast) {
       const changedKinds = Object.keys(changed).filter((k) => changed[k as keyof typeof changed])
-      // The seed rides the apply (OQ3) — the replay unit that scrubSession
-      // re-cooks from.
-      editableStore.recordApply({ changed: changedKinds, at: Date.now(), seed })
+      // The seed rides the apply — the replay unit that scrubSession re-cooks
+      // from. `lastCookedSigs` survives a store clear (new session, sample load,
+      // scene import), so on a fresh log it would report nothing changed and
+      // leave every visualizer on the old session's epoch; omitting `changed`
+      // entirely is how loopEpochsFromApplies already spells "every kind".
+      const prior = (editableStore.get(ACTIVITY_TABLE)?.events ?? []).some((e) => e.kind === APPLY_KIND)
+      editableStore.recordApply({ ...(prior && { changed: changedKinds }), at: Date.now(), seed })
     }
     syncSessionBar()
     applyCooked(cooked)

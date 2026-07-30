@@ -427,9 +427,16 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   // in place — no unmount, so CodeFacade's onCleanup demote never fires and
   // the promoted view is left orphaned under a label that now means something
   // else. Flush it first, while its commit still validates against the cell it
-  // was opened on (see cellTarget in main.ts).
-  const facadeSlots = createMemo(() => `${current()}:${codeTargets().length}`)
-  createEffect(on(facadeSlots, () => props.host.demote(), { defer: true }))
+  // was opened on (see cellTarget in main.ts). Keyed on the promoted cell's own
+  // text, not the row count: an append (a peer's, or the local "+ row") leaves
+  // that cell alone and must not demote a half-typed buffer.
+  createEffect(on(codeTargets, (next, prev) => {
+    const label = props.host.promoted()
+    if (!label) return
+    const after = next.find((t) => t.label === label)
+    const before = prev?.find((t) => t.label === label)
+    if (!after || (before && before.text !== after.text)) props.host.demote()
+  }, { defer: true }))
 
   const roRowText = (i: number) =>
     roCols().map((c) => formatCell(c, shownRows()[i]?.[c])).join(' ').toLowerCase()
@@ -544,13 +551,13 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
 
   const warpRo = new ResizeObserver(() => drawWarp())
   onCleanup(() => warpRo.disconnect())
+  // Split like the chart pair above: re-observing an element fires the
+  // observer's initial notification, so a combined effect drew twice per frame.
   createEffect(() => {
-    tick(); views(); props.playIndex()
     warpRo.disconnect()
-    if (bottomSlot() !== 'warp') return
-    if (warpCanvas) warpRo.observe(warpCanvas)
-    drawWarp()
+    if (bottomSlot() === 'warp' && warpCanvas) warpRo.observe(warpCanvas)
   })
+  createEffect(() => { tick(); views(); props.playIndex(); drawWarp() })
 
   // --- editable sub-views ------------------------------------------------------
 
