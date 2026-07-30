@@ -72,7 +72,7 @@ function setProgram(code: string): void {
   editableStore.setRow('code', 0, { code })
 }
 
-// The seed an apply ran with (OQ3), with the legacy code-row `seed` cell as the
+// The seed an apply ran with, with the legacy code-row `seed` cell as the
 // fallback for sessions recorded before the column moved onto the apply.
 function seedAt(applyId: string | null, rows: Row[]): number {
   if (applyId != null) {
@@ -497,19 +497,10 @@ function recordLoopBeats(n: number): void {
   editableStore.record(ACTIVITY_TABLE, 'set-loop-beats', { beats: n, at: Date.now() })
 }
 
-// Play/pause ride the activity table too, so they sync, persist, and show in
-// the activity tab. Two guards keep the stream honest:
-// - `transportQuiet`: only a genuine local toggle is a user transport action.
-//   Programmatic transitions — the autoplay on opening a page, mirroring a
-//   peer's merged event — must not record: a late joiner's autoplay races the
-//   room's join snapshot, and recording it would stamp a fresh 'play' that
-//   overrides the room's paused state (an un-recorded autoplay just gets
-//   corrected by the mirror once the snapshot merges).
-// - The recordLoopBeats-style echo guard: a state already folded from the
-//   table (our own event echoing back) must not re-record, or two clients
-//   ping-pong the same transition. "No events yet" (null) deliberately does
-//   NOT count as a match for 'playing', so a session's first real toggle is
-//   still recorded rather than looking like a silent echo.
+// Play/pause ride the activity table so they sync, persist and replay. Only a
+// genuine local toggle records: a programmatic transition (boot autoplay,
+// mirroring a peer) would stamp a 'play' over the room's paused state. Null (no
+// events yet) deliberately isn't a match, so a session's first toggle records.
 let transportQuiet = false
 function quietTransport(fn: () => void): void {
   transportQuiet = true
@@ -808,7 +799,7 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
       setError?.((err as Error).message)
       return
     }
-    // R7: compare the whole fragment snapshot, not one row — a partially
+    // Compare the whole fragment snapshot, not one row — a partially
     // clobbered room is worse than either side winning outright.
     if (obsoleteIfProgramChanged && editableStore.has('code') && currentProgram() !== code) return
     setError?.(null)
@@ -1425,11 +1416,7 @@ async function bootRoom(room: string): Promise<void> {
       const n = loopBeatsFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? [])
       if (n != null) playback.setLoopBeats(n)
     }
-    // A peer toggled play/pause — mirror it locally so the whole room's
-    // transport stays together. play()/pause() are idempotent, so this is
-    // harmless even when the merge is just our own recorded event echoing
-    // back (already reflected locally before we ever recorded it). Quiet:
-    // a mirrored transition is not a user action to re-record.
+    // A peer toggled play/pause — mirror it (idempotent, so an echo is harmless).
     if (transportChanged) {
       const state = transportStateFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? [])
       quietTransport(() => (state === 'paused' ? playback.pause() : playback.play()))
@@ -1438,7 +1425,7 @@ async function bootRoom(room: string): Promise<void> {
       // The merge already made their fragments ours; re-cook the joined
       // program at the seed their apply carried.
       const code = currentProgram()
-      // R7 again: two applies can be in flight at once, and the loser must not
+      // Two applies can be in flight at once, and the loser must not
       // re-write the "code" table back to its own older fragment snapshot.
       if (code) void evaluate(code, { setError, seed: seedAt(editableStore.currentHead(), codeRows()), broadcast: false, obsoleteIfProgramChanged: true })
     }
@@ -1474,14 +1461,9 @@ async function firstRun(): Promise<void> {
   }
   syncSessionBar()
   refreshSelector()
-  // Opening the page shows the program already in the session's transport
-  // state — playing by default (today's behavior with no transport history),
-  // but paused if the room (or a resumed session) already is. This is also
-  // the late-joiner landing spot: bootRoom's local-log restore/merge above
-  // has already folded in whatever transport history exists before this
-  // runs. Quiet — this is a default, not a user toggle, so it must record
-  // nothing (see recordTransport); the onMerge mirror corrects it once the
-  // room's join snapshot lands.
+  // Open the page in the session's transport state. Quiet — a default is not a
+  // user toggle (see recordTransport); the onMerge mirror fixes a late joiner
+  // whose autoplay beat the room's join snapshot.
   quietTransport(() => {
     if (transportStateFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? []) === 'paused') playback.pause()
     else playback.play()

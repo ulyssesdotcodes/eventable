@@ -183,13 +183,13 @@ export function chartFor(
 ): ChartData | null {
   if (!name) return null
   let spec = graphByName.get(name)
-  // slider/midi are flat per-id logs (R8): numericColumns would merge every
+  // slider/midi are flat per-id logs: numericColumns would merge every
   // id's column into one meaningless line, now that the sectioned timeline
   // pane shows the same data correctly grouped by id (pivotChannels).
   if (!spec && !name.endsWith(EVENTS_SUFFIX) && name !== 'code' && name !== 'slider' && name !== 'midi' && !editableStore.isLog(name)) {
     const t = views.get(name)
     // A timeline-schema view (an .outTimeline() result is cooked-only, so the
-    // editableStore branch above never sees it) already gets the dedicated D5
+    // editableStore branch above never sees it) already gets the dedicated
     // warp map below the grid — merging its beats, offsets and rates into one
     // generic line on top of that is the same duplicate-visualization the
     // slider/midi exclusion prevents.
@@ -222,10 +222,10 @@ function isTimelineSchema(columnNames: string[]): boolean {
 }
 
 // The table pane's bottom slot, below the grid: a code-bearing editable table
-// gets its rows' facades (D3); a timeline-schema table gets a passive warp map
-// (D5, timelineSegments -> drawSeriesChart) instead; anything else, nothing.
+// gets its rows' facades; a timeline-schema table gets a passive warp map
+// (timelineSegments -> drawSeriesChart) instead; anything else, nothing.
 // 'slider'/'midi' are panel-only synthetic views spliced in by tablesForDisplay
-// (main.ts), never real editableStore tables — R11.
+// (main.ts), never real editableStore tables.
 export function bottomSlotFor(
   name: string | null,
   views: Map<string, Table>,

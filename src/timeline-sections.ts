@@ -42,7 +42,7 @@ export interface TimelineSection {
 // content passes — each `loopBeats` long, stacked on top of the source beat
 // (visualizer.ts's passOffset) — while a band with no content pass of its own
 // (particles, recorded automation, the warp itself) rides playback's TIMELINE
-// pass at the plain source beat. The two axes are independent (risk R1), so
+// pass at the plain source beat. The two axes are independent, so
 // which one a band reports is decided by whether it has passes of its own.
 export function sectionBeat(
   section: TimelineSection,
@@ -111,13 +111,13 @@ export function sectionsFor(input: {
 
   // 'slider'/'midi' are panel-only synthetic views spliced in by
   // tablesForDisplay (main.ts), never editableStore tables — so they're named
-  // by their tab, never looked up in the store (R11).
+  // by their tab, never looked up in the store.
   const channel = (name: string, view: string, rows: Row[], idCol: string, pass = FLAT): void => {
     if (rows.length) sections.push({ name, kind: 'channel', view, rows, pass, drag: 'none', channel: { idCol, valueCol: 'value' } })
   }
   channel('slider', 'slider', input.sliderRows, 'id')
   channel('midi', 'midi', input.midiRows, 'note')
-  // Post only (OQ5): hydra/bauble/particles fold setVariable last-write-wins,
+  // Post only: hydra/bauble/particles fold setVariable last-write-wins,
   // with no per-name track to plot. Each track's rows stay contiguous and in
   // frame order, which is the order a pivoted trace is drawn in.
   channel('post vars', viewOf('post'), [...varTracks(buildPostIndex(cooked.postRows)).values()].flat(), 'name', passes.post ?? FLAT)

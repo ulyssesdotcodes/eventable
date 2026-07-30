@@ -1,26 +1,9 @@
-// The timeline pane — the top of #side-panels, and the humble Solid view over
-// ../timeline-strip.ts (geometry/handle/drag model), ../timeline-sections.ts
-// (which bands exist) and ../graph-panel.ts (the channel plots).
-//
-// One transport row, one beat ruler, then one band per TimelineSection stacked
-// vertically, all sharing the ruler's x axis (beatToX's 1..maxBeats+1 — which
-// TIMELINE_CHART_STYLE's zero horizontal padding makes the canvas bands share
-// too). Vertical stacking is the DOM's job now: each band lays out exactly one
-// table at the one pass playback is currently showing, so a band's lanes are
-// only its own overlapping spans.
-//
-// Dragging survives on the placements that can be written back: a handle
-// carries `source` only when it is drawn where its store row says it is (see
-// Handle.source), so a warped, retimed or pass-wrapped placement is inert and
-// a press on it just opens that band's table tab instead. Mid-drag the values
-// are previewed locally (the `preview` signal, merged by withPreview before
-// re-derivation) — the store is touched exactly once, on release.
-//
-// Per-frame discipline: vs() updates every animation frame, so each field it
-// needs is read through its own narrow memo and the layout/canvas layers
-// depend only on the store's own tick and the geometry. The playhead, the
-// elapsed tint and the per-band beat readouts are the only things that move at
-// frame rate.
+// The timeline pane — the humble Solid view over ../timeline-strip.ts
+// (geometry/handle/drag model), ../timeline-sections.ts (which bands exist)
+// and ../graph-panel.ts (the channel plots). One transport row, one beat
+// ruler, then one band per TimelineSection, all sharing the ruler's x axis
+// (beatToX's 1..maxBeats+1 — which TIMELINE_CHART_STYLE's zero horizontal
+// padding makes the canvas bands share too).
 
 import { createSignal, createMemo, createEffect, onMount, onCleanup, For, Index, Show, type Accessor } from 'solid-js'
 import { Transport } from './transport.js'
@@ -97,7 +80,6 @@ export function TimelinePane(props: {
   const geometry = createMemo<StripGeometry>(() => ({ width: width(), maxBeats: maxBeats() }))
   const grid = createMemo(() => gridLines(geometry().maxBeats, geometry().width))
   const timelineLoops = createMemo(() => buildTimeline(props.timelineRows(), loopBeats()).loops)
-  // The only two things that move per playback frame.
   const playheadX = createMemo(() => beatToX(geometry(), scrubPos() + 1))
 
   onMount(() => {

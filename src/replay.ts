@@ -42,8 +42,6 @@ interface Runtime {
 
 export function cookProgram(runtime: Runtime, code: string, seed: number, dataCache?: Map<string, string>): CookedResult {
   const result = runtime.run(code, { seed, dataCache })
-  // Each consumer prefers its combined .outX() "(system)" view (built only
-  // when something routed to it), falling back to the bare-name lookup.
   const view = (name: string): Table | undefined =>
     result.views.get(outViewName(name)) ?? result.views.get(name)
   const scene = view('scene')

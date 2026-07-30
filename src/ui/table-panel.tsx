@@ -49,8 +49,7 @@ function PresenceNames(nameProps: { peers: PeerPresence[] }) {
   )
 }
 
-// The chrome that used to live in the editor pane's header (D6) — settings and
-// scene import/export, relocated verbatim into the table pane.
+// Settings and scene import/export, rendered in the table pane's header.
 export interface PanelChrome {
   vimMode: boolean
   midiEnabled: boolean
@@ -92,8 +91,7 @@ interface PanelProps extends TablePanelOptions {
   stripRow: Accessor<{ table: string; row: number } | null>
 }
 
-// `children` slots under the header: the session selector / room chip /
-// session bar, relocated from the editor pane.
+// `children` slots under the header: session selector / room chip / session bar.
 function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JSX.Element }) {
   const { store, views, graphs, current, setCurrent, presence } = props
 
@@ -529,7 +527,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     if (chart()) drawCurrentChart()
   })
 
-  // --- warp map (D5) -----------------------------------------------------------
+  // --- warp map ----------------------------------------------------------------
   // A timeline-schema table's compiled segments, plotted as source beat against
   // playback beat: the shape of the warp the retimed content rides.
   let warpCanvas: HTMLCanvasElement | undefined
@@ -1331,7 +1329,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             </button>
           </div>
         </Show>
-        {/* Bottom slot (R9: capped and scrollable so it shares the pane's
+        {/* Bottom slot (capped and scrollable so it shares the pane's
             height with the chart above rather than fighting it). */}
         <div class="table-bottom-slot" ref={bottomEl}>
           <Show when={bottomSlot() === 'facades'}>
