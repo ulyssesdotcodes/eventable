@@ -34,7 +34,7 @@ html, body {
 #side-panels {
   display: flex;
   flex-direction: column;
-  flex: 3;
+  flex: 4;
   min-height: 0;
   overflow: hidden;
 }
@@ -61,8 +61,11 @@ html, body {
 }
 
 /* ── Canvas pane ── */
+/* Stacked (mobile) the output is a confidence monitor — the phone is a remote
+   controller, so the timeline and tables below get the bulk of the height. The
+   desktop query above gives the canvas the room instead. */
 #canvas-pane {
-  flex: 4;
+  flex: 2;
   position: relative;
   overflow: hidden;
   min-height: 0;
@@ -1076,6 +1079,18 @@ html, body {
   justify-content: space-between;
 }
 
+/* Sessions + run history, behind the header's clock toggle (collapsed by
+   default on mobile — see chromeCollapsed). */
+.table-pane-chrome {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.table-pane-chrome.collapsed {
+  display: none;
+}
+
 .table-pane-title {
   color: #8ca0b8;
   font-size: 11px;
@@ -1255,6 +1270,15 @@ html, body {
   overflow: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+}
+
+/* On a short screen the bottom slot's share would otherwise squeeze the grid
+   to nothing (it is the flex item that can shrink). Keep a header plus a row
+   or two on screen and let the slot scroll instead. */
+@media (max-width: 767px) {
+  .tab-scroll {
+    min-height: 92px;
+  }
 }
 
 /* The grid is focusable for arrow-key navigation; the focused cell carries the

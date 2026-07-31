@@ -135,6 +135,10 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   mobileQuery.addEventListener('change', onMobileChange)
   onCleanup(() => mobileQuery.removeEventListener('change', onMobileChange))
   const [graphCollapsed, setGraphCollapsed] = createSignal(mobileQuery.matches)
+  // Sessions + run history: authoring chrome, and on a phone it costs more
+  // rows than it is worth mid-performance (it lived in the editor pane, which
+  // was collapsed by default on mobile, before it moved here).
+  const [chromeCollapsed, setChromeCollapsed] = createSignal(mobileQuery.matches)
   // Mobile soft keyboards have no Tab key; on a coarse pointer a cell editor's
   // "next" action walks to the next cell in the row instead of closing to
   // arrow-key navigation (which needs a physical keyboard anyway).
@@ -1098,6 +1102,15 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             onInput={(e) => setFilter(e.currentTarget.value.toLowerCase())}
           />
           <span class="table-count">{countText()}</span>
+          <button
+            class="collapse-btn chrome-toggle"
+            title={chromeCollapsed() ? 'Show sessions and run history' : 'Hide sessions and run history'}
+            aria-label={chromeCollapsed() ? 'Show sessions and run history' : 'Hide sessions and run history'}
+            aria-expanded={!chromeCollapsed()}
+            onClick={() => setChromeCollapsed((c) => !c)}
+          >
+            <Icon name="clock" />
+          </button>
           <DocsPopover currentTable={current} />
           <div class="settings-wrap" ref={settingsWrap}>
             <button
@@ -1163,7 +1176,10 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
           </div>
         </div>
       </div>
-      {props.children}
+      {/* Hidden with CSS rather than unmounted: the session selector, room chip
+          and run bar are mounted once for the app's lifetime, same as this
+          panel. */}
+      <div class="table-pane-chrome" classList={{ collapsed: chromeCollapsed() }}>{props.children}</div>
       <div class="tab-content">
         <Show when={pickerOpen()}>
           <TablePicker />
