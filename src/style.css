@@ -9,6 +9,7 @@ html, body {
   height: 100%;
   overflow: hidden;
   background: #1a1a2e;
+  color: #c8d6e5;
   font-family: system-ui, -apple-system, sans-serif;
 }
 
@@ -1306,7 +1307,6 @@ html, body {
   min-width: 560px;
   border-collapse: collapse;
   font-size: 11px;
-  color: #c8d6e5;
 }
 
 .events-table thead th {
@@ -1356,7 +1356,6 @@ html, body {
 
 .events-table td {
   padding: 3px 6px;
-  color: #c8d6e5;
 }
 
 /* ── Editable tables ── */
@@ -1771,12 +1770,22 @@ html, body {
   gap: 0 8px;
 }
 
+/* Too narrow a pane to fit the tracks and the grids overflow their own box:
+   without the min-width the head's and cards' backgrounds would stop at the
+   pane's edge (and .row-card's clip would eat the trailing columns) while the
+   cells scroll on past them. */
+.editor-list-head,
+.editor-list {
+  min-width: min-content;
+}
+
 .editor-list-head {
   position: sticky;
   top: 0;
   z-index: 1;
   background: #0f3460;
   padding: 3px 5px;
+  color: #607a96;
 }
 
 .editor-list-head .editable-col-head {
@@ -1876,9 +1885,13 @@ html, body {
   display: none;
 }
 
+/* The card is sized by its field grid (see the min-width above); containment
+   keeps a long unbreakable token in the code from widening the card instead and
+   pulling its columns out of line with the header. */
 .row-card .code-facade {
   border-bottom: none;
   background: transparent;
+  contain: inline-size;
 }
 
 /* An empty code cell (a setCode row with nothing typed yet) still has to be
