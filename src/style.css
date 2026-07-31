@@ -34,7 +34,7 @@ html, body {
 #side-panels {
   display: flex;
   flex-direction: column;
-  flex: 3;
+  flex: 4;
   min-height: 0;
   overflow: hidden;
 }
@@ -61,8 +61,11 @@ html, body {
 }
 
 /* ── Canvas pane ── */
+/* Stacked (mobile) the output is a confidence monitor — the phone is a remote
+   controller, so the timeline and tables below get the bulk of the height. The
+   desktop query above gives the canvas the room instead. */
 #canvas-pane {
-  flex: 4;
+  flex: 2;
   position: relative;
   overflow: hidden;
   min-height: 0;
@@ -842,19 +845,41 @@ html, body {
 .facade-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 3px 8px;
+  overflow: hidden;
 }
 
-.facade-label,
 .editor-surface-label {
-  flex: 1;
   color: #8ca0b8;
   font-family: monospace;
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* The row's other cells, so a stack of editors is identifiable at a glance.
+   They take the header's slack (the label and Apply keep their size) and the
+   ones that do not fit are dropped rather than wrapping the header taller. */
+.facade-context {
+  color: #cfe0f0;
+  background: #16324f;
+  border: 1px solid #24466b;
+  border-radius: 3px;
+  padding: 0 5px;
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.facade-context:last-of-type {
+  margin-right: auto;
 }
 
 .facade-run {
@@ -918,9 +943,9 @@ html, body {
   background: rgba(22, 33, 62, 0.45) !important;
 }
 
-/* The table pane's bottom slot: the facade stack, or a timeline table's warp
-   map. R9 — it shares the pane's height with the chart above rather than
-   fighting it, so it is capped and scrolls. */
+/* The table pane's bottom slot: a timeline table's warp map. R9 — it shares
+   the pane's height with the chart above rather than fighting it, so it is
+   capped and scrolls. */
 .table-bottom-slot {
   flex: 0 1 auto;
   min-height: 0;
@@ -1074,6 +1099,18 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* Sessions + run history, behind the header's clock toggle (collapsed by
+   default on mobile — see chromeCollapsed). */
+.table-pane-chrome {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.table-pane-chrome.collapsed {
+  display: none;
 }
 
 .table-tabs {
@@ -1249,6 +1286,15 @@ html, body {
   overscroll-behavior: contain;
 }
 
+/* On a short screen the bottom slot's share would otherwise squeeze the grid
+   to nothing (it is the flex item that can shrink). Keep a header plus a row
+   or two on screen and let the slot scroll instead. */
+@media (max-width: 767px) {
+  .tab-scroll {
+    min-height: 92px;
+  }
+}
+
 /* The grid is focusable for arrow-key navigation; the focused cell carries the
    visible ring, so the container itself needs no outline. */
 .tab-scroll:focus {
@@ -1291,7 +1337,8 @@ html, body {
 }
 
 /* Provenance: rows feeding the current frame (which data is used now). */
-.events-table tbody tr.row-source td {
+.events-table tbody tr.row-source td,
+.row-card.row-source > .card-fields {
   box-shadow: inset 2px 0 0 #e9a23b;
   background: rgba(233, 162, 59, 0.1);
 }
@@ -1301,7 +1348,8 @@ html, body {
    than the plain focused-cell ring (.cell-focused, an inset outline only)
    since this marks the row the strip is interacting with right now, not just
    the last-focused cell. */
-.events-table tbody tr.row-strip-active td {
+.events-table tbody tr.row-strip-active td,
+.row-card.row-strip-active > .card-fields {
   background: rgba(233, 69, 96, 0.18);
   box-shadow: inset 0 0 0 1px rgba(233, 69, 96, 0.7);
 }
@@ -1493,9 +1541,14 @@ html, body {
    visible/editable but reads as "commented out" — the program no longer
    sees it (see editable-tables.ts's DISABLED_COL/ensure()). Excludes the
    actions cell so its duplicate/delete buttons stay legible. */
-.events-table tbody tr.row-disabled td:not(.row-actions) {
+.events-table tbody tr.row-disabled td:not(.row-actions),
+.row-card.row-disabled .editable-cell {
   opacity: 0.45;
   font-style: italic;
+}
+
+.row-card.row-disabled .code-facade {
+  opacity: 0.45;
 }
 
 /* Lives inside a column's settings popover, not the header itself — a full-
@@ -1671,27 +1724,6 @@ html, body {
   padding: 1px 4px;
 }
 
-/* Code cells: a one-line chip tinted by the cell's language — the same tint
-   its facade below the grid wears. Clicking it promotes that facade. */
-.code-chip {
-  display: inline-block;
-  max-width: 320px;
-  padding: 0 5px;
-  border-radius: 3px;
-  border-left: 3px solid #1a5090;
-  background: #12203c;
-  font-family: monospace;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #c8d6e5;
-}
-
-.code-chip[data-lang='hydra'] { border-left-color: #9be09e; color: #9be09e; }
-.code-chip[data-lang='bauble'] { border-left-color: #e0b25b; color: #e0b25b; }
-.code-chip[data-lang='post'] { border-left-color: #b78ce0; color: #b78ce0; }
-.code-chip[data-lang='expr'] { border-left-color: #5bb6e0; color: #5bb6e0; }
-
 /* Enum cells: an always-live dropdown (code-declared columns only) so a value
    is one pick away during a performance, no click-to-edit step. */
 .cell-enum {
@@ -1714,7 +1746,8 @@ html, body {
   background: rgba(224, 76, 76, 0.16);
   box-shadow: inset 0 0 0 1px rgba(224, 76, 76, 0.55);
 }
-.events-table tbody tr.row-invalid td:first-child {
+.events-table tbody tr.row-invalid td:first-child,
+.row-card.row-invalid {
   box-shadow: inset 3px 0 0 rgba(224, 76, 76, 0.7);
 }
 
@@ -1723,6 +1756,135 @@ html, body {
 .editable-cell.cell-inert .cell-value,
 .editable-cell.cell-inert .cell-enum {
   opacity: 0.4;
+}
+
+/* ── Editor list ── */
+/* A code table's rows as cards: the row's non-code cells columnar, its code
+   editor underneath. Separate grids don't share sizing, so the header and
+   every card's field line read one track list off the wrapper's --tracks —
+   that is what keeps the columns aligned down the list. */
+.editor-list-head,
+.card-fields {
+  display: grid;
+  grid-template-columns: var(--tracks);
+  align-items: center;
+  gap: 0 8px;
+}
+
+.editor-list-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0f3460;
+  padding: 3px 5px;
+}
+
+.editor-list-head .editable-col-head {
+  position: relative;
+  max-width: none;
+}
+
+/* One line per header — a track is sized by the list, not by its title, so a
+   long name ellipsizes instead of making the whole header row taller, and the
+   column menu lifts out of the flow (on hover) rather than taking a third of
+   a narrow column's width from the name. */
+.editor-list-head .col-name-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editor-list-head .col-settings-wrap {
+  position: absolute;
+  top: 0;
+  right: 0;
+  opacity: 0;
+}
+
+.editor-list-head .editable-col-head:hover .col-settings-wrap,
+.editor-list-head .col-settings-wrap:focus-within {
+  opacity: 1;
+}
+
+/* A touch device never hovers, so hiding it there would leave the only way to
+   retype, rename or drop a code table's column invisible. */
+@media (hover: none) {
+  .editor-list-head .col-settings-wrap {
+    opacity: 1;
+  }
+}
+
+.editor-list-head .add-col-btn {
+  font-size: 10px;
+  padding: 1px 4px;
+}
+
+/* Expanding "+ column" would otherwise widen the last track and pull every
+   card's fields out of line with the header. */
+.editor-list-head .add-col-head {
+  position: relative;
+  height: 100%;
+}
+
+.editor-list-head .add-col-head .new-col-name {
+  position: absolute;
+  right: 0;
+  z-index: 2;
+}
+
+.editor-list {
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.row-card {
+  background: #13294b;
+  border: 1px solid #1a3f6b;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.card-fields {
+  padding: 2px 0;
+  background: rgba(15, 52, 96, 0.45);
+  font-size: 11px;
+}
+
+.card-fields .editable-cell {
+  min-width: 0;
+  max-width: none;
+  padding: 1px 4px;
+}
+
+.card-fields .row-actions {
+  justify-content: flex-end;
+}
+
+/* Apply only when there is something to apply: a disabled button per card is
+   chrome, and the head collapses to nothing without it. */
+.row-card .facade-head {
+  padding: 0 8px;
+}
+
+.row-card .facade-run {
+  margin-left: auto;
+}
+
+.row-card .facade-run:disabled {
+  display: none;
+}
+
+.row-card .code-facade {
+  border-bottom: none;
+  background: transparent;
+}
+
+/* An empty code cell (a setCode row with nothing typed yet) still has to be
+   clickable. */
+.row-card .facade-code {
+  min-height: 1.4em;
 }
 
 /* "/"-opened table switcher: a small command-palette-style overlay anchored to
@@ -1988,8 +2150,7 @@ html, body {
    every band and the ruler measure against (see beatToX), so it carries no
    horizontal padding of its own. The pane gives up all the height the divider
    asks for, and a program can stack ~9 bands, so the stack scrolls rather than
-   clipping its lower bands away with no affordance (as .table-bottom-slot
-   does for the facade stack). */
+   clipping its lower bands away with no affordance. */
 .timeline-sections {
   position: relative;
   margin: 0 8px 6px;
@@ -2021,23 +2182,34 @@ html, body {
   z-index: 3;
 }
 
+/* The band's label, overlaid on the band rather than stacked above it (see
+   ui/timeline-pane.tsx). z-index 1 puts it over the resting handles but under
+   the one being dragged (z-index 2), and it stays transparent to the pointer
+   apart from the name button — whose own presses bubble on to the band. */
 .timeline-section-header {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  line-height: 12px;
+  padding: 0 3px;
+  pointer-events: none;
 }
 
 .timeline-section-name {
-  background: none;
+  background: rgba(22, 33, 62, 0.72);
   border: none;
-  padding: 0;
+  padding: 0 3px;
+  border-radius: 2px;
   color: #8fa9c4;
   font-family: monospace;
-  font-size: 9px;
+  font-size: 10px;
+  line-height: 14px;
   cursor: pointer;
   white-space: nowrap;
+  pointer-events: auto;
 }
 
 .timeline-section-name:hover {
@@ -2047,9 +2219,13 @@ html, body {
 /* This band's own current beat — 'pass n/m · beat x.x', shown only when the
    band actually has passes to distinguish. */
 .timeline-section-beat {
-  color: #607a96;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: rgba(22, 33, 62, 0.72);
+  color: #8fa9c4;
   font-family: monospace;
-  font-size: 9px;
+  font-size: 10px;
+  line-height: 14px;
   white-space: nowrap;
 }
 
@@ -2072,20 +2248,14 @@ html, body {
   pointer-events: none;
 }
 
-/* One section's band. The wrap is a plain (overflow: visible) positioning
-   context for the floating drag readout (below), which needs to sit above the
-   band itself — the band proper keeps its own overflow:hidden for the
-   coverage/grid/handle layers (see ui/timeline-pane.tsx). Mobile-first: the
-   base size here is the ≤767px touch target; the min-width:768px query below
-   shrinks it for desktop/mouse. */
-.timeline-strip-wrap {
-  position: relative;
-}
-
+/* One section's band; overflow:hidden clips its own coverage/grid/handle
+   layers (see ui/timeline-pane.tsx). Mobile-first: the base size here is the
+   ≤767px touch target; the min-width:768px query below shrinks it for
+   desktop/mouse. */
 .timeline-strip {
   position: relative;
   width: 100%;
-  height: 36px;
+  height: 32px;
   background: #1a3a5e;
   border-radius: 3px;
   outline: none;
@@ -2094,13 +2264,15 @@ html, body {
 }
 
 /* The floating column readout (live during a handle drag) — a small
-   tooltip-like panel tracking the dragged handle's x, allowed to overflow
-   the strip's own top edge (see .timeline-strip-wrap above). Non-interactive:
-   it only ever reflects the live preview, never receives input. */
+   tooltip-like panel hung just under the band, tracking the dragged handle's
+   x. Fixed, positioned from the band's viewport rect (ui/timeline-pane.tsx):
+   it is taller than a band, and every ancestor between it and the pane clips,
+   so an absolutely positioned one is cut off whichever way it floats.
+   Non-interactive: it only ever reflects the live preview, never receives
+   input. */
 .timeline-strip-readout {
-  position: absolute;
-  bottom: 100%;
-  transform: translate(-50%, -6px);
+  position: fixed;
+  transform: translateX(-50%);
   padding: 3px 6px;
   background: #12203c;
   color: #c8d6e5;
@@ -2110,7 +2282,10 @@ html, body {
   border-radius: 3px;
   text-align: left;
   pointer-events: none;
-  z-index: 3;
+  /* Fixed, so it is no longer stacked against its own band: it has to clear
+     the table pane's chrome below the timeline, while still sitting under the
+     menus and popovers (20+) that a click opens. */
+  z-index: 15;
 }
 
 /* One meaningful column per line, stacked. */
@@ -2135,7 +2310,7 @@ html, body {
 
 @media (min-width: 768px) {
   .timeline-strip {
-    height: 28px;
+    height: 22px;
   }
 }
 
@@ -2148,7 +2323,7 @@ html, body {
 
 @media (min-width: 768px) {
   .timeline-strip-multilane {
-    height: calc(var(--lane-rows, 1) * 18px);
+    height: calc(var(--lane-rows, 1) * 15px);
   }
 }
 

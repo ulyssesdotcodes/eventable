@@ -123,6 +123,9 @@ function PromotedSurface(props: { host: EditorHost; target: EditTarget; onClose:
     <div class="editor-surface" classList={{ previewing: !!preview() }} ref={surface}>
       <div class="editor-surface-head">
         <span class="editor-surface-label">{props.target.label}</span>
+        <For each={props.target.context ?? []}>
+          {(part) => <span class="facade-context">{part}</span>}
+        </For>
         <button
           class="run-btn"
           disabled={!props.host.dirty(props.target.label)}
@@ -143,13 +146,14 @@ function PromotedSurface(props: { host: EditorHost; target: EditTarget; onClose:
   )
 }
 
-// One row's code, statically highlighted and capped in height. Clicking it
-// hands the live view to that row; `onPromote` overrides that (mobile opens the
-// popover instead).
+// One row's code, statically highlighted and capped in height, inside that
+// row's card — so the row's own cells above it already say which row this is
+// and the facade shows only the code and its Apply. Clicking it hands the live
+// view to that row; `onPromote` overrides that (mobile opens the popover
+// instead).
 export function CodeFacade(props: {
   host: EditorHost
   target: EditTarget
-  runLabel?: string
   onPromote?: (target: EditTarget) => void
 }) {
   let mount!: HTMLDivElement
@@ -181,16 +185,14 @@ export function CodeFacade(props: {
   }
 
   return (
-    // data-label is how the grid's code chip finds this facade to promote it.
-    <div class="code-facade" classList={{ 'facade-live': live(), previewing: !!preview() }} data-lang={props.target.lang} data-label={props.target.label} ref={facade}>
+    <div class="code-facade" classList={{ 'facade-live': live(), previewing: !!preview() }} data-lang={props.target.lang} ref={facade}>
       <div class="facade-head">
-        <span class="facade-label">{props.target.label}</span>
         <button
           class="run-btn facade-run"
           disabled={!props.host.dirty(props.target.label)}
           onClick={() => props.host.commit()}
         >
-          {props.runLabel ?? 'Apply'}
+          Apply
         </button>
       </div>
       <pre class="facade-code" ref={pre} tabindex="0" onClick={open} onFocus={open} />

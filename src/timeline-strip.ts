@@ -493,18 +493,35 @@ export interface DragResult {
   values: Record<string, unknown>
 }
 
+// A playback-axis beat back to the source beat a row stores. `pass` is the
+// wrapped placement's own pass (wrapPass), which sourceBeatAt needs to
+// re-derive the right extended-axis point — the same `loop` argument
+// buildTimeline's own multi-pass playback uses.
+const toSource = (beat: number, opts: DragOptions, pass = 0): number =>
+  opts.timeline?.active ? opts.timeline.sourceBeatAt(beat, pass) : beat
+
 // Whole-row moves only: a span's length (`dur`) is untouched by a move, so its
 // window keeps the same duration wherever it lands. (Edge resize is not a
 // gesture here — a cooked band's stored duration isn't the dragged row's to
 // resize, and on the warp band an edge belongs to a neighbouring row.)
 export function dragUpdate(handle: Handle, dBeats: number, opts: DragOptions = {}): DragResult {
   const { row, beat, pass } = handle
-  // A wrapped placement's `beat` is local to its own pass (wrapPass) —
-  // sourceBeatAt needs that pass back to re-derive the right extended-axis
-  // point, the same `loop` argument buildTimeline's own multi-pass playback
-  // uses.
-  const toSource = (b: number): number => (opts.timeline?.active ? opts.timeline.sourceBeatAt(b, pass ?? 0) : b)
-  return { row, values: { beat: toSource(Math.max(1, beat + dBeats)) } }
+  return { row, values: { beat: toSource(Math.max(1, beat + dBeats), opts, pass) } }
+}
+
+// A double-click on empty band space creates a keyframe there. Which store
+// table it lands in is read off the band's own handles — the same lineage a
+// drag writes through — so a band with nothing traceable behind it (a cooked
+// or warped read-only band) creates nothing. A band mixing two source tables
+// takes the first, its topmost row's. The beat is snapped like a drag and
+// inverted back through the warp the same way, since a row stores a SOURCE
+// beat; the caller seeds the rest of the row the way "+ row" does.
+export function createAt(
+  handles: Handle[], beat: number, opts: DragOptions & { mode?: SnapMode; pass?: number } = {},
+): { table: string; values: Record<string, unknown> } | null {
+  const table = handles.find((h) => h.source)?.source?.table
+  if (table === undefined) return null
+  return { table, values: { beat: toSource(snap(beat, opts), opts, opts.pass) } }
 }
 
 // Whether a drag's payload actually changes the stored row — a gesture that

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import {
   formatCell, formatEditableCell, allNames, nextTableName, fallbackTab, chartFor,
   displayOrder, activeRowIndex, viewersOf, tabRingStyle, lastEditors, moveFocus,
-  isCellInert, bottomSlotFor, EVENTS_SUFFIX, type PeerPresence,
+  isCellInert, showsWarpMap, showsCodeEditor, EVENTS_SUFFIX, type PeerPresence,
 } from '../src/table-panel.js'
 import type { EditableColumn } from '../src/editable-tables.js'
 import { Table, type GraphSpec } from '../src/dsl.js'
@@ -176,7 +176,7 @@ test('chartFor never auto-charts a cooked timeline-schema view — the warp map 
   ]
   const views = new Map<string, Table>([['timeline (system)', table(rows)]])
   assert.equal(chartFor('timeline (system)', views, new Map(), store), null)
-  assert.equal(bottomSlotFor('timeline (system)', views, store), 'warp')
+  assert.ok(showsWarpMap('timeline (system)', views, store))
 })
 
 test('an explicit .graph() spec wins over auto-charting and picks its columns', () => {
@@ -190,32 +190,33 @@ test('an explicit .graph() spec wins over auto-charting and picks its columns', 
   assert.deepEqual(chart.cols, ['y'])
 })
 
-// --- table pane bottom slot (bottomSlotFor) -----------------------------------
+// --- table pane bottom slot / editor list ------------------------------------
 
-test('bottomSlotFor: code-typed tables get facades, a timeline-schema table (any name) gets the warp map', async () => {
+test('showsWarpMap: a timeline-schema table (any name) gets the warp map, nothing else does', async () => {
   const { SCHEMAS } = await import('../src/dsl.js')
   const store = createEditableTableStore()
-  store.ensure('hydra', SCHEMAS.hydra)
   store.ensure('warp', SCHEMAS.timeline) // schema-driven, not the literal name "timeline"
   store.ensure('notes', { beat: 'number', label: 'string' })
-  const views = new Map<string, Table>()
+  // slider/midi are synthetic panel views spliced into `views` by
+  // tablesForDisplay (main.ts), never store tables (R11).
+  const views = new Map<string, Table>([['slider', table([{ id: 'a', value: 1, beat: 1 }])]])
 
-  assert.equal(bottomSlotFor('hydra', views, store), 'facades')
-  assert.equal(bottomSlotFor('warp', views, store), 'warp')
-  assert.equal(bottomSlotFor('notes', views, store), 'none')
-  assert.equal(bottomSlotFor(null, views, store), 'none')
+  assert.ok(showsWarpMap('warp', views, store))
+  assert.ok(!showsWarpMap('notes', views, store))
+  assert.ok(!showsWarpMap('slider', views, store))
+  assert.ok(!showsWarpMap(null, views, store))
 })
 
-test('bottomSlotFor: slider/midi are synthetic panel views, not store tables (R11)', () => {
+test('showsCodeEditor: a card shows an empty code cell only where its event uses it', async () => {
+  const { SCHEMAS } = await import('../src/dsl.js')
   const store = createEditableTableStore()
-  // Neither is ever editableStore.createTable'd — tablesForDisplay (main.ts)
-  // splices them into `views` directly from the midi/slider input folds.
-  const views = new Map<string, Table>([
-    ['slider', table([{ id: 'a', value: 1, beat: 1 }])],
-    ['midi', table([{ note: 'c4', channel: 1, value: 0.5, beat: 1 }])],
-  ])
-  assert.equal(bottomSlotFor('slider', views, store), 'none')
-  assert.equal(bottomSlotFor('midi', views, store), 'none')
+  store.ensure('post', SCHEMAS.post)
+  const cols = store.get('post')!.columns
+  const code = cols.find((c) => c.name === 'code')!
+
+  assert.ok(showsCodeEditor({ event: 'setCode', code: '' }, code, cols), 'empty setCode row is where code goes')
+  assert.ok(!showsCodeEditor({ event: 'pulse', code: '' }, code, cols), 'pulse ignores code')
+  assert.ok(showsCodeEditor({ event: 'pulse', code: 'bloom()' }, code, cols), 'text is always reachable')
 })
 
 // --- rows under the playhead ---------------------------------------------------

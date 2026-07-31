@@ -22,6 +22,10 @@ export interface EditTarget {
   // drawn behind this target while it is promoted. Only hydra/post code cells
   // have one — see main.ts's previewCode and ui/facade.tsx's previewMounts.
   preview?(text: string): string | null
+  // The row's identifying cells (`beat 3`, `setCode`, `o0`) — a surface
+  // detached from the row (the overlay, the phone popover) has to say which
+  // row it edits without reading the code.
+  context?: string[]
 }
 
 export interface EditorHost {
@@ -34,6 +38,10 @@ export interface EditorHost {
   // The target's stored text changed under us (a scrub, a room merge).
   load(text: string, opts?: { preserveView?: boolean }): void
   promoted: Accessor<string | null>
+  // The stored text the promoted buffer is measured against — advanced by each
+  // commit, so a watcher can tell "the cell changed because we just applied"
+  // from "the cell changed under us".
+  committed: Accessor<string | null>
   dirty(label: string): boolean
   error(label: string): string | null
   setError(msg: string | null, label?: string): void
@@ -65,9 +73,13 @@ export function createEditorHost(
     // and runs synchronously, before the signal's refresh has caught up.
     if (!t || !isDirty(t)) return
     const text = cm.getCode()
-    t.onCommit(text)
-    // The committed text is the target's value now — nothing left to apply.
+    // Advance the baseline BEFORE the write, not after: onCommit reaches the
+    // store synchronously, and a watcher reacting to that write reads
+    // `committed()` to tell our own edit from someone else's. Advancing
+    // afterwards let the panel see this commit as a foreign one and flush the
+    // buffer mid-Apply, blanking the cell the user was working in.
     setTarget({ ...t, text })
+    t.onCommit(text)
     refresh()
   }
 
@@ -83,6 +95,16 @@ export function createEditorHost(
 
   function promote(next: EditTarget, mount?: HTMLElement): void {
     if (promoted() === next.label) {
+      // Same cell: adopt the caller's fresher target (the panel rebuilds these
+      // on every store change, so it carries the cell's current stored text and
+      // a commit bound to it) without touching the buffer, which holds edits
+      // the user has not applied yet. Re-mount too — anything that took the
+      // view away (a rebound slot, a surface that closed) leaves this cell
+      // looking empty and unresponsive, and re-clicking it is how a performer
+      // expects to get it back.
+      setTarget(next)
+      cm.mount(mount)
+      refresh()
       cm.focus()
       return
     }
@@ -92,6 +114,12 @@ export function createEditorHost(
     cm.setDoc(next.text)
     refresh()
     cm.focus()
+    // A promote is an explicit "edit this" click, so typing must insert
+    // immediately — vim's normal mode would eat the first keystrokes as
+    // commands (and with them, any autocompletion). Expr cells append at the
+    // line end, the quick-edit spot; Escape still steps insert → normal →
+    // demote.
+    cm.enterInsert(next.lang === 'expr')
     onPromote?.(next)
   }
 
@@ -121,6 +149,7 @@ export function createEditorHost(
       refresh()
     },
     promoted,
+    committed: () => target()?.text ?? null,
     dirty(label: string): boolean {
       tick()
       const t = target()

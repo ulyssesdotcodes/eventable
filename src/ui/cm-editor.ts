@@ -11,7 +11,7 @@ import { LanguageSupport } from '@codemirror/language'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { keymap } from '@codemirror/view'
 import { Prec, Compartment } from '@codemirror/state'
-import { vim, getCM } from '@replit/codemirror-vim'
+import { vim, getCM, Vim } from '@replit/codemirror-vim'
 import { classHighlighter, highlightCode } from '@lezer/highlight'
 import {
   viewNameCompletions, codeCompletions, typeHover, signatureHelp, dslHover,
@@ -123,6 +123,9 @@ export interface CmEditor {
   mount(into?: HTMLElement): void
   unmount(): void
   focus(): void
+  // Put vim into insert mode (append at line end with `append`) — a no-op
+  // when vim is off or already inserting.
+  enterInsert(append?: boolean): void
   vimInsertActive(): boolean
   setVimMode(enabled: boolean): void
   insertSnippet(text: string, cursorBack?: number): void
@@ -213,6 +216,11 @@ export function createCmEditor(
       view.dom.remove()
     },
     focus: () => view.focus(),
+    enterInsert(append = false): void {
+      const cm5 = getCM(view)
+      if (!cm5 || cm5.state?.vim?.insertMode) return
+      Vim.handleKey(cm5, append ? 'A' : 'i', 'user')
+    },
     vimInsertActive: () => !!getCM(view)?.state?.vim?.insertMode,
     setVimMode(enabled: boolean): void {
       view.dispatch({ effects: vimCompartment.reconfigure(enabled ? [vim()] : []) })

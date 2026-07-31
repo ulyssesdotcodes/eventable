@@ -103,7 +103,7 @@ function App(props: AppProps & { mounts: CanvasMounts }) {
               resolveSource={props.resolveSource}
               presence={props.tablePanel.presence}
               focusedRow={props.tablePanel.focusedRow}
-              onSelectRow={(table, row) => props.tablePanel.focusRow(table, row)}
+              onSelectRow={(table, row, edit) => props.tablePanel.focusRow(table, row, edit)}
               onStripRowChange={(row) => props.tablePanel.setStripRow(row)}
               onDragCommit={props.onDragCommit}
               onSelectView={(view) => props.tablePanel.selectTable(view)}
