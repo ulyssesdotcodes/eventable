@@ -1,8 +1,10 @@
-// Offline service worker. Precaches the app shell on install so a reload with
-// no network still boots, then serves same-origin requests network-first (fresh
-// when online, cached when offline). The version below is stamped in at build
-// time (build.js / watch.js) so each deploy activates a fresh cache and evicts
-// the previous one.
+// Offline service worker. Precaches the app shell on install, then serves
+// same-origin GETs cache-first, so an open paints the last-known-good build
+// immediately rather than waiting on a mobile network. Freshness rides the
+// worker update check instead of the request path: VERSION is stamped in at
+// build time (scripts/stamp-sw.js) from a hash of the whole build, so a deploy
+// is a new script, which caches the new files before taking over — src/main.ts
+// runs that check in the background and reloads once it does.
 const VERSION = '__BUILD_VERSION__'
 const CACHE = `eventable-${VERSION}`
 
@@ -10,7 +12,6 @@ const CACHE = `eventable-${VERSION}`
 // files are left to runtime caching so a flaky install can't abort on them; the
 // editor loads its language service lazily and still runs without it.
 const SHELL = [
-  '/',
   '/index.html',
   '/assets/index.js',
   '/assets/index.css',
@@ -23,6 +24,11 @@ const SHELL = [
 ]
 
 self.addEventListener('install', (event) => {
+  // Never awaited inside waitUntil: skipWaiting() settles only once this worker
+  // activates, which waits on install — a deadlock that wedges the update and
+  // blocks every later check on this scope. A first install has no waiting
+  // phase and slips through, which is why it broke updates and not installs.
+  void self.skipWaiting()
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE)
     // Cache each shell entry tolerantly: one unreachable asset must not fail the
@@ -33,7 +39,6 @@ self.addEventListener('install', (event) => {
         if (res.ok) await cache.put(url, res)
       } catch { /* runtime caching picks it up on first real request */ }
     }))
-    await self.skipWaiting()
   })())
 })
 
@@ -49,37 +54,23 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request
   if (req.method !== 'GET') return
-  const url = new URL(req.url)
 
   // Leave cross-origin requests alone — the WebSocket upgrade at /ws is never a
   // GET fetch, so multiplayer is unaffected.
-  if (url.origin !== self.location.origin) return
+  if (new URL(req.url).origin !== self.location.origin) return
 
-  // Navigations: network-first, falling back to the cached shell so a reload
-  // works offline. The cached index.html covers any ?room=/?example= route.
-  if (req.mode === 'navigate') {
-    event.respondWith(networkFirst(req, '/index.html'))
-    return
-  }
-
-  // Same-origin assets and data: network-first so an online reload always gets
-  // the latest build; the cache fallback keeps them available offline.
-  event.respondWith(networkFirst(req))
+  // Every navigation resolves to the one cached shell: index.html covers any
+  // ?room=/?example= route.
+  event.respondWith(cacheFirst(req.mode === 'navigate' ? '/index.html' : req))
 })
 
-async function networkFirst(req, fallbackUrl) {
+// A hit is never stale: CACHE is version-keyed, so a changed file arrives as a
+// new worker with a new cache rather than as a revalidation of this one.
+async function cacheFirst(req) {
   const cache = await caches.open(CACHE)
-  try {
-    const res = await fetch(req)
-    if (res.ok) await cache.put(req, res.clone())
-    return res
-  } catch (err) {
-    const cached = await caches.match(req)
-    if (cached) return cached
-    if (fallbackUrl) {
-      const fallback = await caches.match(fallbackUrl)
-      if (fallback) return fallback
-    }
-    throw err
-  }
+  const cached = await cache.match(req)
+  if (cached) return cached
+  const res = await fetch(req)
+  if (res.ok) await cache.put(req, res.clone())
+  return res
 }

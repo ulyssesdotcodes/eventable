@@ -3,6 +3,7 @@ import { solidPlugin } from 'esbuild-plugin-solid'
 import { mkdirSync, cpSync, readFileSync, writeFileSync } from 'fs'
 import { startMultiplayerServer } from './server/server.js'
 import { writeLangEnv } from './scripts/gen-lang-env.js'
+import { stampServiceWorker } from './scripts/stamp-sw.js'
 
 mkdirSync('public/assets', { recursive: true })
 mkdirSync('public/data', { recursive: true })
@@ -19,9 +20,11 @@ const html = readFileSync('index.html', 'utf8')
   .replace('src="/src/main.ts"', 'src="./assets/index.js"')
 writeFileSync('public/index.html', html)
 
-// A stable version in dev — the network-first worker serves fresh from the dev
-// server while it's up and falls back to cache only when it's offline.
-writeFileSync('public/sw.js', readFileSync('static/sw.js', 'utf8').replaceAll('__BUILD_VERSION__', 'dev'))
+// Cache-first means dev has to restamp after every rebuild or it replays the
+// first build it saw; the new stamp is also what reloads the open page. Stamped
+// eagerly too, so public/sw.js exists before the server comes up.
+stampServiceWorker()
+const stampSw = { name: 'stamp-sw', setup: (build) => { build.onEnd(() => { stampServiceWorker() }) } }
 
 const ctx = await esbuild.context({
   entryPoints: ['src/main.ts'],
@@ -29,7 +32,7 @@ const ctx = await esbuild.context({
   outfile: 'public/assets/index.js',
   format: 'esm',
   external: ['module'], // see build.js
-  plugins: [solidPlugin()],
+  plugins: [solidPlugin(), stampSw],
 })
 
 // The cook worker bundle — see build.js.
@@ -39,6 +42,7 @@ const workerCtx = await esbuild.context({
   outfile: 'public/assets/cook-worker.js',
   format: 'esm',
   external: ['module'],
+  plugins: [stampSw],
 })
 
 // The language-service worker bundle — see build.js.
@@ -47,6 +51,7 @@ const langWorkerCtx = await esbuild.context({
   bundle: true,
   outfile: 'public/assets/lang-worker.js',
   format: 'esm',
+  plugins: [stampSw],
 })
 
 await ctx.watch()

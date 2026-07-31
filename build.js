@@ -1,8 +1,8 @@
 import * as esbuild from 'esbuild'
 import { solidPlugin } from 'esbuild-plugin-solid'
-import { createHash } from 'node:crypto'
 import { rmSync, mkdirSync, cpSync, readFileSync, writeFileSync } from 'fs'
 import { writeLangEnv } from './scripts/gen-lang-env.js'
+import { stampServiceWorker } from './scripts/stamp-sw.js'
 
 rmSync('public', { recursive: true, force: true })
 mkdirSync('public/assets', { recursive: true })
@@ -53,12 +53,4 @@ const html = readFileSync('index.html', 'utf8')
   .replace('src="/src/main.ts"', 'src="./assets/index.js"')
 writeFileSync('public/index.html', html)
 
-// Stamp the service worker with a content hash of the built bundle so each
-// deploy activates a fresh cache and evicts the previous one (see static/sw.js).
-const version = createHash('sha256')
-  .update(readFileSync('public/assets/index.js'))
-  .update(readFileSync('public/assets/cook-worker.js'))
-  .update(readFileSync('public/assets/index.css'))
-  .digest('hex')
-  .slice(0, 12)
-writeFileSync('public/sw.js', readFileSync('static/sw.js', 'utf8').replaceAll('__BUILD_VERSION__', version))
+stampServiceWorker()

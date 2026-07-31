@@ -1527,10 +1527,30 @@ async function boot(): Promise<void> {
   }
 }
 
-// Register the offline service worker (static/sw.js). Best-effort: an
-// unsupported browser or a failed registration just means no offline caching.
+// Register the offline service worker (static/sw.js), which serves the app
+// cache-first. Freshness comes from checking for a new worker in the background
+// — on load and on every return to the foreground, which on mobile is when a
+// backgrounded PWA is reopened. Best-effort: an unsupported browser or a failed
+// registration just means no offline caching.
 if ('serviceWorker' in navigator) {
-  addEventListener('load', () => { void navigator.serviceWorker.register('/sw.js').catch(() => {}) })
+  const container = navigator.serviceWorker
+  let controlled = !!container.controller
+  let reloading = false
+  container.addEventListener('controllerchange', () => {
+    if (reloading) return
+    // The claim after a first install is not an update — the page loaded these
+    // very files from the network. Every handover after it is a new build.
+    if (!controlled) { controlled = true; return }
+    reloading = true
+    location.reload()
+  })
+  // Resolved through container.ready rather than the register() promise, which
+  // a reload can leave pending indefinitely behind the worker's own work.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void container.ready.then((reg) => reg.update()).catch(() => {})
+  })
+  // updateViaCache 'none' keeps the check itself off the HTTP cache.
+  addEventListener('load', () => { void container.register('/sw.js', { updateViaCache: 'none' }).catch(() => {}) })
 }
 
 void boot()
