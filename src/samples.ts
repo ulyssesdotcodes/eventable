@@ -112,8 +112,7 @@ editable("post", schemas.post)
 //      pingpong  beats 11..15 swings source 1..5 there and back
 //      hold      beats 15..17 freezes on source beat 5 (the path's end)
 //    The last row (the hold) runs to the end of the loop — that length is the
-//    "beats" control under the scene, not the timeline — unless it sets an
-//    \`outTo\`, its own end frame, to end sooner. retime is the general
+//    "beats" control under the scene, not the timeline. retime is the general
 //    one: \`from\`..\`to\` is the source range (from > to runs it backwards), and
 //    an optional output block \`outFrom\`..\`outTo\` repeats across the window —
 //    pingpong is a retime whose block plays the range forward then backward. A

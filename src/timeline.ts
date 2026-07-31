@@ -1,8 +1,7 @@
 // livecodata timeline — an OPTIONAL remap on top of the beat-grid playhead,
 // defined as a table of EVENTS (see schemas.timeline). Rows are ordered by
 // (loop, beat) and each covers an UNTIL-NEXT window: from its own `beat`
-// (1-indexed) to the next row's, the last row running to the end of its pass —
-// or, if it sets `outTo`, to that explicit end frame.
+// (1-indexed) to the next row's, the last row running to the end of its pass.
 // The pass length is the GUI loop-beats value the engine supplies, NOT the
 // timeline's own extent — so buildTimeline/timelineSegments/windowsFor all
 // take it as an argument (defaulting to DEFAULT_LOOP_BEATS for cook-time
@@ -70,10 +69,9 @@ const opt = (v: unknown): number | undefined => (typeof v === 'number' && v !== 
 
 // Order the enabled, beat-bearing rows by (loop, beat) and give each an
 // until-next window: it runs to the next row's position, the last row to the
-// end of the last pass any row touches (pass length = loopBeats) — or to its
-// own `outTo` when set, an explicit end frame. A row past one pass length via
-// its beat, or placed by the `loop` column, extends the sequence to that many
-// passes.
+// end of the last pass any row touches (pass length = loopBeats). A row past
+// one pass length via its beat, or placed by the `loop` column, extends the
+// sequence to that many passes.
 export function windowsFor(timelineRows: Row[], loopBeats: number = DEFAULT_LOOP_BEATS): RowWindow[] {
   const lb = loopBeats > 0 ? loopBeats : DEFAULT_LOOP_BEATS
   const rows = (timelineRows ?? [])
@@ -86,13 +84,7 @@ export function windowsFor(timelineRows: Row[], loopBeats: number = DEFAULT_LOOP
   rows.sort((a, b) => a.lane - b.lane || a.beat - b.beat)
   const lastPass = rows.reduce((m, x) => Math.max(m, Math.floor((ext(x) - 1) / lb)), 0)
   const seqEnd = (lastPass + 1) * lb + 1
-  const last = rows.length - 1
   return rows.map((x, i) => {
-    // The last row has no next row to close its window: its own `outTo`
-    // (pass-local, like `beat`) sets an explicit end frame; earlier rows always
-    // run to the next row.
-    const outTo = i === last ? opt(timelineRows[x.row].outTo) : undefined
-    if (outTo !== undefined && outTo > x.beat) return { row: x.row, beat: x.beat, end: outTo, lane: x.lane }
     const next = i + 1 < rows.length ? ext(rows[i + 1]) : seqEnd
     return { row: x.row, beat: x.beat, end: x.beat + Math.max(0, next - ext(x)), lane: x.lane }
   })

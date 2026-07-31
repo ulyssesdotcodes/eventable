@@ -50,24 +50,9 @@ test('retime with from > to plays the source range backwards', () => {
   assert.equal(tl.sourceBeatAt(9), 1)
 })
 
-test('the last row\'s outTo caps its window as an end frame, not a repeating block', () => {
-  // A lone retime with outTo=9 (loop-beats 16): source 1..5 plays once across
-  // beats 1..9, and beats past 9 run unmapped — outTo ends the row at its own
-  // frame instead of repeating the block to the pass end.
-  const tl = buildTimeline([{ event: 'retime', beat: 1, from: 1, to: 5, outTo: 9 }], 16)
-  assert.equal(tl.beats, 16, 'the pass length is still the loop-beats value')
-  assert.equal(tl.sourceBeatAt(5), 3, 'halfway through the [1,9] window')
-  assert.equal(tl.sourceBeatAt(9), 5, 'the end frame lands on the last source beat')
-  assert.equal(tl.sourceBeatAt(13), 13, 'past the end frame → unmapped (identity)')
-})
-
-test('retime with an output block repeats the stretched block until a later row closes the window', () => {
-  // Source 1..5 stretched to an 8-beat block, repeating across 16 — a bare row
-  // at the pass end (beat 17) keeps the window open so the block isn't the last.
-  const tl = buildTimeline([
-    { event: 'retime', beat: 1, from: 1, to: 5, outFrom: 1, outTo: 9 },
-    { event: 'retime', beat: 17 },
-  ], 16)
+test('retime with an output block repeats the stretched block across its window', () => {
+  // Source 1..5 stretched to half speed (an 8-beat block), looping across 16.
+  const tl = buildTimeline([{ event: 'retime', beat: 1, from: 1, to: 5, outFrom: 1, outTo: 9 }], 16)
   assert.equal(tl.beats, 16)
   assert.equal(tl.sourceBeatAt(5), 3, 'halfway through the first block')
   assert.equal(tl.sourceBeatAt(10), 1.5, 'second block restarts the source')
@@ -75,10 +60,7 @@ test('retime with an output block repeats the stretched block until a later row 
 })
 
 test('retime output block anchors phase: a window starting mid-block starts mid-source', () => {
-  const tl = buildTimeline([
-    { event: 'retime', beat: 5, from: 1, to: 5, outFrom: 1, outTo: 9 },
-    { event: 'retime', beat: 17 },
-  ], 16)
+  const tl = buildTimeline([{ event: 'retime', beat: 5, from: 1, to: 5, outFrom: 1, outTo: 9 }], 16)
   assert.equal(tl.sourceBeatAt(6), 3.5, 'beat 6 sits in the block that began (unheard) at beat 1')
   assert.equal(tl.sourceBeatAt(10), 1.5)
 })
@@ -95,10 +77,7 @@ test('pingpong plays the source range forward then backward across its block', (
 })
 
 test('pingpong blocks repeat across the window, and .retime places rows on both legs', () => {
-  const tl = buildTimeline([
-    { event: 'pingpong', beat: 1, from: 1, to: 3, outFrom: 1, outTo: 5 },
-    { event: 'retime', beat: 17 },
-  ], 16)
+  const tl = buildTimeline([{ event: 'pingpong', beat: 1, from: 1, to: 3, outFrom: 1, outTo: 5 }], 16)
   assert.equal(tl.sourceBeatAt(2), 2, 'forward leg')
   assert.equal(tl.sourceBeatAt(4), 2, 'backward leg')
   assert.equal(tl.sourceBeatAt(6), 2, 'second block over')
@@ -154,19 +133,6 @@ test('windowsFor: rows cover until-next, the last row runs to the end of its pas
   assert.deepEqual(wins, [
     { row: 0, beat: 1, end: 5, lane: 0 },
     { row: 1, beat: 5, end: 9, lane: 0 },
-  ])
-})
-
-test('windowsFor: the last row\'s outTo is its end frame; earlier rows keep to-next', () => {
-  // outTo caps the last row's window (any event kind — a hold here) at that
-  // beat instead of the pass end (17); the earlier row still runs to the next.
-  const wins = windowsFor([
-    { event: 'retime', beat: 1 },
-    { event: 'hold', beat: 5, from: 2, outTo: 7 },
-  ], 16)
-  assert.deepEqual(wins, [
-    { row: 0, beat: 1, end: 5, lane: 0 },
-    { row: 1, beat: 5, end: 7, lane: 0 },
   ])
 })
 
@@ -300,11 +266,9 @@ test('retime drops rows no event plays; non-beat rows pass through', () => {
 
 test('retime through a repeating retime block places rows once per repeat, dur stretched', () => {
   const content = new Table([{ id: 'a', beat: 3, dur: 2 }])
-  // An 8-beat block (out 1..9) tiled across the loop — a bare row at beat 17
-  // holds the window open past the block so it repeats instead of ending there.
+  // An 8-beat block (out 1..9) tiled across the default 16-beat loop.
   const out = content.retime([
     { event: 'retime', beat: 1, from: 1, to: 5, outFrom: 1, outTo: 9 },
-    { event: 'retime', beat: 17 },
   ]).rows
   assert.deepEqual(out.map((r) => [r.beat, r.dur]), [[5, 4], [13, 4]])
 })

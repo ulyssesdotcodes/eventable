@@ -1341,11 +1341,8 @@ export const SCHEMAS = deepFreeze({
    * content — one event per row, each covering an UNTIL-NEXT window. Rows are
    * ordered by (loop, beat); a row's window runs from its own `beat`
    * (1-indexed, like every other table) to the next row's, so there are never
-   * gaps or overlaps — the LAST row runs to the end of its pass (whose length
-   * is the GUI "beats" control, NOT the timeline's own extent), or to its own
-   * `outTo` when set: on the last row `outTo` is an explicit end frame that
-   * ends the row there (any event kind), rather than the block repeating to the
-   * pass end. `event`
+   * gaps or overlaps — the LAST row runs to the end of its pass, and the pass
+   * length is the GUI "beats" control, NOT the timeline's own extent. `event`
    * picks the warp: "retime" (the general one — beats(count, { fit }) emits a
    * single retime) stretches input source beats `from`..`to` into the output
    * block `outFrom`..`outTo` (from > to runs backwards) and repeats the block
