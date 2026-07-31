@@ -210,9 +210,10 @@ test('generators and ops compile and are usable as chains and combine sources', 
   assert.deepEqual(evalPostCode('noise(3).thresh(progress().oneSub())').map((o) => o.op), ['noise', 'thresh'])
   assert.deepEqual(evalPostCode('stripes(8).polar()').map((o) => o.op), ['stripes', 'polar'])
   assert.deepEqual(evalPostCode('voronoi(8, 0.5).thresh(progress().oneSub())').map((o) => o.op), ['voronoi', 'thresh'])
-  // a generator's structural arg bakes (selecting a shader path), its scale stays live
-  assert.equal(evalPostCode('noise(3, 3)')[0].args[1].cls, 'structural')
-  assert.notEqual(chainSignature(evalPostCode('gradient(0, 1)')), chainSignature(evalPostCode('gradient(0)')))
+  // noise' octave count bakes into the shader (a distinct precompiled state);
+  // its scale stays live, so scrubbing it never recompiles.
+  assert.notEqual(chainSignature(evalPostCode('noise(3, 3)')), chainSignature(evalPostCode('noise(3)')))
+  assert.equal(chainSignature(evalPostCode('noise(9)')), chainSignature(evalPostCode('noise(3)')))
   // a generator drives a combine's branch, not only a mask
   assert.deepEqual(evalPostCode('blur(4).mask(gradient(0))')[2].chainArgs![0].map((o) => o.op), ['gradient'])
   // thresh top-level runs on the scene luminance — a content-aware wipe

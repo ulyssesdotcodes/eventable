@@ -54,11 +54,8 @@ export const POST_OPS: Record<string, OpSpec> = {
   fill: { kind: 'head', args: [{ name: 'amount', arg: 'live', default: 0 }], doc: 'A flat luminance field (live) — the uniform mask a bare transition value lowers to: fill(progress()) is a crossfade, fill(0.5) a static half-blend.' },
   gradient: {
     kind: 'head',
-    args: [
-      { name: 'angle', arg: 'live', default: 0 },
-      { name: 'colorMode', arg: 'structural', default: 0 },
-    ],
-    doc: 'Linear ramp across the screen at `angle` radians (live). `colorMode` (structural) picks what ramps: 0 = a 0→1 luminance ramp (gradient(0) = black left → white right; feed it to thresh(progress().oneSub()) for a directional wipe), 1 = a full hue sweep, so it works as a colour source for blend/mult.',
+    args: [{ name: 'angle', arg: 'live', default: 0 }],
+    doc: 'Linear luminance ramp 0→1 across the screen at `angle` radians (live). gradient(0) = black left → white right; feed it to thresh(progress().oneSub()) for a directional wipe.',
   },
   noise: {
     kind: 'head',
@@ -66,7 +63,7 @@ export const POST_OPS: Record<string, OpSpec> = {
       { name: 'scale', arg: 'live', default: 3 },
       { name: 'octaves', arg: 'structural', default: 1 },
     ],
-    doc: 'Static Perlin (gradient) noise luminance at `scale` cells across (live) — a smooth dissolve/modulation source; deterministic (no self-animation, drive it with progress()). `octaves` (structural, 1–4) stacks halving-amplitude layers for fractal detail. noise(3).thresh(progress().oneSub()) dissolves; modulate(noise(6), 0.1) warps.',
+    doc: 'Static Perlin (gradient) noise luminance at `scale` cells across (live) — a soft-edged dissolve mask; deterministic (no self-animation, drive it with progress()). `octaves` (structural, 1–4) stacks halving-amplitude layers, breaking the blobs up into finer, more ragged detail. noise(3).thresh(progress().oneSub()) dissolves.',
   },
   voronoi: {
     kind: 'head',
@@ -74,7 +71,7 @@ export const POST_OPS: Record<string, OpSpec> = {
       { name: 'scale', arg: 'live', default: 6 },
       { name: 'jitter', arg: 'live', default: 1 },
     ],
-    doc: 'Cellular (Worley) noise: `scale` cells across, each with a feature point offset by `jitter` (0 = a regular grid, 1 = fully scattered; both live). Luminance is the distance to the nearest point — dark cell centres, bright borders. voronoi(8).thresh(progress().oneSub()) shatters; invert it for glowing cracks.',
+    doc: 'Cellular (Worley) noise: `scale` cells across, each with a feature point offset by `jitter` (0 = a regular grid, 1 = fully scattered; both live). Luminance is the distance to the nearest point — dark cell centres, bright borders. voronoi(8).thresh(progress().oneSub()) wipes cell by cell, a shatter; .invert() first and the cells fill from their edges inward.',
   },
   stripes: {
     kind: 'head',

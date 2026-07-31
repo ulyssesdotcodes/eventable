@@ -283,13 +283,6 @@ export function initPost(
           const angle = live(liveInit(op, 0))
           const d = t.vec2(t.cos(angle), t.sin(angle))
           const l = t.clamp(t.dot(t.uv().sub(0.5), d).add(0.5), 0, 1)
-          if (op.args[1]?.value === 1) {
-            // Hue sweep along the ramp: three phase-shifted cosines, the cheap
-            // rainbow palette (no HSV round-trip).
-            const ph = l.mul(Math.PI * 2)
-            const rgb = t.cos(t.vec3(ph, ph.add(Math.PI * 2 / 3), ph.add(Math.PI * 4 / 3))).mul(0.5).add(0.5)
-            return t.vec4(rgb, 1)
-          }
           return t.vec4(t.vec3(l), 1)
         }
         case 'noise': {
