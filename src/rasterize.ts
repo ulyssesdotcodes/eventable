@@ -26,6 +26,7 @@ function easeFnOf(e: unknown): ((t: number) => number) | null {
 interface SampledState {
   fields: Row
   sources: Row[]
+  parts: { face: (number | null)[]; edge: (number | null)[] } | null
 }
 
 // Fields rasterize interprets itself. Anything else — a custom field, or a
@@ -35,6 +36,8 @@ interface SampledState {
 const RESERVED = new Set([
   'id', 'event', 'beat', 'loop', 'dur', 'ease', 'to', 'shape', 'color',
   'px', 'py', 'pz', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz', 'frame',
+  // sub-object handles: interpreted into faceColor/edgeColor, never carried
+  'face', 'edge',
 ])
 
 // Non-reserved fields visible at frame `i`: events at-or-before, last write wins.
@@ -73,12 +76,61 @@ function buildTimelines(events: Row[]): Map<unknown, Row[]> {
   return map
 }
 
+// A `color` row carrying `face`/`edge` paints one element of the object, not
+// the object — it must not reach the whole-object color, and vice versa.
+const partKey = (e: Row): 'face' | 'edge' | null =>
+  typeof e.face === 'number' ? 'face' : typeof e.edge === 'number' ? 'edge' : null
+
+// One element's pulse at frame i. With `dur` it fades toward `to` — or, unset,
+// toward the object's own color — and RELEASES the element when it lands, so
+// the paint hands back to whatever the shape would have drawn. Without `dur`
+// it is a hard switch that holds: an element handle is not identity (for a
+// folding paper, face 3 is different paper after the next fold), so a paint
+// that never lets go bleeds onto the wrong element later.
+function partPulseAt(colorEv: Row, objColor: number | null, i: number): number | null {
+  const dur = colorEv.dur as number | undefined
+  if (dur == null || dur <= 0) return colorEv.color as number | null
+  const p = Math.min(1, Math.max(0, (i - (colorEv.frame as number)) / dur))
+  if (p >= 1) return null
+  const base = (colorEv.to as number | null | undefined) ?? objColor
+  if (typeof colorEv.color !== 'number' || (base != null && typeof base !== 'number')) {
+    return colorEv.color as number | null
+  }
+  const ease = easeFnOf(colorEv.ease)
+  return mixColor(colorEv.color, base, ease ? ease(p) : p)
+}
+
+// Per-element colors at frame i, indexed by element number (null = unpainted).
+function samplePartColors(
+  events: Row[], createEv: Row, i: number,
+): { face: (number | null)[]; edge: (number | null)[] } {
+  const out = { face: [] as (number | null)[], edge: [] as (number | null)[] }
+  const objColor = (createEv.color as number | null | undefined) ?? null
+  for (const e of events) {
+    if (e.event !== 'color' || (e.frame as number) > i) continue
+    const kind = partKey(e)
+    if (!kind) continue
+    out[kind][e[kind] as number] = partPulseAt(e, objColor, i)
+  }
+  return out
+}
+
+// Element-color lists change only while a pulse is running, so hand the same
+// array object back when a frame's is identical to the last — cook-transfer
+// memoizes by identity, and this is what keeps a per-frame cache of per-face
+// data from multiplying across the worker boundary.
+function sharedIfSame(prev: (number | null)[] | undefined, next: (number | null)[]): (number | null)[] {
+  if (!prev || prev.length !== next.length) return next
+  for (let i = 0; i < next.length; ++i) if (prev[i] !== next[i]) return next
+  return prev
+}
+
 // `color` events are a pulse/step, not a keyframe: a bare event is a hard
 // switch (newest wins); with `dur` it decays back to `to` (or the base color).
 function sampleColor(events: Row[], createEv: Row, i: number): { color: number | null; source: Row | null } {
   let colorEv: Row | null = null
   for (const e of events) {
-    if (e.event === 'color' && (e.frame as number) <= i) colorEv = e
+    if (e.event === 'color' && (e.frame as number) <= i && !partKey(e)) colorEv = e
   }
   if (!colorEv) return { color: (createEv.color as number | null | undefined) ?? null, source: null }
 
@@ -179,7 +231,9 @@ function sampleObject(events: Row[], i: number, extent: number): SampledState | 
   fields.color = color
   if (colorSource) sources.add(colorSource)
 
-  return { fields, sources: [...sources] }
+  const parts = events.some((e) => e.event === 'color' && partKey(e))
+    ? samplePartColors(events, createEv, i) : null
+  return { fields, sources: [...sources], parts }
 }
 
 export function rasterizeRows(eventRows: Row[] | null | undefined, maxBeats?: number): Row[] {
@@ -195,6 +249,7 @@ export function rasterizeRows(eventRows: Row[] | null | undefined, maxBeats?: nu
   const timelines = buildTimelines(events)
 
   const out: Row[] = []
+  const lastParts = new Map<unknown, { face: (number | null)[]; edge: (number | null)[] }>()
   for (let frame = 0; frame <= max; frame++) {
     for (const evs of timelines.values()) {
       const s = sampleObject(evs, frame, max)
@@ -202,6 +257,16 @@ export function rasterizeRows(eventRows: Row[] | null | undefined, maxBeats?: nu
       // Drop the sparse `beat` keyframe field (and any legacy `loop`); the
       // dense cache is keyed by `frame`.
       const { beat: _beat, loop: _loop, ...fields } = s.fields
+      if (s.parts) {
+        const prev = lastParts.get(evs[0].id)
+        const shared = {
+          face: sharedIfSame(prev?.face, s.parts.face),
+          edge: sharedIfSame(prev?.edge, s.parts.edge),
+        }
+        lastParts.set(evs[0].id, shared)
+        if (shared.face.length) fields.faceColor = shared.face
+        if (shared.edge.length) fields.edgeColor = shared.edge
+      }
       out.push(withLineage({ ...fields, frame, id: evs[0].id }, unionLineage(s.sources)))
     }
   }

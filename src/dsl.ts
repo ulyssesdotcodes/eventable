@@ -14,7 +14,7 @@ import { rasterizeRows } from './rasterize.js'
 import { timelineSegments, placeBeat } from './timeline.js'
 import { withLineage, carry, unionLineage, type Row } from './lineage.js'
 import { FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS } from './constants.js'
-import { compileFoldTable, foldValueAt, type FoldTableProgram } from './fold-engine.js'
+import { compileFoldTable, foldPointsAt, foldValueAt, type FoldTableProgram } from './fold-engine.js'
 import type { Schema } from './editable-tables.js'
 import { beatSecondsFromTaps } from './tap-log.js'
 import { primitiveGeometry, pointsFromGeometry, geometryFromPoints } from './three-points.js'
@@ -1065,57 +1065,84 @@ export class OrigamiBuilder {
   }
 
   /**
-   * Per-face attributes of every fold, one row per (step, face) — the same
-   * face numbering the renderer draws with, so one row addresses exactly one
-   * face of one fold:
-   *   `step` which fold (0-based), `name` its label from the fold table,
-   *   `face` the face's number within this step, `moving` true if it swings
-   *   during this fold, `flap` which rigid flap it belongs to (-1 if it stays
-   *   put), `dir` the rotation sense (±1, the solver's, not a screen
-   *   direction), `layer`/`layerFrom` its stacking RANK after/before the fold
-   *   (a rank, not a count — every face of a step gets a different one),
-   *   `plies` how many sheets are stacked where it lies (THIS is "how many
-   *   layers"), `back` true when the paper's back side shows, `cx`/`cy`/`area`
-   *   its centre and size as displayed, `sheetX`/`sheetY` its centre on the
-   *   unfolded square.
+   * One row per fold, carrying that fold's `beat`/`dur` — so it is already an
+   * event: give it an `id` and `event` and route it anywhere. Columns:
+   * `step` which fold (0-based), `name` its label, `to` how far it swings,
+   * `kind` its classification ("Pureland", "Inside Reverse", …), `states` how
+   * many valid layer orders existed, `faces`/`moving`/`flaps` how much paper
+   * there is and how much of it swings, `layers` the stack height, `plies` the
+   * deepest pile, `flip` whether the model turns over first, `motion` how the
+   * in-between is played ("rigid", "relaxed", "mechanism").
    *
-   * An ordinary table — filter it, derive on it, .save() it, .graph() it. Add
-   * a `color` column and hand it to spawn({ faces }) to paint those faces
-   * while their fold is on screen; an optional `fade` (0…1) ties the paint to
-   * the motion — 0 holds it for the whole fold, 1 swells it in as the flap
-   * starts moving and out again as it lands.
+   *   // pulse a post-processing glow on every fold as it happens
+   *   paper.folds().derive({ event: "pulse", name: "glow", value: 0.8 }).outPost()
+   */
+  folds(): Table {
+    return new Table(this.program().folds, this._ctx)
+  }
+
+  /**
+   * One row per (fold, face) — the same face numbering the renderer draws
+   * with, so a row addresses exactly one face of one fold. Carries the fold's
+   * `beat`/`dur` plus: `step`/`name` which fold, `face` its number within that
+   * fold, `moving` whether it swings, `flap` which rigid flap it belongs to
+   * (-1 if it stays put), `dir` the solver's rotation sense (not a screen
+   * direction), `layer`/`layerFrom` its stacking RANK after/before (a rank,
+   * not a count — every face of a fold gets a different one), `plies` how many
+   * sheets are stacked where it lies (THIS is "how many layers"), `back`
+   * whether the paper's reverse shows, `cx`/`cy`/`area` its centre and size as
+   * displayed, `sheetX`/`sheetY` its centre on the unfolded square.
    *
-   * Face numbers mean nothing across steps: every fold cuts the paper and
+   * Because a scene row carrying `face` addresses that face, colouring is an
+   * ordinary table pipeline, quite separate from spawning the paper:
+   *
+   *   paper.faces().filter({ moving: true })
+   *     .derive({ id: "crane", event: "color", color: 0x2f6fff, ease: "easeOut" })
+   *     .outThree()
+   *
+   * `at` samples where each face IS at that fraction of its own fold (0 as it
+   * starts, 1 where it lands), adding `px`/`py`/`pz` — the paper's own frame,
+   * before the object's own position and rotation. Point a camera at the flap
+   * that is moving:
+   *
+   *   paper.faces({ at: 0.5 }).filter({ moving: true })
+   *     .derive({ id: "cam", event: "update", shape: "camera",
+   *               tx: field("px"), ty: field("py"), tz: field("pz") })
+   *     .outThree()
+   *
+   * Face numbers mean nothing across folds: every fold cuts the paper and
    * renumbers it. Group by `step`, never by `face`.
    */
-  faces(): Table {
-    return new Table(this.program().faces, this._ctx)
+  faces(opts: { at?: number } = {}): Table {
+    const p = this.program()
+    return new Table(
+      opts.at == null ? p.faces : foldPointsAt(p, p.faces, opts.at), this._ctx)
   }
 
   /**
-   * Per-edge attributes of every fold, one row per (step, edge) — the creases
-   * and paper borders drawn as lines: `step`/`name` as in faces(), `edge` its
-   * number within this step, `a`/`b` the two vertex numbers it joins, `folds`
-   * true if this fold actually TURNS this crease (the honest answer to "the
-   * edges the fold is on" — being on the fold line is not the same test: the
-   * line also cuts creases it merely crosses, and a reverse fold opens a spine
-   * crease nowhere near it), `mv` "M" or "V" once the fold lands (blank if
-   * flat), `hinge` true if it separates moving paper from still, `border` true
-   * if it is the rim of the sheet.
+   * One row per (fold, crease) — the creases and paper borders drawn as lines.
+   * Carries the fold's `beat`/`dur` plus `step`/`name`, `edge` its number
+   * within that fold, `a`/`b` the two vertex numbers it joins, `folds` whether
+   * this fold actually TURNS this crease (the honest answer to "the edges the
+   * fold is on" — being on the fold line is a different, wrong test: that line
+   * also cuts creases it merely crosses, and a reverse fold opens a spine
+   * crease nowhere near it), `mv` "M" or "V" once it lands (blank if flat),
+   * `hinge` whether it separates moving paper from still, `border` whether it
+   * is the rim of the sheet. `at` adds px/py/pz as in faces().
    *
-   * Add `color` (and `fade`) and hand it to spawn({ edges }) to light creases
-   * up as they are made.
+   * A scene row carrying `edge` addresses that crease, so lighting up the
+   * creases a fold is making is the same pipeline:
+   *
+   *   paper.edges().filter({ folds: true })
+   *     .derive({ id: "crane", event: "color", color: 0x2f6fff }).outThree()
    */
-  edges(): Table {
-    return new Table(this.program().edges, this._ctx)
+  edges(opts: { at?: number } = {}): Table {
+    const p = this.program()
+    return new Table(
+      opts.at == null ? p.edges : foldPointsAt(p, p.edges, opts.at), this._ctx)
   }
 
-  /**
-   * The create row: compiled program + fold at 0 (flat sheet). Extra props
-   * (id, color, backColor, px/py/pz, …) merge over defaults. `faces`/`edges`
-   * take painted rows from faces()/edges() — any row of theirs carrying a
-   * `color` recolours that element while its fold is on screen.
-   */
+  /** The create row: compiled program + fold at 0 (flat sheet). Extra props (id, color, backColor, px/py/pz, …) merge over defaults. */
   spawn(props: Row = {}): Table {
     const program = this.program()
     this._id = props.id ?? this._id
@@ -1123,14 +1150,10 @@ export class OrigamiBuilder {
     // rotates the whole object by rz, so undo it here.
     const rz = typeof props.rz === 'number' ? props.rz : 0
     program.flipAxis = [Math.sin(rz), Math.cos(rz)]
-    const paint: Row = {}
-    // Tables can't ride a row into the renderer — take their rows here
-    if (props.faces != null) paint.faces = rowsOf(props.faces as Table | Row[])
-    if (props.edges != null) paint.edges = rowsOf(props.edges as Table | Row[])
     return new Table([{
       id: this._id, event: 'create', beat: 1, shape: 'origami',
       px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0, color: 0xd94f2a,
-      fold: 0, program, ...props, ...paint,
+      fold: 0, program, ...props,
     }], this._ctx)
   }
 
@@ -1328,7 +1351,15 @@ export const SCHEMAS = deepFreeze({
    * "color" (a color pulse: a bare event hard-switches `color`, newest wins,
    * while a `dur` decays back over `ease` — add a `to` column to aim the decay
    * at a target color instead of the object's base), "destroy" (the object
-   * leaves). px/py/pz position, rx/ry/rz rotation in radians, sx/sy/sz scale,
+   * leaves). A "color" row carrying `face` or `edge` recolours just that ONE
+   * face or crease of the object instead of the whole thing — the numbering is
+   * the shape's own, and for origami it is what origami().faces()/.edges()
+   * hand you, so painting is an ordinary pipeline:
+   * paper.faces().filter({ moving: true }).derive({ id: "crane", event:
+   * "color", color: 0x2f6fff }).outThree(). Both are per-object handles, not
+   * per-object identity: a face number means whatever that shape currently
+   * calls face N, which for a folding paper changes at every fold.
+   * px/py/pz position, rx/ry/rz rotation in radians, sx/sy/sz scale,
    * `color` a 0xRRGGBB number. `ease` names the easing of the segment INTO this
    * keyframe — blank stays linear (motion's default), while 'step' makes it a
    * HOLD keyframe: the field keeps the previous keyframe's value until this
@@ -1353,6 +1384,8 @@ export const SCHEMAS = deepFreeze({
     sy: { type: 'number', usedBy: ['create', 'update'] },
     sz: { type: 'number', usedBy: ['create', 'update'] },
     color: { type: 'number', usedBy: ['create', 'update', 'color'] },
+    face: { type: 'number', usedBy: ['color'] },
+    edge: { type: 'number', usedBy: ['color'] },
     dur: { type: 'number', usedBy: ['update', 'color'] },
     ease: { type: 'enum', options: ['step', 'linear', 'easeIn', 'easeOut', 'easeInOut'], usedBy: ['update', 'color'] },
     disabled: 'boolean',
@@ -1737,12 +1770,13 @@ export type DSLSurface = Easings & {
    * Folding paper: origami() is a bare sheet. Chain .steps(table) to fold it
    * by instructions (one fold per row — see schemas.origami), then
    * .spawn({ id, color, … }) for the create row and .sequence() for beat-timed
-   * fold keyframes. .faces() and .edges() are what the folding KNOWS — a row
-   * per face and per crease of every fold (which ones move, which creases the
-   * fold turns, how deep the stack is). Give those rows a `color` and pass
-   * them back through spawn({ faces, edges }) to paint the paper by it:
-   *   paper.spawn({ faces: paper.faces().filter({ moving: true })
-   *                   .derive({ color: 0x2f6fff, fade: 1 }) })
+   * fold keyframes. .folds(), .faces() and .edges() are what the folding KNOWS
+   * — a row per fold, per face, and per crease (which paper moves, which
+   * creases the fold turns, how deep the stack is), each already carrying its
+   * fold's beat/dur. They are ordinary tables routed like any other, so what
+   * the paper does and how it is coloured stay separate:
+   *   paper.faces().filter({ moving: true })
+   *     .derive({ id: "crane", event: "color", color: 0x2f6fff }).outThree()
    */
   origami: OrigamiFactory
   /**

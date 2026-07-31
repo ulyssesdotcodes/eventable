@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   initialState, foldStep, lineThrough, animatedPositions, compileFoldTable,
-  foldTablePositions, FoldError, type FoldOutcome, type Vec2,
+  foldTablePositions, foldPointsAt, FoldError, type FoldOutcome, type Vec2,
 } from '../src/fold-engine.js'
 import { CRANE } from './util/crane.js'
 import { M } from '../src/vendor/flatfolder/math.js'
@@ -349,21 +349,46 @@ test('crease rows: cut every ply, fold nothing, take no timeline slot', () => {
   for (const p of pos) assert.ok(Math.abs(p[2]) < 1e-9)
 })
 
-// `swing` exists so consumers never see raw `t`, whose end is the step's own
-// `to` shrunk by the turn-over window. Gating a highlight on `t < 1` leaves
-// the crane's half-raised wings lit forever after the bird comes to rest.
-test('swing reaches 1 when a step held short of flat comes to rest', () => {
+// Attribute rows are timed like the fold they describe, so adding an id and
+// an event makes them scene/post events with no further mapping. That timing
+// is what lets colouring be a separate pipeline from spawning the paper.
+test('every attribute row carries its own fold\'s beat and duration', () => {
+  const program = compileFoldTable([
+    { step: 'diag', p1: '0,0', p2: '1,1', move: '0.9,0.1', beat: 2, dur: 3 },
+    { step: 'book', p1: '0.5,0.5', p2: '0,1', move: '0.05,0.05', beat: 6, dur: 1 },
+  ])
+  assert.deepEqual(program.folds.map((r) => [r.step, r.beat, r.dur]), [[0, 2, 3], [1, 6, 1]])
+  for (const rows of [program.faces, program.edges]) {
+    for (const r of rows) {
+      const fold = program.folds[r.step as number]
+      assert.equal(r.beat, fold.beat)
+      assert.equal(r.dur, fold.dur)
+    }
+  }
+})
+
+// face -> points: sampling an element at a fraction of its OWN fold, so one
+// call gives every step the same moment in its swing.
+test('foldPointsAt places each element where its own fold has reached', () => {
   const program = compileFoldTable([
     { step: 'diag', p1: '0,0', p2: '1,1', move: '0.9,0.1' },
-    { step: 'held', p1: '0.5,0.5', p2: '0,1', move: '0.05,0.05', to: 0.5 },
+    { step: 'book', p1: '0.5,0.5', p2: '0,1', move: '0.05,0.05' },
   ])
-  assert.equal(foldTablePositions(program, 1).swing, 0, 'not started')
-  assert.equal(foldTablePositions(program, 1.5).swing, 1, 'landed at its own end')
-  assert.equal(foldTablePositions(program, 2).swing, 1, 'and stays landed')
-  const swings = [...Array(11).keys()].map((i) => foldTablePositions(program, 1 + i / 20).swing)
-  assert.deepEqual(swings, [...swings].sort((a, b) => a - b), 'runs forward only')
-  assert.ok(swings.some((s) => s > 0 && s < 1), 'and passes through the middle')
-  assert.equal(foldTablePositions(program, 0).step, -1, 'the flat sheet is no step')
+  const flat = foldPointsAt(program, program.faces, 0)
+  const mid = foldPointsAt(program, program.faces, 0.5)
+  for (const r of [...flat, ...mid]) {
+    for (const k of ['px', 'py', 'pz']) assert.equal(typeof r[k], 'number')
+  }
+  // a face that swings leaves the plane mid-fold; one that stays put does not
+  const movers = mid.filter((r) => r.moving)
+  const still = mid.filter((r) => !r.moving)
+  assert.ok(movers.length && still.length)
+  assert.ok(movers.some((r) => Math.abs(r.pz as number) > 0.05), 'a mover lifts')
+  const pairs = new Map(flat.map((r) => [`${r.step}:${r.face}`, r]))
+  for (const r of still) {
+    const was = pairs.get(`${r.step}:${r.face}`)!
+    assert.ok(Math.abs((r.px as number) - (was.px as number)) < 1e-6, 'still paper stays put')
+  }
 })
 
 // Face numbering is what makes per-face attributes addressable: it must hold
