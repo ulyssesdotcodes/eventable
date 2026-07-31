@@ -145,11 +145,15 @@ function buildPostGlobals(root) {
   /** @param {string} doc @param {string} indent */
   const docComment = (doc, indent) => (doc ? `${indent}/** ${doc.replace(/\*\//g, '*\\/')} */\n` : '')
   const fxOps = ops.filter((o) => o.kind === 'fx' || o.kind === 'combine')
-  // Each op is both a PostChain method (chaining) and a top-level global (starts
-  // a chain from the implicit scene) — so `edges(0.2)` and `blur(4).bloom(1)`
-  // read like hydra.
+  // The generator heads, mirroring headScope's exclusions: scene/prev are
+  // hand-written below and transition is built by the fold, never typed.
+  const headOps = ops.filter((o) => o.kind === 'head' && !['scene', 'prev', 'transition'].includes(o.name))
+  // Each fx/combine op is both a PostChain method (chaining) and a top-level
+  // global (starts a chain from the implicit scene) — so `edges(0.2)` and
+  // `blur(4).bloom(1)` read like hydra. A head is a global only.
   const methods = fxOps.map((o) => `${docComment(o.doc, '    ')}    ${o.name}(${params(o.args, o.kind === 'combine')}): PostChain;`).join('\n')
-  const globals = fxOps.map((o) => `${docComment(o.doc, '  ')}  function ${o.name}(${params(o.args, o.kind === 'combine')}): PostChain;`).join('\n')
+  const globals = [...fxOps, ...headOps]
+    .map((o) => `${docComment(o.doc, '  ')}  function ${o.name}(${params(o.args, o.kind === 'combine')}): PostChain;`).join('\n')
 
   return [
     "// Generated — the post chain surface, from src/post-lang.ts's op registry",

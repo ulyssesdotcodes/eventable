@@ -221,3 +221,21 @@ test('expr cells: the "=" surface completes bare sources and chain methods', () 
     assert.ok(chainNames.includes(m), `expected Expr member ${m} on a bare slider() chain`)
   }
 })
+
+test('post cells: the chain surface completes fx ops AND generator heads', () => {
+  const postSvc = createLangService(env, 'post')
+  const bare = postSvc.completionsAt('bl', 2)
+  assert.ok(bare)
+  const bareNames = bare.entries.map((e) => e.name)
+  // Heads are globals only — they start a chain from a synthesised field — so a
+  // fx-only surface silently hides every generator (the regression this pins).
+  for (const m of ['blur', 'bloom', 'mask', 'scene', 'prev', 'gradient', 'noise', 'voronoi', 'stripes', 'fill']) {
+    assert.ok(bareNames.includes(m), `expected bare ${m} in the post surface`)
+  }
+  const chain = postSvc.completionsAt('noise(4).', 'noise(4).'.length)
+  assert.ok(chain)
+  const chainNames = chain.entries.map((e) => e.name)
+  for (const m of ['thresh', 'polar', 'blend']) {
+    assert.ok(chainNames.includes(m), `expected PostChain member ${m} on a generator head`)
+  }
+})
