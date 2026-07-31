@@ -5,7 +5,7 @@
 // on is computed here.)
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { geometryDims, geometryChanged, textParams, textGeometryChanged, cameraPose, lightParams, lightKindChanged, LIGHT_DEFAULT } from '../src/three-scene.js'
+import { geometryDims, geometryChanged, textParams, textGeometryChanged, cameraPose, lightParams, lightKindChanged, paintTables, LIGHT_DEFAULT } from '../src/three-scene.js'
 
 test('geometryDims merges shape defaults with the row\'s own fields', () => {
   assert.deepEqual(geometryDims('box', {}), { hx: 0.25, hy: 0.25, hz: 0.25, r: undefined, h: undefined })
@@ -73,4 +73,23 @@ test('lightKindChanged flags a rebuild only when a row names a different kind', 
   assert.equal(lightKindChanged('point', { kind: 'spot' }), true)
   // An unknown kind is ignored — keep the current one.
   assert.equal(lightKindChanged('point', { kind: 'nope' }), false)
+})
+
+// Origami paint rows are addressed by (step, element) because a face number
+// only means something inside its own step — every fold re-splits the paper.
+test('paintTables indexes paint by step, keyed the way the renderer draws', () => {
+  const paint = paintTables(
+    [
+      { step: 0, face: 1, color: 0x00ff00, fade: 1 },
+      { step: 2, face: 1, color: 0x0000ff },
+      { step: 2, face: 0 },                       // no color: paints nothing
+    ],
+    [{ step: 2, a: 7, b: 3, color: 0xff0000 }],
+  )
+  assert.deepEqual([...paint.faces.keys()], [0, 2], 'a step with no paint is absent')
+  assert.equal(paint.faces.get(2)?.has(0), false)
+  assert.equal(paint.faces.get(0)?.get(1)?.fade, 1)
+  assert.equal(paint.faces.get(2)?.get(1)?.fade, 0, 'no fade means paint throughout')
+  // edges key on the low-high vertex pair, matching the renderer's line dedup
+  assert.ok(paint.edges.get(2)?.has('3,7'))
 })

@@ -1056,7 +1056,58 @@ export class OrigamiBuilder {
     return this._compiled
   }
 
-  /** The create row: compiled program + fold at 0 (flat sheet). Extra props (id, color, px/py/pz, …) merge over defaults. */
+  /**
+   * Per-face attributes of every fold, one row per (step, face) — the same
+   * face numbering the renderer draws with, so one row addresses exactly one
+   * face of one fold:
+   *   `step` which fold (0-based), `name` its label from the fold table,
+   *   `face` the face's number within this step, `moving` true if it swings
+   *   during this fold, `flap` which rigid flap it belongs to (-1 if it stays
+   *   put), `dir` the rotation sense (±1, the solver's, not a screen
+   *   direction), `layer`/`layerFrom` its stacking RANK after/before the fold
+   *   (a rank, not a count — every face of a step gets a different one),
+   *   `plies` how many sheets are stacked where it lies (THIS is "how many
+   *   layers"), `back` true when the paper's back side shows, `cx`/`cy`/`area`
+   *   its centre and size as displayed, `sheetX`/`sheetY` its centre on the
+   *   unfolded square.
+   *
+   * An ordinary table — filter it, derive on it, .save() it, .graph() it. Add
+   * a `color` column and hand it to spawn({ faces }) to paint those faces
+   * while their fold is on screen; an optional `fade` (0…1) ties the paint to
+   * the motion — 0 holds it for the whole fold, 1 swells it in as the flap
+   * starts moving and out again as it lands.
+   *
+   * Face numbers mean nothing across steps: every fold cuts the paper and
+   * renumbers it. Group by `step`, never by `face`.
+   */
+  faces(): Table {
+    return new Table(this.program().faces, this._ctx)
+  }
+
+  /**
+   * Per-edge attributes of every fold, one row per (step, edge) — the creases
+   * and paper borders drawn as lines: `step`/`name` as in faces(), `edge` its
+   * number within this step, `a`/`b` the two vertex numbers it joins, `folds`
+   * true if this fold actually TURNS this crease (the honest answer to "the
+   * edges the fold is on" — being on the fold line is not the same test: the
+   * line also cuts creases it merely crosses, and a reverse fold opens a spine
+   * crease nowhere near it), `mv` "M" or "V" once the fold lands (blank if
+   * flat), `hinge` true if it separates moving paper from still, `border` true
+   * if it is the rim of the sheet.
+   *
+   * Add `color` (and `fade`) and hand it to spawn({ edges }) to light creases
+   * up as they are made.
+   */
+  edges(): Table {
+    return new Table(this.program().edges, this._ctx)
+  }
+
+  /**
+   * The create row: compiled program + fold at 0 (flat sheet). Extra props
+   * (id, color, backColor, px/py/pz, …) merge over defaults. `faces`/`edges`
+   * take painted rows from faces()/edges() — any row of theirs carrying a
+   * `color` recolours that element while its fold is on screen.
+   */
   spawn(props: Row = {}): Table {
     const program = this.program()
     this._id = props.id ?? this._id
@@ -1064,10 +1115,14 @@ export class OrigamiBuilder {
     // rotates the whole object by rz, so undo it here.
     const rz = typeof props.rz === 'number' ? props.rz : 0
     program.flipAxis = [Math.sin(rz), Math.cos(rz)]
+    const paint: Row = {}
+    // Tables can't ride a row into the renderer — take their rows here
+    if (props.faces != null) paint.faces = rowsOf(props.faces as Table | Row[])
+    if (props.edges != null) paint.edges = rowsOf(props.edges as Table | Row[])
     return new Table([{
       id: this._id, event: 'create', beat: 1, shape: 'origami',
       px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0, color: 0xd94f2a,
-      fold: 0, program, ...props,
+      fold: 0, program, ...props, ...paint,
     }], this._ctx)
   }
 
@@ -1675,7 +1730,12 @@ export type DSLSurface = Easings & {
    * Folding paper: origami() is a bare sheet. Chain .steps(table) to fold it
    * by instructions (one fold per row — see schemas.origami), then
    * .spawn({ id, color, … }) for the create row and .sequence() for beat-timed
-   * fold keyframes.
+   * fold keyframes. .faces() and .edges() are what the folding KNOWS — a row
+   * per face and per crease of every fold (which ones move, which creases the
+   * fold turns, how deep the stack is). Give those rows a `color` and pass
+   * them back through spawn({ faces, edges }) to paint the paper by it:
+   *   paper.spawn({ faces: paper.faces().filter({ moving: true })
+   *                   .derive({ color: 0x2f6fff, fade: 1 }) })
    */
   origami: OrigamiFactory
   /**

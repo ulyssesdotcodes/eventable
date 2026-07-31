@@ -9,9 +9,10 @@ import { X } from './vendor/flatfolder/conversion.js'
 import { CON } from './vendor/flatfolder/constraints.js'
 import { NOTE } from './vendor/flatfolder/note.js'
 import { COMP, TYPE_LABEL } from './vendor/linefolder/compute.js'
-import { buildSoftMesh, bakeSoftMotion, pickPinned, FLAT_ANGLE } from './fold-relax.js'
+import { buildSoftMesh, bakeSoftMotion, pickPinned, polyArea, FLAT_ANGLE } from './fold-relax.js'
 import { buildReverseMech, reverseRecordOf, type ReverseRecord } from './fold-mech.js'
 import { bakedMotionDepth } from './tri-clearance.js'
+import type { Row } from './lineage.js'
 
 NOTE.show = false
 let conBuilt = false
@@ -51,6 +52,9 @@ export interface FoldAnim {
   // voted from the solved layer order so it swings out on the side it
   // lands on; independent flaps can swing to opposite sides
   dirs: number[]
+  // which rigid flap each moving face belongs to (faces sharing a vertex
+  // are one body), numbered from 0; -1 for paper that stays put
+  flap: number[]
   // crease network for the soft solver: per-edge dihedral targets before
   // and after this fold (0 flat, ±FLAT folded, sign in the material frame)
   EV: [number, number][]
@@ -63,6 +67,9 @@ export interface FoldOutcome {
   anim: FoldAnim
   type: string          // classification of the chosen state
   nStates: number       // how many valid layer orders existed
+  // sheets stacked where each face lies, from the cell decomposition —
+  // the real "how many layers", unlike `layers`, which is only their order
+  plies: number[]
 }
 
 export class FoldError extends Error {}
@@ -199,7 +206,7 @@ export const foldStep = (st: FoldState, spec: FoldSpec): FoldOutcome => {
   // 4. solve the layer order, seeded with surviving previous orders
   const [FOLDn, CELLn] = COMP.V_FV_2_FOLD_CELL(Vy, FVy)
   const { Ff, EV, EF, FE } = FOLDn
-  const { BF, BI } = CELLn
+  const { BF, BI, CF, FC } = CELLn
   const FOcarry: FaceOrder[] = []
   for (const [f, g, o] of st.FO) {
     for (const f_ of F_map2[f]) {
@@ -285,7 +292,7 @@ export const foldStep = (st: FoldState, spec: FoldSpec): FoldOutcome => {
       }
     }
   }
-  const dirs = flapDirs(FVy, Vx as Vec2[], FM, line, FO, layers)
+  const { dirs, flap } = flapDirs(FVy, Vx as Vec2[], FM, line, FO, layers)
   // dihedral targets: start angles from the carried orders (FOO) with the
   // movers' parity mirrored (they haven't reflected yet); end angles from
   // the solved orders. A valley ('V') is a NEGATIVE dihedral (empirical).
@@ -296,23 +303,28 @@ export const foldStep = (st: FoldState, spec: FoldSpec): FoldOutcome => {
   return {
     state: { V: Vy, FV: FVy, FO, Ff, sheet: Sy as Vec2[], layers, eps: FOLDn.eps },
     anim: {
-      Vfrom: Vx as Vec2[], moving: FM, line, layersFrom, dirs,
+      Vfrom: Vx as Vec2[], moving: FM, line, layersFrom, dirs, flap,
       EV: FOLDn.EV as [number, number][],
       angleFrom: EAfrom.map(angleOf),
       angleTo: (EAto as string[]).map(angleOf),
     },
     type: TYPE_LABEL[sel.type],
     nStates: Number(n),
+    // a face's ply count is the deepest cell it covers: cells partition the
+    // folded plane, and CF lists every face lying over one
+    plies: (FC as number[][]).map((cells) =>
+      cells.reduce((m, c) => Math.max(m, (CF as number[][])[c].length), 1)),
   }
 }
 
 // One rotation sense per connected flap (faces sharing a vertex are one
 // rigid body), voted from the solved stacking: a flap ending on top must
 // swing toward +z, which for a face starting on side s means sense = s.
+// The flap grouping the vote runs on is returned alongside it.
 const flapDirs = (
   FV: number[][], Vfrom: Vec2[], moving: boolean[], line: Line,
   FO: FaceOrder[], layers: number[],
-): number[] => {
+): { dirs: number[]; flap: number[] } => {
   const [u, d] = line
   const n = FV.length
   const comp = Array.from({ length: n }, (_, i) => i)
@@ -343,11 +355,20 @@ const flapDirs = (
     votes.set(c, (votes.get(c) ?? 0) +
       Math.sign(layers[mover] - layers[still]) * side(mover))
   }
-  return FV.map((_, fi) => {
+  // number the flaps in face order, so the ids are small and stable
+  const flapId = new Map<number, number>()
+  const flap = FV.map((_, fi) => {
+    if (!moving[fi]) return -1
+    const c = find(fi)
+    if (!flapId.has(c)) flapId.set(c, flapId.size)
+    return flapId.get(c) as number
+  })
+  const dirs = FV.map((_, fi) => {
     if (!moving[fi]) return 0
     const v = votes.get(find(fi)) ?? 0
     return v >= 0 ? 1 : -1
   })
+  return { dirs, flap }
 }
 
 // Positions of the animated fold at fraction t ∈ [0, 1]: moving flaps
@@ -423,6 +444,12 @@ export interface FoldTableProgram {
   size: number
   initial: { FV: number[][]; V: Vec2[] }
   steps: FoldProgramStep[]
+  // Derived per-element attributes, one row per (step, face) and per
+  // (step, edge) — the same numbering the renderer draws with, so a row
+  // addresses exactly one face or crease of one fold. Face and edge indices
+  // mean nothing across steps: every fold re-splits the paper.
+  faces: Row[]
+  edges: Row[]
   end: number        // beat when the last swing lands
   // display stacking: layer index * gap = z offset; one gap for the whole
   // program so the stack never jumps between steps
@@ -520,6 +547,53 @@ export const parseFoldRows = (rows: Record<string, unknown>[]): FoldTableRowSpec
   return specs
 }
 
+// One fold's faces and creases as rows. Face and edge numbers are the ones
+// the renderer draws with, so a row addresses exactly one element — but only
+// within its own step, since the next fold re-splits the paper.
+const stepAttrs = (
+  k: number, name: string, out: FoldOutcome, Vdisp: Vec2[],
+): { faces: Row[]; edges: Row[] } => {
+  const { FV, Ff, sheet, layers } = out.state
+  const { moving, dirs, flap, layersFrom, EV, angleFrom, angleTo } = out.anim
+  const faces: Row[] = FV.map((F, face) => {
+    const c = (V: Vec2[], axis: 0 | 1): number =>
+      F.reduce((s, vi) => s + V[vi][axis], 0) / F.length
+    return {
+      step: k, name, face,
+      moving: moving[face], flap: flap[face], dir: dirs[face],
+      layer: layers[face], layerFrom: layersFrom[face],
+      plies: out.plies[face], back: Ff[face],
+      cx: c(Vdisp, 0), cy: c(Vdisp, 1), area: polyArea(F, Vdisp),
+      sheetX: c(sheet, 0), sheetY: c(sheet, 1),
+    }
+  })
+  // edge → its incident faces, keyed the way the renderer keys its line list
+  const inc = new Map<string, number[]>()
+  FV.forEach((F, fi) => {
+    for (let i = F.length - 1, j = 0; j < F.length; i = j++) {
+      const key = F[i] < F[j] ? `${F[i]},${F[j]}` : `${F[j]},${F[i]}`
+      const at = inc.get(key)
+      if (at) at.push(fi)
+      else inc.set(key, [fi])
+    }
+  })
+  const edges: Row[] = EV.map(([v0, v1], edge) => {
+    const a = Math.min(v0, v1), b = Math.max(v0, v1)
+    const fs = inc.get(`${a},${b}`) ?? []
+    return {
+      step: k, name, edge, a, b,
+      // the creases this fold actually turns. Being ON the fold line is not
+      // the same test: the line also cuts creases it merely passes through,
+      // and a reverse fold opens a spine crease that is nowhere near it
+      folds: Math.abs(angleTo[edge] - angleFrom[edge]) > 1e-9,
+      mv: angleTo[edge] < 0 ? 'V' : angleTo[edge] > 0 ? 'M' : '',
+      hinge: fs.length === 2 && moving[fs[0]] !== moving[fs[1]],
+      border: fs.length === 1,
+    }
+  })
+  return { faces, edges }
+}
+
 export const compileFoldTable = (
   rows: Record<string, unknown>[], opts: { size?: number } = {},
 ): FoldTableProgram => {
@@ -531,6 +605,8 @@ export const compileFoldTable = (
   let st = initialState()
   const initial = { FV: st.FV.map((F) => [...F]), V: st.V.map(toDisplay) }
   const steps: FoldProgramStep[] = []
+  const faces: Row[] = []
+  const edges: Row[] = []
   const reverses: ReverseRecord[] = []
   const priorLines: Line[] = []
   let parity = 0
@@ -585,6 +661,9 @@ export const compileFoldTable = (
       flipFrom: parity,
       flipTo,
     })
+    const attrs = stepAttrs(steps.length - 1, spec.name, out, stepMotion.Vfrom)
+    faces.push(...attrs.faces)
+    edges.push(...attrs.edges)
     parity = steps[steps.length - 1].flipTo
     const rec = reverseRecordOf(out)
     if (rec) reverses.push(rec)
@@ -606,7 +685,7 @@ export const compileFoldTable = (
     for (const l of step.layers) maxLayer = Math.max(maxLayer, l)
   }
   return {
-    kind: 'fold-table', size, initial, steps,
+    kind: 'fold-table', size, initial, steps, faces, edges,
     end: steps.length > 0 ? steps[steps.length - 1].t1 : 1,
     gap: (STACK_DEPTH * size) / maxLayer,
     maxLayer,
@@ -834,13 +913,7 @@ const bakePassesGate = (
 // relax or mechanism motion, and a vote from the wrong motion is exactly what
 // made the paper flip over and then fold away from the viewer anyway.
 const swingApex = (m: StepMotion, to: number): number => {
-  const area = m.FV.map((F) => {
-    let a = 0
-    for (let i = 0, j = F.length - 1; i < F.length; j = i++) {
-      a += m.Vfrom[F[j]][0] * m.Vfrom[F[i]][1] - m.Vfrom[F[i]][0] * m.Vfrom[F[j]][1]
-    }
-    return Math.abs(a / 2)
-  })
+  const area = m.FV.map((F) => polyArea(F, m.Vfrom))
   const base = sampleStepMotion(m, 0).pos
   let apex = 0
   for (const f of [0.25, 0.5, 0.75]) {
@@ -913,11 +986,20 @@ const smooth = (a: number, b: number, x: number): number => {
 export const foldTablePositions = (
   program: FoldTableProgram, fold: number,
 ): {
-  FV: number[][]; pos: [number, number, number][]; moving: boolean[]
+  FV: number[][]; pos: [number, number, number][]
   zOff: number[]
   // layer-offset direction per face when the motion carries one (mechanism
   // bakes); undefined = world z, as in flat states
   zDir?: [number, number, number][]
+  // which step's face numbering `FV` is; -1 for the unfolded sheet. The same
+  // arrays come back for every fold value inside a step, so a face index
+  // names one piece of paper for the whole swing and renumbers only when a
+  // fold lands.
+  step: number
+  // fraction of THIS fold that has happened, 0 → 1. Normalized past both the
+  // turn-over window and a step that stops short of flat (`to`), so it always
+  // reaches 1 when the paper comes to rest — which raw `t` does not.
+  swing: number
 } => {
   const N = program.steps.length
   const mid = program.maxLayer / 2
@@ -925,8 +1007,9 @@ export const foldTablePositions = (
     return {
       FV: program.initial.FV,
       pos: program.initial.V.map((p) => [p[0], p[1], 0]),
-      moving: program.initial.FV.map(() => false),
       zOff: program.initial.FV.map(() => program.gap * (0 - mid)),
+      step: -1,
+      swing: 0,
     }
   }
   const k = Math.min(Math.floor(fold), N - 1)
@@ -978,7 +1061,15 @@ export const foldTablePositions = (
     pos = pos.map(rot)
     zDir = (zDir ?? step.FV.map((): [number, number, number] => [0, 0, 1])).map(rot)
   }
-  return { FV: step.FV, pos, moving: step.moving, zOff, zDir }
+  // `t` runs to the step's own end, which is `to` shrunk by the turn-over
+  // window — not to 1. Dividing by that end is what makes a step held at 90°
+  // (`to: 0.5`) still read as a finished fold once it comes to rest.
+  const tEnd = flipping ? Math.max(0, (step.to - FLIP_WINDOW) / (1 - FLIP_WINDOW)) : step.to
+  return {
+    FV: step.FV, pos, zOff, zDir,
+    step: k,
+    swing: tEnd > 0 ? Math.min(1, t / tEnd) : 1,
+  }
 }
 
 // The fold value a beat-timed schedule reaches at a given beat — steps swing

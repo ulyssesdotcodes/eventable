@@ -478,7 +478,32 @@ editable("origami", schemas.origami)
 // holds the finished crane, then opens flat and folds itself all over
 // again.
 const paper = origami().steps(table("origami"))
-paper.spawn({ id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.356 })
+
+// The folding also KNOWS things about itself, and they come out as ordinary
+// tables. paper.faces() is one row per (fold, face): which faces swing on
+// that fold, how many sheets are stacked under each, which side shows.
+// Filter it, give the rows a \`color\`, and hand them back to spawn() — those
+// faces are painted while their fold is the one on screen. \`fade: 1\` swells
+// the paint in as the flap starts moving and out again as it lands, so the
+// paper tells you what is moving right now. Face numbers only mean something
+// inside their own step: every fold cuts the paper and renumbers it.
+const swinging = paper.faces()
+  .filter({ moving: true })
+  .derive({ color: 0x2f6fff, fade: 1 })
+  .save("swinging")
+
+// paper.edges() is the same for creases. \`folds\` is the honest "edges the
+// fold is on": the creases this fold actually TURNS, which is not the same as
+// the ones lying on the fold line — that line also cuts creases it merely
+// crosses, and a reverse fold opens a spine crease nowhere near it.
+const creasing = paper.edges()
+  .filter({ folds: true })
+  .derive({ color: 0x2f6fff, fade: 1 })
+
+paper.spawn({
+  id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.356,
+  faces: swinging, edges: creasing,
+})
   .concat(paper.sequence())
   .outThree()
 
@@ -502,6 +527,22 @@ rows([
 //     folding wrong.
 //   - Slow a step down: give "neck" dur: 6 and watch the reverse fold
 //     swing through.
+//
+// Things to try with the paint, live in the code (the "swinging" tab shows
+// the rows you are painting with):
+//   - Change 0x2f6fff, or set \`fade: 0\` to hold the colour for the whole
+//     fold instead of pulsing it.
+//   - Colour by thickness instead of motion — the deep stacks glow:
+//       paper.faces().derive({ color: field("plies").gt(20)
+//         .cond(0xff8800, 0x223344) })
+//   - Mountains one colour, valleys another:
+//       paper.edges().filter({ folds: true })
+//         .derive({ color: field("mv").eq("M").cond(0xff3b30, 0x2f6fff) })
+//   - Paint one flap: .filter(field("flap").eq(0)) instead of { moving: true }.
+//   - It's a table, so graph it — watch the stack deepen fold by fold:
+//       paper.faces().groupBy("step")
+//         .agg({ deepest: rs => Math.max(...rs.map(r => r.plies)) })
+//         .graph("deepest")
 `,
     tables: {
       origami: [
