@@ -6,9 +6,9 @@ import { foldTablePositions, type FoldTableProgram } from '../src/fold-engine.js
 import { conformRow, schemaColumns, invalidColumns, type ColumnType } from '../src/editable-tables.js'
 import { SAMPLES } from '../src/samples.js'
 import { buildHydraIndex, hydraFrameAt } from '../src/hydra.js'
-import { frameToBeat } from '../src/constants.js'
+import { beatToFrame } from '../src/constants.js'
 import { rasterizeRows } from '../src/rasterize.js'
-import { outViewName } from '../src/dsl.js'
+import { outViewName, SCHEMAS } from '../src/dsl.js'
 
 test('new verbs cook end-to-end (grid/derive/groupBy/csv/join/triggerEach + lineage)', () => {
   const code = `
@@ -196,20 +196,11 @@ test('Hydra Meta sample: replace/append/setSource/layer rewrite the sketch acros
   }).run(sample.code, { seed: 1 })
 
   const hydra = views.get('hydra')!
-  const cols = schemaColumns({
-    beat: 'number',
-    event: ['setCode', 'setSource', 'append', 'replace', 'layer', 'transition', 'setVariable'],
-    output: ['o0', 'o1', 'o2', 'o3'],
-    code: 'code', find: 'string', name: 'string', value: 'number',
-    mode: ['blend', 'add', 'mult', 'diff', 'layer', 'mask'],
-  })
-  assert.equal(cols.find((c) => c.name === 'event')!.type, 'enum')
-  assert.deepEqual(cols.find((c) => c.name === 'mode')!.options,
-    ['blend', 'add', 'mult', 'diff', 'layer', 'mask'])
+  const cols = schemaColumns(SCHEMAS.hydra)
   for (const r of hydra.rows) assert.deepEqual(invalidColumns(r, cols), [], 'seed rows conform')
 
   const index = buildHydraIndex(hydra.rows)
-  const at = (beat: number) => hydraFrameAt(index, Math.round((beat - 1) * 30))!
+  const at = (beat: number) => hydraFrameAt(index, beatToFrame(beat))!
 
   // beat 1: the bare oscillator.
   assert.equal(at(1).code, 'osc(20, 0.1, 1.2).out(o0)')
@@ -234,8 +225,6 @@ test('Hydra Meta sample: replace/append/setSource/layer rewrite the sketch acros
   assert.equal(at(15).code, wipe)
   // At beat 16 the 2-beat window has elapsed: only the after sketch remains.
   assert.equal(at(16).code, 'osc(30, 0.2, 2).kaleid(7).out(o0)')
-  // frameToBeat is the inverse used above — a light sanity tie to constants.
-  assert.equal(Math.round(frameToBeat(0)), 1)
 })
 
 test('Origami Cicada sample: nine simple folds, all exact', () => {

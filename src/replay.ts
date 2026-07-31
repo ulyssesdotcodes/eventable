@@ -7,9 +7,9 @@ import { rasterizeRows } from './rasterize.js'
 import { hydraRows } from './hydra.js'
 import { baubleRows } from './bauble.js'
 import { postRows, buildPostIndex, postStateFrames, postFrameAt } from './post.js'
-import { hashOf, outViewName, type Table } from './dsl.js'
+import { hashOf, outViewName, type GraphSpec, type Table } from './dsl.js'
 import type { Row } from './lineage.js'
-import type { ResolvedGraph, RunOptions, RuntimeResult } from './runtime.js'
+import type { RunOptions, RuntimeResult } from './runtime.js'
 
 // Change-detection signatures, one per cooked output — the source view's graph
 // hash (the same hash the materialize memo trusts for "unchanged subgraph →
@@ -26,7 +26,7 @@ export interface CookedSigs {
 
 export interface CookedResult {
   views: Map<string, Table>
-  graphs: ResolvedGraph[]
+  graphs: GraphSpec[]
   sceneRows: Row[]
   timelineRows: Row[]
   hydraRows: Row[]
@@ -42,8 +42,6 @@ interface Runtime {
 
 export function cookProgram(runtime: Runtime, code: string, seed: number, dataCache?: Map<string, string>): CookedResult {
   const result = runtime.run(code, { seed, dataCache })
-  // Each consumer prefers its combined .outX() "(system)" view (built only
-  // when something routed to it), falling back to the bare-name lookup.
   const view = (name: string): Table | undefined =>
     result.views.get(outViewName(name)) ?? result.views.get(name)
   const scene = view('scene')

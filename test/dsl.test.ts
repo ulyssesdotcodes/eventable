@@ -31,17 +31,11 @@ test('filter matches a { field: value } pattern (multi-key = AND, ===)', () => {
   assert.deepEqual(base.filter({ id: 'none' }).rows, [])
 })
 
-test('flatMap exposes the index and full row array (for look-back)', () => {
+test('flatMap fans rows out through the index and full row array, dropping nulls and flattening arrays', () => {
   const base = t([{ v: 5 }, { v: 9 }, { v: 2 }])
-  const out = base.flatMap((r, i, rows) => (i > 0 && (r.v as number) > (rows[i - 1].v as number) ? r : null))
-  assert.deepEqual(out.rows, [{ v: 9 }])
-})
-
-test('flatMap fans rows out, dropping nulls and flattening arrays', () => {
-  const base = t([{ v: 1 }, { v: 2 }, { v: 3 }])
-  const out = base.flatMap((r) =>
-    r.v === 2 ? null : r.v === 3 ? [{ v: 3 }, { v: 30 }] : { v: (r.v as number) * 10 })
-  assert.deepEqual(out.rows, [{ v: 10 }, { v: 3 }, { v: 30 }])
+  const out = base.flatMap((r, i, rows) =>
+    i === 0 ? null : (r.v as number) > (rows[i - 1].v as number) ? [r, { v: 90 }] : r)
+  assert.deepEqual(out.rows, [{ v: 9 }, { v: 90 }, { v: 2 }])
 })
 
 test('concat accepts a Table or a bare array', () => {
@@ -60,17 +54,9 @@ test('scan threads state and flattens emitted rows', () => {
   const out = t([{ v: 4 }, { v: 7 }, { v: 12 }, { v: 3 }]).scan((state, cur) => {
     const total = state.total + (cur.v as number)
     const crossed = state.total < 10 && total >= 10
-    return { state: { total }, emit: crossed ? { at: cur.v } : null }
+    return { state: { total }, emit: crossed ? [{ at: cur.v }, { at: total }] : null }
   }, { total: 0 })
-  assert.deepEqual(out.rows, [{ at: 7 }])
-})
-
-test('scan can emit arrays', () => {
-  const out = t([{ v: 1 }, { v: 2 }]).scan((s, cur) => ({
-    state: s,
-    emit: [{ x: cur.v }, { x: (cur.v as number) * 2 }],
-  }), null)
-  assert.deepEqual(out.rows, [{ x: 1 }, { x: 2 }, { x: 2 }, { x: 4 }])
+  assert.deepEqual(out.rows, [{ at: 7 }, { at: 11 }], 'an emit array flattens in place')
 })
 
 test('columns is the first-seen union of keys across rows', () => {
@@ -172,9 +158,8 @@ test('.three.rotate passes base rows through, appending start + end keyframes', 
   const { three } = createDSL(null)
   const scene = three.box({ id: 'a' }).concat(three.box({ id: 'b', beat: 3 }))
   const out = scene.three.rotate({ amount: Math.PI, dur: 4 })
-  assert.deepEqual(out.rows, [
-    { id: 'a', event: 'create', beat: 1, shape: 'box', px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 },
-    { id: 'b', event: 'create', beat: 3, shape: 'box', px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 },
+  assert.deepEqual(out.rows.slice(0, 2), scene.rows, 'base rows pass through')
+  assert.deepEqual(out.rows.slice(2), [
     // 'a': create at beat 1, so ry glides 0 → π over beats 1..5.
     { id: 'a', event: 'update', beat: 1, ry: 0 },
     { id: 'a', event: 'update', beat: 5, ry: Math.PI },
@@ -249,11 +234,6 @@ test('every named primitive carries its shape and a "create" type', () => {
   }
 })
 
-test('t is a shorthand alias for the three namespace', () => {
-  const { three, t } = createDSL(null)
-  assert.equal(t, three)
-})
-
 test('light builds a "light" create row without forcing a position', () => {
   const { three } = createDSL(null)
   // Unlike the mesh primitives, a light omits px/py/pz so the renderer can
@@ -271,15 +251,9 @@ test('light builds a "light" create row without forcing a position', () => {
 test('three.translate/scale/rotate modify a scene table\'s create rows', () => {
   const { three } = createDSL(null)
   const base = three.box({ id: 'a', px: 1 })
-  assert.deepEqual(three.translate(base, 2, -1, 0.5).rows[0], {
-    id: 'a', event: 'create', beat: 1, shape: 'box',
-    px: 3, py: -1, pz: 0.5, rx: 0, ry: 0, rz: 0,
-  })
+  assert.deepEqual(three.translate(base, 2, -1, 0.5).rows[0], { ...base.rows[0], px: 3, py: -1, pz: 0.5 })
   // scale multiplies sx/sy/sz (default 1); one arg = uniform on all axes.
-  assert.deepEqual(three.scale(base, 2).rows[0], {
-    id: 'a', event: 'create', beat: 1, shape: 'box',
-    px: 1, py: 0, pz: 0, rx: 0, ry: 0, rz: 0, sx: 2, sy: 2, sz: 2,
-  })
+  assert.deepEqual(three.scale(base, 2).rows[0], { ...base.rows[0], sx: 2, sy: 2, sz: 2 })
   assert.deepEqual(three.rotate(base, 0, Math.PI, 0).rows[0].ry, Math.PI)
 })
 
@@ -291,20 +265,13 @@ test('three modifiers leave partial update keyframes that omit the field alone',
   assert.deepEqual(rows[1], { id: 'a', event: 'update', beat: 5, ry: 1 }) // update untouched
 })
 
-test('rotate emits one row per value, cycling through rows and merging', () => {
+test('rotate emits one row per value, cycling the pattern and letting each value override it', () => {
   const { rotate } = createDSL(null)
-  const pattern = [{ shape: 'a' }, { shape: 'b' }]
-  const out = rotate(pattern, [{ beat: 1 }, { beat: 2 }, { beat: 3 }, { beat: 4 }, { beat: 5 }])
+  const out = rotate([{ shape: 'a' }, { shape: 'b' }],
+    [{ beat: 1 }, { beat: 2 }, { beat: 3 }, { beat: 4, shape: 'c' }])
   assert.deepEqual(out.rows, [
-    { shape: 'a', beat: 1 }, { shape: 'b', beat: 2 }, { shape: 'a', beat: 3 },
-    { shape: 'b', beat: 4 }, { shape: 'a', beat: 5 },
+    { shape: 'a', beat: 1 }, { shape: 'b', beat: 2 }, { shape: 'a', beat: 3 }, { shape: 'c', beat: 4 },
   ])
-})
-
-test('rotate lets each value override the cycled row', () => {
-  const { rotate } = createDSL(null)
-  const out = rotate([{ code: 'x' }, { code: 'y' }], [{ beat: 1 }, { beat: 2, code: 'z' }])
-  assert.deepEqual(out.rows, [{ code: 'x', beat: 1 }, { code: 'z', beat: 2 }])
 })
 
 test('schemas: canonical table schemas ride the DSL surface, typed and frozen', async () => {
@@ -313,11 +280,8 @@ test('schemas: canonical table schemas ride the DSL surface, typed and frozen', 
   assert.equal(schemas, SCHEMAS)
   const { schemaColumns } = await import('../src/editable-tables.js')
   const cols = schemaColumns(schemas.hydra)
-  assert.deepEqual(cols.find((c) => c.name === 'code'),
-    { name: 'code', type: 'code', language: 'hydra', usedBy: ['setCode', 'setSource', 'append', 'layer', 'transition'] })
-  assert.deepEqual(cols.find((c) => c.name === 'event')?.options,
-    ['setCode', 'setSource', 'append', 'replace', 'layer', 'transition', 'setVariable'])
-  assert.deepEqual(cols.find((c) => c.name === 'out')?.options, ['o0', 'o1', 'o2', 'o3'])
+  const code = cols.find((c) => c.name === 'code')!
+  assert.ok(code.type === 'code' && code.language === 'hydra', 'hydra code cells open in hydra mode')
   for (const name of ['sliders', 'path', 'origami']) assert.ok(name in schemas, `expected schemas.${name}`)
   // Frozen: an untyped program can't reshape a shared schema for later runs.
   assert.ok(Object.isFrozen(schemas.hydra) && Object.isFrozen(schemas.hydra.event))

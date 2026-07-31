@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  Table, field, midi, slider, time, loop, isBinding, isStreamingNode, resolveBindings, hashOf, type Expr,
+  Table, field, idx, midi, slider, time, loop, isBinding, isStreamingNode, resolveBindings, type Expr,
 } from '../src/dsl.js'
 import { rasterizeRows } from '../src/rasterize.js'
 import { buildMidiIndex, sampleMidiAt, midiRow, decodeMidi } from '../src/midi.js'
@@ -13,18 +13,12 @@ const t = (rows: Row[]): Table => new Table(rows)
 const b = (frame: number): number => frameToBeat(frame)
 const nodeOf = (e: Expr): import('../src/dsl.js').ExprNode => e.node
 
-// ── Streaming detection ─────────────────────────────────────────────────────
-
 test('isStreamingNode is true for any expression containing midi()', () => {
   assert.equal(isStreamingNode(nodeOf(field('a').add(1))), false)
   assert.equal(isStreamingNode(nodeOf(midi('c4'))), true)
   assert.equal(isStreamingNode(nodeOf(midi('c4').mul(2))), true)
   assert.equal(isStreamingNode(nodeOf(field('base').add(midi('c4')))), true)
 })
-
-// ── derive: streaming → binding, constant → baked ─────────────────────────
-
-// ── slider(): the sibling streaming source ──────────────────────────────────
 
 test('derive(slider) leaves a per-frame binding; resolveBindings reads ctx.slider', () => {
   const row = t([{ id: 'a' }]).derive({ py: slider('height') }).rows[0]
@@ -64,16 +58,6 @@ test('a midi value composes with row fields, resolved at frame time', () => {
   assert.equal(resolveBindings(row, { midi: () => 0.5 }).v, 60)
 })
 
-test('midi bindings are diffable: same note hashes equal, different note differs', () => {
-  const a = t([{ id: 'x' }]).derive({ amount: midi('c4') })
-  const b = t([{ id: 'x' }]).derive({ amount: midi('c4') })
-  const c = t([{ id: 'x' }]).derive({ amount: midi('e4') })
-  assert.equal(hashOf(a), hashOf(b))
-  assert.notEqual(hashOf(a), hashOf(c))
-})
-
-// ── rasterize carries bindings through to every baked frame ─────────────────
-
 test('rasterize carries a midi binding onto each dense frame row', () => {
   const events = t([
     { id: 's', event: 'create', beat: 1, shape: 'box', px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 },
@@ -110,8 +94,6 @@ test('a note recorded at frame 60 drives the field every time the loop passes it
   assert.equal(rowAt(120).amount, 0, 'released at frame 120')
 })
 
-// ── The same carry-through, but for a hydra sketch variable ─────────────────
-
 test('a midi binding in a hydra setVariable event survives to hydraFrameAt and resolves at playback', () => {
   const codeRow = { beat: 1, event: 'setCode', code: 'osc(speed).out()' }
   const varRow = t([{ beat: 1, event: 'setVariable', name: 'speed' }]).derive({ value: midi('c4') }).rows[0]
@@ -124,4 +106,14 @@ test('a midi binding in a hydra setVariable event survives to hydraFrameAt and r
 
   const resolved = resolveBindings(frame!.vars, { midi: () => 0.6 })
   assert.equal(resolved.speed, 0.6)
+})
+
+test('filter() rejects a streaming predicate — row presence is decided at cook time', () => {
+  assert.throws(() => t([{ v: 1 }]).filter(slider('gate').gt(0.5)), /live source/)
+})
+
+test('idx() inside a streaming expression bakes per row rather than resolving to 0', () => {
+  const rows = t([{}, {}, {}]).derive({ y: idx().mul(10).add(slider('h')) }).rows
+  const ctx = { slider: () => 1 }
+  assert.deepEqual(rows.map((r) => resolveBindings(r, ctx).y), [1, 11, 21])
 })

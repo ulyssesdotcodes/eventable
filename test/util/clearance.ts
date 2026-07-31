@@ -4,12 +4,10 @@
 // crossings (paper through paper), depth (penetration past the other face's
 // plane), shears (near-coplanar overlap the layer offsets fail to separate).
 import { foldTablePositions, type FoldTableProgram } from '../../src/fold-engine.js'
-import { triCrossLength, triCrossDepth, triShearArea, type V3 } from '../../src/tri-clearance.js'
+import { triCrossDepth, triShearArea, type V3 } from '../../src/tri-clearance.js'
 
 export interface ClearanceFrame {
   fold: number
-  crossLen: number      // total proper-crossing length this frame
-  crossPairs: number    // face pairs that properly cross
   shearArea: number     // near-coplanar unseparated overlap area
   depth: number         // deepest mutual plane penetration among crossing pairs
   worstPair?: [number, number]
@@ -46,8 +44,6 @@ export const clearanceAt = (
   const { FV, tris, bboxes } = displayTris(program, fold)
   const gapMin = program.gap * (opts.shearGapFrac ?? 0.25)
   const shares = (a: number[], b: number[]): boolean => a.some((v) => b.includes(v))
-  let crossLen = 0
-  let crossPairs = 0
   let shearArea = 0
   let depth = 0
   let worstPair: [number, number] | undefined
@@ -59,36 +55,14 @@ export const clearanceAt = (
       if (alo[0] > bhi[0] + gapMin || blo[0] > ahi[0] + gapMin ||
           alo[1] > bhi[1] + gapMin || blo[1] > ahi[1] + gapMin ||
           alo[2] > bhi[2] + gapMin || blo[2] > ahi[2] + gapMin) continue
-      let pairCross = 0
-      let pairShear = 0
-      let pairDepth = 0
       for (const t1 of tris[a]) {
         for (const t2 of tris[b]) {
-          pairCross += triCrossLength(t1, t2)
-          pairShear += triShearArea(t1, t2, gapMin)
-          pairDepth = Math.max(pairDepth, triCrossDepth(t1, t2))
+          shearArea += triShearArea(t1, t2, gapMin)
+          const d = triCrossDepth(t1, t2)
+          if (d > depth) { depth = d; worstPair = [a, b] }
         }
       }
-      if (pairCross > 1e-6) crossPairs++
-      crossLen += pairCross
-      shearArea += pairShear
-      if (pairDepth > depth) { depth = pairDepth; worstPair = [a, b] }
     }
   }
-  return { fold, crossLen, crossPairs, shearArea, depth, worstPair }
-}
-
-// sweep every step's swing (respecting `to`) at `samples` points each,
-// endpoints excluded (flat states are exact by construction)
-export const clearanceSweep = (
-  program: FoldTableProgram, samples = 24,
-): ClearanceFrame[] => {
-  const out: ClearanceFrame[] = []
-  for (let k = 0; k < program.steps.length; ++k) {
-    const to = program.steps[k].to
-    for (let i = 1; i < samples; ++i) {
-      out.push(clearanceAt(program, k + (i / samples) * to))
-    }
-  }
-  return out
+  return { fold, shearArea, depth, worstPair }
 }

@@ -1,13 +1,13 @@
 // eventable sliders — on-screen controls, event-logged like MIDI. What is
 // stored is the append-only log of value changes, each stamped with the
 // playhead's content/source position (a 1-indexed beat), so a recorded move
-// replays every loop and tracks the timeline mapping. Unlike MIDI, the log
-// rides the shared editable-table store, which buys multiplayer sync and
-// session persistence for free. Slider definitions come from the program (a
-// view named "sliders" with { name, min, max, default? } rows).
+// replays every loop and tracks the timeline mapping. Like MIDI, the log rides
+// the shared editable-table store, which buys multiplayer sync and session
+// persistence for free. Slider definitions come from the program (a view named
+// "sliders" with { name, min, max, default? } rows).
 
 import { beatToFrame } from './constants.js'
-import type { StampedEvent } from './event-log.js'
+import type { LogStore, StampedEvent } from './event-log.js'
 import type { Row } from './lineage.js'
 import type { EvalCtx } from './dsl.js'
 
@@ -26,16 +26,11 @@ export interface SliderDef {
 const clamp = (v: number, lo: number, hi: number): number =>
   hi < lo ? v : Math.min(hi, Math.max(lo, v))
 
-// Structural equality for a def / a def list — the canonical "did the
-// definitions actually change" test, since the store's onChange carries no
-// delta. Backs both the refresh gate and the overlay's def-object reuse.
+// Structural equality for a def — the store's onChange carries no delta, so
+// this is what lets the overlay reuse its existing def objects.
 export function sameSliderDef(a: SliderDef, b: SliderDef): boolean {
   return a.id === b.id && a.min === b.min && a.max === b.max &&
     a.default === b.default && a.step === b.step
-}
-
-export function sameSliderDefs(a: SliderDef[], b: SliderDef[]): boolean {
-  return a.length === b.length && a.every((d, i) => sameSliderDef(d, b[i]))
 }
 
 // Parse one definition row into a normalized def, or null if it has no name.
@@ -132,17 +127,8 @@ export function currentSliderRows(events: StampedEvent[]): Row[] {
 
 // ── Live input ───────────────────────────────────────────────────────────────
 
-// The slider log, abstracted to just what the input needs. main.ts backs this
-// with the editable-table store — riding the store is what makes slider
-// automation sync over multiplayer and persist in the session.
-export interface SliderStore {
-  record(kind: string, payload?: Record<string, unknown>): void
-  events(): StampedEvent[]
-  onChange(cb: () => void): void
-}
-
 export interface SliderInputOptions {
-  store: SliderStore
+  store: LogStore
   // Where new moves get stamped: the playhead's content/source position (a
   // 1-indexed beat, Playback.currentSourceBeats) — comparable across peers,
   // unlike wall time.

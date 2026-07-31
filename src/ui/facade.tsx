@@ -164,8 +164,14 @@ export function CodeFacade(props: {
   const preview = (): HTMLCanvasElement | null =>
     live() && !props.onPromote ? previewFor(props.target) : null
 
+  // What is currently painted into `pre` — highlighting is the expensive part of
+  // a store change, and every store event (every MIDI message, every slider
+  // drag frame) otherwise re-parses every facade on screen.
+  let shown: string | null = null
   createEffect(() => {
-    if (!live()) highlightInto(pre, props.target.text)
+    if (live() || props.target.text === shown) return
+    shown = props.target.text
+    highlightInto(pre, props.target.text)
   })
   onCleanup(() => {
     if (live()) props.host.demote()

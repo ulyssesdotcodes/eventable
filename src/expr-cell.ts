@@ -10,7 +10,7 @@
 // its declaration set per run).
 
 import {
-  Expr, EXPR_FNS, bakeExpr, callExpr, evalExpr, isStreamingNode, makeExprNamespace,
+  Expr, EXPR_FNS, bakeExpr, callExpr, evalExpr, isBinding, isStreamingNode, makeExprNamespace,
   type EvalCtx, type ExprNamespace,
 } from './dsl.js'
 import {
@@ -82,8 +82,8 @@ export function evalExprCell(text: string, row: Row, i: number, ns: ExprNamespac
     return INVALID
   }
   if (out instanceof Expr) {
-    if (isStreamingNode(out.node)) return { ok: true, value: { $expr: out.node }, streaming: true }
     const v = bakeExpr(out.node, row, i)
+    if (isBinding(v)) return { ok: true, value: v, streaming: true }
     return typeof v === 'number' && Number.isFinite(v) ? { ok: true, value: v, streaming: false } : INVALID
   }
   return typeof out === 'number' && Number.isFinite(out) ? { ok: true, value: out, streaming: false } : INVALID

@@ -1,6 +1,6 @@
-// Thin wrapper around the Feather icon set, loaded globally via a CDN
-// <script> tag in index.html (window.feather). Renders the icon's SVG
-// markup inline so it inherits `color`/`font-size` like text would.
+// Thin wrapper around the Feather icon set, loaded globally from index.html's
+// self-hosted <script> (window.feather). Renders the icon's SVG markup inline
+// so it inherits `color`/`font-size` like text would.
 declare global {
   interface Window {
     feather?: {

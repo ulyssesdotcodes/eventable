@@ -25,14 +25,14 @@ import { SAMPLES, sampleIndexForSlug, slugify, serializeSample, parseSample, typ
 import { defaultSessionStore } from './sessions.js'
 import { getVimMode, setVimMode, getMidiEnabled, setMidiEnabled, getUsername, setUsername } from './settings.js'
 import { createCookClient } from './cook-client.js'
-import type { CookedSigs } from './replay.js'
-import { randomSeed, localSource } from './event-log.js'
+import type { CookedResult } from './replay.js'
+import { randomSeed, localSource, type LogStore } from './event-log.js'
 import { createPresenceChannel, userColor, lastCellEdits } from './presence.js'
 import { Table, outViewName } from './dsl.js'
 import { createEditableTableStore, defaultFor, DISABLED_COL, CLEAR_RUNS_KIND, ACTIVITY_TABLE, isExprCellText, type ColumnType, type CodeLanguage, type EditableColumn, type SessionRun } from './editable-tables.js'
 import { APPLY_KIND, type ApplyNode } from './branches.js'
-import { createMidiInput, subscribeWebMidi, type MidiInput, type MidiStore } from './midi.js'
-import { createSliderInput, sliderDefs, sameSliderDefs, type SliderDef, type SliderInput } from './sliders.js'
+import { createMidiInput, subscribeWebMidi, type MidiInput } from './midi.js'
+import { createSliderInput, sliderDefs, type SliderInput } from './sliders.js'
 import { createSliderPanel } from './ui/slider-panel.js'
 import { beatToFrame, DEFAULT_LOOP_BEATS } from './constants.js'
 import { createTapLog } from './tap-log.js'
@@ -72,7 +72,7 @@ function setProgram(code: string): void {
   editableStore.setRow('code', 0, { code })
 }
 
-// The seed an apply ran with (OQ3), with the legacy code-row `seed` cell as the
+// The seed an apply ran with, with the legacy code-row `seed` cell as the
 // fallback for sessions recorded before the column moved onto the apply.
 function seedAt(applyId: string | null, rows: Row[]): number {
   if (applyId != null) {
@@ -339,12 +339,6 @@ function clearTaps(): void {
 
 let currentPlayIndex = 0
 
-// Live MIDI rides the shared editable-table store, so recordings sync and
-// persist like any other table; events are stamped with the playhead's source
-// position so a recorded sweep follows the timeline mapping. Only the
-// *hardware* side is opt-in (Web MIDI pops a browser permission prompt) — the
-// fold always exists, so peer- or session-recorded MIDI plays back regardless.
-let loopCount = 0
 // Whether the reset button's rewind is armed; stepping happens in onTick every
 // REWIND_STEP_BEATS of playhead beats.
 let rewinding = false
@@ -358,13 +352,15 @@ let lastTick = 0
 let rewindBaseline = 0
 let midiEnabled = getMidiEnabled()
 
-const logTableStore = (table: string): MidiStore => ({
+const logTableStore = (table: string): LogStore => ({
   record: (kind, payload) => editableStore.record(table, kind, payload),
   events: () => editableStore.log.all().filter((e) => e.table === table),
   onChange: (cb) => editableStore.onChange(cb),
 })
 
 const midiStore = logTableStore('midi')
+
+let loopCount = 0
 
 const midiInput: MidiInput = createMidiInput({
   store: midiStore,
@@ -414,17 +410,11 @@ const sliderPanel = createSliderPanel({
 // Push slider definitions to the overlay and input on every cook. Prefer the
 // cooked "sliders" view, but fall back to the store so a table created by hand
 // in the table panel (never surfaced as a view) still drives the sliders.
-let lastSliderDefs: SliderDef[] = []
 function updateSliderDefs(views: Map<string, Table>): void {
   // The cooked view already reflects ensure()'s disabled-row filtering; the
   // raw fallback needs it applied here.
   const rows = views.get('sliders')?.rows ?? (editableStore.get('sliders')?.rows ?? []).filter((r) => r[DISABLED_COL] !== true)
   const defs = sliderDefs(rows)
-  // onChange fires on every store event, including a drag's "slider" value
-  // writes, which never touch the "sliders" definitions. Skip the churn unless
-  // the defs actually changed.
-  if (sameSliderDefs(defs, lastSliderDefs)) return
-  lastSliderDefs = defs
   sliderPanel.setDefs(defs)
   if (defs.length) ensureSliderInput().setDefs(defs)
   else sliderInput?.setDefs(defs)
@@ -438,7 +428,7 @@ const [timelineRows, setTimelineRows] = createSignal<Row[]>([])
 // playback consumes, so a band's events can't disagree with what will happen.
 // Refreshed on every applyCooked; changing a retime table and applying moves
 // them.
-const [applied, setApplied] = createSignal<{ cooked: CookedData; particleRows: Row[] } | null>(null)
+const [applied, setApplied] = createSignal<{ cooked: CookedResult; particleRows: Row[] } | null>(null)
 // Bumped once per coalesced store-change frame (see editableStore.onChange
 // below) — the pane's live warp rows and recorded automation ride it.
 const [storeTick, setStoreTick] = createSignal(0)
@@ -517,7 +507,7 @@ const playbackOptions: PlaybackOptions = {
   tapControl: { tap: recordTap, clear: clearTaps, rows: tapRows, anchor: tapAnchor },
   // Not gated on the local hardware toggle: the recording may be a peer's or
   // a saved session's.
-  midiCtxAt: (srcFrame) => (midiInput.rows().length ? midiInput.ctxAt(srcFrame) : null),
+  midiCtxAt: (srcFrame) => midiInput.ctxAt(srcFrame),
   sliderCtxAt: (srcFrame) => (sliderInput && sliderInput.defs().length ? sliderInput.ctxAt(srcFrame) : null),
   onLoopBeats: (n) => recordLoopBeats(n),
   pausedMsBefore: (wallMs) => pausedMsBefore(editableStore.get(ACTIVITY_TABLE)?.events ?? [], wallMs),
@@ -531,19 +521,10 @@ function recordLoopBeats(n: number): void {
   editableStore.record(ACTIVITY_TABLE, 'set-loop-beats', { beats: n, at: Date.now() })
 }
 
-// Play/pause ride the activity table too, so they sync, persist, and show in
-// the activity tab. Two guards keep the stream honest:
-// - `transportQuiet`: only a genuine local toggle is a user transport action.
-//   Programmatic transitions — the autoplay on opening a page, mirroring a
-//   peer's merged event — must not record: a late joiner's autoplay races the
-//   room's join snapshot, and recording it would stamp a fresh 'play' that
-//   overrides the room's paused state (an un-recorded autoplay just gets
-//   corrected by the mirror once the snapshot merges).
-// - The recordLoopBeats-style echo guard: a state already folded from the
-//   table (our own event echoing back) must not re-record, or two clients
-//   ping-pong the same transition. "No events yet" (null) deliberately does
-//   NOT count as a match for 'playing', so a session's first real toggle is
-//   still recorded rather than looking like a silent echo.
+// Play/pause ride the activity table so they sync, persist and replay. Only a
+// genuine local toggle records: a programmatic transition (boot autoplay,
+// mirroring a peer) would stamp a 'play' over the room's paused state. Null (no
+// events yet) deliberately isn't a match, so a session's first toggle records.
 let transportQuiet = false
 function quietTransport(fn: () => void): void {
   transportQuiet = true
@@ -563,7 +544,7 @@ function recordTransport(kind: 'playback-play' | 'playback-pause'): void {
 // data that the real ensure() below turns into store events.
 const cookClient = createCookClient(new Worker(new URL('cook-worker.js', import.meta.url), { type: 'module' }))
 
-async function cookInWorker(code: string, seed: number, seeds?: Record<string, Row[]>, declareSliders = true): Promise<{ cooked: CookedData; declaredNames: string[] }> {
+async function cookInWorker(code: string, seed: number, seeds?: Record<string, Row[]>, declareSliders = true): Promise<{ cooked: CookedResult; declaredNames: string[] }> {
   const editables = editableStore.listNames().map((name) => ({
     name,
     // Match ensure()'s filtering: disabled rows stay in the table but are
@@ -617,8 +598,6 @@ function multiplayerUrl(): string {
 // the id needs pinning before anything could save under it.
 if (roomName) currentSessionId = roomSessionId(roomName)
 
-import type { GraphSpec } from './graph-panel.js'
-
 let lastViews = new Map<string, Table>()
 // The current program's particle-control rows (see src/particles.ts), folded
 // per tick; refreshed on every applyCooked.
@@ -632,17 +611,6 @@ let liveSeed = 0
 // `tables` even right after a reload.
 let lastDeclaredNames: string[] = []
 
-interface CookedData {
-  views: Map<string, Table>
-  graphs: GraphSpec[]
-  sceneRows: Row[]
-  timelineRows: Row[]
-  hydraRows: Row[]
-  baubleRows: Row[]
-  postRows: Row[]
-  sigs: CookedSigs
-}
-
 // The streaming log tables, under the names their panel tabs wear: the
 // midi/slider folds and event logs, and every editable table's "name·events"
 // history (a log table shows under its bare name instead — see isLog). The one
@@ -654,16 +622,18 @@ function logTables(): Array<{ name: string; rows: Row[] }> {
   const logs: Array<{ name: string; rows: Row[] }> = []
   // Folded MIDI take + raw log, once anything has been recorded — locally, by
   // a peer, or in the loaded session.
-  if (midiInput.rows().length) {
-    logs.push({ name: 'midi', rows: midiInput.rows() })
+  const midiRows = midiInput.rows()
+  if (midiRows.length) {
+    logs.push({ name: 'midi', rows: midiRows })
     logs.push({ name: 'midi' + EVENTS_SUFFIX, rows: midiInput.eventRows() })
   }
   // Folded slider automation + raw log, only once something is recorded — an
   // empty pair just clutters the panel and can't be deleted, being synthetic.
   // ("sliders" itself is the definitions table, shown like any other view.)
-  if (sliderInput && sliderInput.rows().length) {
-    logs.push({ name: 'slider', rows: sliderInput.rows() })
-    logs.push({ name: 'slider' + EVENTS_SUFFIX, rows: sliderInput.eventRows() })
+  const sliderRows = sliderInput?.rows() ?? []
+  if (sliderRows.length) {
+    logs.push({ name: 'slider', rows: sliderRows })
+    logs.push({ name: 'slider' + EVENTS_SUFFIX, rows: sliderInput!.eventRows() })
   }
   for (const name of editableStore.listNames()) {
     // The "slider"/"midi" log tables back recorded automation — surfaced
@@ -681,7 +651,7 @@ function logTables(): Array<{ name: string; rows: Row[] }> {
 // comes and goes with the take and always shows the recording.
 function tablesForDisplay(views: Map<string, Table>): Map<string, Table> {
   const display = new Map(views)
-  if (!display.has('taps')) display.set('taps', new Table(tapRows()))
+  if (tapRows().length && !display.has('taps')) display.set('taps', new Table(tapRows()))
   for (const { name, rows } of logTables()) {
     const alwaysShow = name === 'slider' || name === 'slider' + EVENTS_SUFFIX
     if (!alwaysShow && display.has(name)) continue
@@ -696,7 +666,7 @@ const lastCookedSigs = { scene: '', timeline: '', hydra: '', bauble: '', post: '
 // onto the apply pulse so the whole room resets the same multi-loop sequences.
 // The worker stamps a graph-hash signature per output (see CookedSigs), so
 // this never serializes the dense rows.
-function diffCooked({ sigs }: CookedData): { scene: boolean; timeline: boolean; hydra: boolean; bauble: boolean; post: boolean } {
+function diffCooked({ sigs }: CookedResult): { scene: boolean; timeline: boolean; hydra: boolean; bauble: boolean; post: boolean } {
   const changed = {
     scene: sigs.scene !== lastCookedSigs.scene,
     timeline: sigs.timeline !== lastCookedSigs.timeline,
@@ -733,7 +703,7 @@ function resolveSource(row: Row): { table: string; row: number; beat: number } |
 // the activity table's apply stamps — the author's clock, NOT this replica's —
 // so late joiners land on the same pass of a multi-loop sequence. The loop
 // length folds from the same stream, so a session load or scrub restores it.
-function applyCooked(cooked: CookedData): void {
+function applyCooked(cooked: CookedResult): void {
   lastViews = cooked.views
   // Before load(): load() fires onTick, which reads the slider input.
   updateSliderDefs(cooked.views)
@@ -845,7 +815,7 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     // already moved us to. At the live head both are no-ops.
     if (broadcast) editableStore.forkFromReplay()
     else editableStore.setReplayView(null)
-    let cooked: CookedData
+    let cooked: CookedResult
     let declaredNames: string[]
     try {
       ({ cooked, declaredNames } = await cookInWorker(code, seed, seeds, broadcast))
@@ -853,7 +823,7 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
       setError?.((err as Error).message)
       return
     }
-    // R7: compare the whole fragment snapshot, not one row — a partially
+    // Compare the whole fragment snapshot, not one row — a partially
     // clobbered room is worse than either side winning outright.
     if (obsoleteIfProgramChanged && editableStore.has('code') && currentProgram() !== code) return
     setError?.(null)
@@ -876,9 +846,13 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     const changed = diffCooked(cooked)
     if (broadcast) {
       const changedKinds = Object.keys(changed).filter((k) => changed[k as keyof typeof changed])
-      // The seed rides the apply (OQ3) — the replay unit that scrubSession
-      // re-cooks from.
-      editableStore.recordApply({ changed: changedKinds, at: Date.now(), seed })
+      // The seed rides the apply — the replay unit that scrubSession re-cooks
+      // from. `lastCookedSigs` survives a store clear (new session, sample load,
+      // scene import), so on a fresh log it would report nothing changed and
+      // leave every visualizer on the old session's epoch; omitting `changed`
+      // entirely is how loopEpochsFromApplies already spells "every kind".
+      const prior = (editableStore.get(ACTIVITY_TABLE)?.events ?? []).some((e) => e.kind === APPLY_KIND)
+      editableStore.recordApply({ ...(prior && { changed: changedKinds }), at: Date.now(), seed })
     }
     syncSessionBar()
     applyCooked(cooked)
@@ -1466,11 +1440,7 @@ async function bootRoom(room: string): Promise<void> {
       const n = loopBeatsFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? [])
       if (n != null) playback.setLoopBeats(n)
     }
-    // A peer toggled play/pause — mirror it locally so the whole room's
-    // transport stays together. play()/pause() are idempotent, so this is
-    // harmless even when the merge is just our own recorded event echoing
-    // back (already reflected locally before we ever recorded it). Quiet:
-    // a mirrored transition is not a user action to re-record.
+    // A peer toggled play/pause — mirror it (idempotent, so an echo is harmless).
     if (transportChanged) {
       const state = transportStateFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? [])
       quietTransport(() => (state === 'paused' ? playback.pause() : playback.play()))
@@ -1479,7 +1449,7 @@ async function bootRoom(room: string): Promise<void> {
       // The merge already made their fragments ours; re-cook the joined
       // program at the seed their apply carried.
       const code = currentProgram()
-      // R7 again: two applies can be in flight at once, and the loser must not
+      // Two applies can be in flight at once, and the loser must not
       // re-write the "code" table back to its own older fragment snapshot.
       if (code) void evaluate(code, { setError, seed: seedAt(editableStore.currentHead(), codeRows()), broadcast: false, obsoleteIfProgramChanged: true })
     }
@@ -1515,14 +1485,9 @@ async function firstRun(): Promise<void> {
   }
   syncSessionBar()
   refreshSelector()
-  // Opening the page shows the program already in the session's transport
-  // state — playing by default (today's behavior with no transport history),
-  // but paused if the room (or a resumed session) already is. This is also
-  // the late-joiner landing spot: bootRoom's local-log restore/merge above
-  // has already folded in whatever transport history exists before this
-  // runs. Quiet — this is a default, not a user toggle, so it must record
-  // nothing (see recordTransport); the onMerge mirror corrects it once the
-  // room's join snapshot lands.
+  // Open the page in the session's transport state. Quiet — a default is not a
+  // user toggle (see recordTransport); the onMerge mirror fixes a late joiner
+  // whose autoplay beat the room's join snapshot.
   quietTransport(() => {
     if (transportStateFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? []) === 'paused') playback.pause()
     else playback.play()

@@ -225,12 +225,6 @@ export function buildFrameIndex(sceneRows: Row[]): FrameIndex {
   return { map, maxFrame }
 }
 
-export function stateAtFrame(frameIndex: FrameIndex, i: number): Row[] {
-  const f = Math.floor(i)
-  if (f < 0) return []
-  return frameIndex.map.get(f) ?? []
-}
-
 // Fields interpolated between adjacent cache frames; everything else is
 // discrete (takes the earlier frame's value, never a blend).
 const INTERP_FIELDS = ['px', 'py', 'pz', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'] as const

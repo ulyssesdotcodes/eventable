@@ -1,7 +1,7 @@
 // The timeline strip's pure model — geometry, grid, handle derivation, hit
 // testing and drag math. No DOM; src/ui/timeline-strip.tsx is the view.
 //
-// Coordinate rules (see notes/timeline-strip-plan.md "Coordinate rules"):
+// Coordinate rules:
 // beats are 1-indexed positions, the strip's px axis is 0..maxBeats elapsed
 // beats, so beat b sits at elapsed (b - 1). The `timeline` table's own rows
 // already live on this playback axis (identity); every other table's `beat`
@@ -139,13 +139,13 @@ export interface Handle {
   // that row's stored beat. Absent when a warp, a retime or a content-pass
   // wrap moved it: the handle is where playback shows the event, not where
   // the row says it is, so writing the drawn beat back would mean something
-  // else (OQ1).
+  // else.
   source?: HandleSource
 }
 
 // Which pass `beat` falls in, and its beat local to that pass — a beat past
-// one `unit`-length pass wraps into the next rather than rendering off-strip
-// (notes/timeline-strip-plan.md "Beats past maxBeats"). `maxPass` clamps to
+// one `unit`-length pass wraps into the next rather than rendering off-strip.
+// `maxPass` clamps to
 // an active timeline's actual loop count (so the map's shared terminal instant
 // resolves to the last pass, not a phantom one after it); omitted when passes
 // are unbounded (content run long with no timeline defined).
@@ -203,8 +203,8 @@ export function withPreview(rows: Row[], preview: { row: number; values: Record<
   return next
 }
 
-// Which pass of each axis a section is showing. The two are INDEPENDENT (risk
-// R1): `content` is the visualizer's own pass, counted in SOURCE space, where
+// Which pass of each axis a section is showing. The two are INDEPENDENT:
+// `content` is the visualizer's own pass, counted in SOURCE space, where
 // a row whose beat runs past one loop length forms a later pass of its content
 // (visualizer.ts's passOffset); `timeline` is playback's pass through a
 // multi-pass warp, counted in PLAYBACK space, before the map is applied.
@@ -413,10 +413,6 @@ export function pendingTimelineRows(rows: Row[], appliedRows: Row[]): Set<number
 // little past either edge.
 const EDGE_TOLERANCE_PX = 12
 
-// Which handle's row sits under a pointer at `(x, lane)`. A point handle (a
-// precise target) wins over a span's body (a broad one) at the same spot.
-// Null means background — the strip's view treats that as inert (it no
-// longer scrubs).
 interface Candidate {
   row: number
   priority: number
@@ -430,6 +426,8 @@ function better(prev: Candidate | null, next: Candidate): Candidate {
   return prev
 }
 
+// Which handle's row sits under a pointer at (x, lane) — a point handle (a
+// precise target) beats a span's body (a broad one) at the same spot.
 export function hitTest(handles: Handle[], geometry: StripGeometry, x: number, lane: number): number | null {
   let best: Candidate | null = null
 

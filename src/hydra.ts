@@ -72,14 +72,18 @@ function hasAmount(value: unknown): boolean {
 }
 
 // Render a `layer` amount: numbers become literals; any other string is an
-// expression evaluated per frame with `props` in scope.
-function amountExpr(value: unknown): string {
+// expression evaluated per frame. `param` names the per-frame props binding the
+// expression sees — "props" here, "p" for post.ts, the second caller; both are
+// user-facing binding names documented in the dsl.ts SCHEMAS JSDoc. The blank
+// default is unreachable from hydra's guarded call site but load-bearing for
+// post, which calls this unconditionally for `blend`.
+export function amountExpr(value: unknown, param = 'props'): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value)
   const s = typeof value === 'string' ? value.trim() : ''
   if (s === '') return '0.5'
   const n = Number(s)
   if (!Number.isNaN(n)) return String(n)
-  return s.includes('=>') ? `(${s})` : `(props) => (${s})`
+  return s.includes('=>') ? `(${s})` : `(${param}) => (${s})`
 }
 
 // The hydra output a row drives; a blank or malformed `out` cell means o0.

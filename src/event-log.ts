@@ -12,6 +12,17 @@ export interface StampedEvent {
   [key: string]: unknown
 }
 
+/**
+ * A table-scoped view of the log — what the midi/slider inputs need. main.ts
+ * backs it with the editable-table store, which is what buys their recordings
+ * multiplayer sync and session persistence.
+ */
+export interface LogStore {
+  record(kind: string, payload?: Record<string, unknown>): void
+  events(): StampedEvent[]
+  onChange(cb: () => void): void
+}
+
 export interface EventPayload {
   kind: string
   [key: string]: unknown
@@ -214,12 +225,6 @@ export function createEventLog(
       notify()
     },
   }
-}
-
-export function foldEvents<S>(events: StampedEvent[], reducer: (state: S, event: StampedEvent) => S, initial: S): S {
-  let state = initial
-  for (const e of events) state = reducer(state, e)
-  return state
 }
 
 /** Unsigned 32-bit run seed for the DSL's per-view PRNGs (see runtime.ts). */
