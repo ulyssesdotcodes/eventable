@@ -269,21 +269,23 @@ export const bakeSoftMotion = (
   return out
 }
 
+// Unsigned polygon area by the shoelace formula.
+export const polyArea = (F: number[], V: Vec2[]): number => {
+  let a = 0
+  for (let i = 0, j = F.length - 1; i < F.length; j = i++) {
+    a += V[F[j]][0] * V[F[i]][1] - V[F[i]][0] * V[F[j]][1]
+  }
+  return Math.abs(a / 2)
+}
+
 // Pin the largest static face: it anchors position and orientation while
 // everything that must flex stays free.
 export const pickPinned = (
   FV: number[][], sheet: Vec2[], moving: boolean[],
 ): boolean[] => {
-  const area = (F: number[]): number => {
-    let a = 0
-    for (let i = 0, j = F.length - 1; i < F.length; j = i++) {
-      a += sheet[F[j]][0] * sheet[F[i]][1] - sheet[F[i]][0] * sheet[F[j]][1]
-    }
-    return Math.abs(a / 2)
-  }
   let pinFace = -1
   for (let fi = 0; fi < FV.length; ++fi) {
-    if (!moving[fi] && (pinFace < 0 || area(FV[fi]) > area(FV[pinFace]))) pinFace = fi
+    if (!moving[fi] && (pinFace < 0 || polyArea(FV[fi], sheet) > polyArea(FV[pinFace], sheet))) pinFace = fi
   }
   const pinned = sheet.map(() => false)
   if (pinFace >= 0) for (const vi of FV[pinFace]) pinned[vi] = true

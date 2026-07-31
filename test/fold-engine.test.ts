@@ -348,3 +348,73 @@ test('crease rows: cut every ply, fold nothing, take no timeline slot', () => {
   const { pos } = foldTablePositions(program, 1)
   for (const p of pos) assert.ok(Math.abs(p[2]) < 1e-9)
 })
+
+// `swing` exists so consumers never see raw `t`, whose end is the step's own
+// `to` shrunk by the turn-over window. Gating a highlight on `t < 1` leaves
+// the crane's half-raised wings lit forever after the bird comes to rest.
+test('swing reaches 1 when a step held short of flat comes to rest', () => {
+  const program = compileFoldTable([
+    { step: 'diag', p1: '0,0', p2: '1,1', move: '0.9,0.1' },
+    { step: 'held', p1: '0.5,0.5', p2: '0,1', move: '0.05,0.05', to: 0.5 },
+  ])
+  assert.equal(foldTablePositions(program, 1).swing, 0, 'not started')
+  assert.equal(foldTablePositions(program, 1.5).swing, 1, 'landed at its own end')
+  assert.equal(foldTablePositions(program, 2).swing, 1, 'and stays landed')
+  const swings = [...Array(11).keys()].map((i) => foldTablePositions(program, 1 + i / 20).swing)
+  assert.deepEqual(swings, [...swings].sort((a, b) => a - b), 'runs forward only')
+  assert.ok(swings.some((s) => s > 0 && s < 1), 'and passes through the middle')
+  assert.equal(foldTablePositions(program, 0).step, -1, 'the flat sheet is no step')
+})
+
+// Face numbering is what makes per-face attributes addressable: it must hold
+// for a whole swing and may only change when a fold lands.
+test('a face keeps its number for the whole of its step', () => {
+  const program = compileFoldTable([
+    { step: 'diag', p1: '0,0', p2: '1,1', move: '0.9,0.1' },
+    { step: 'book', p1: '0.5,0.5', p2: '0,1', move: '0.05,0.05' },
+  ])
+  const mid = foldTablePositions(program, 1.5)
+  assert.equal(mid.step, 1)
+  assert.equal(foldTablePositions(program, 1).FV, mid.FV, 'same faces all swing')
+  assert.equal(foldTablePositions(program, 1.99).FV, mid.FV)
+  assert.notEqual(foldTablePositions(program, 0.5).FV, mid.FV, 'renumbered by the fold')
+})
+
+// The creases a fold TURNS are not the creases lying on its fold line: the
+// line also cuts creases it merely crosses, and a reverse fold opens a spine
+// crease nowhere near it. `folds` is the former; anything testing the line
+// itself mismarks every reverse fold.
+test('edge rows mark the creases the fold turns, not the ones on its line', () => {
+  const program = compileFoldTable([
+    { step: 'diag', p1: '0,0', p2: '1,1', move: '0.667,0.333' },
+    { step: 'rev', p1: '0,0.5', p2: '1,0.5', move: '0.333,0.167', kind: 'reverse' },
+  ])
+  const step = program.steps[1]
+  const [u, d] = step.line
+  const onLine = (vi: number): boolean =>
+    Math.abs(step.Vfrom[vi][0] * u[0] + step.Vfrom[vi][1] * u[1] - d) < 1e-6
+  const turning = program.edges.filter((r) => r.step === 1 && r.folds)
+  assert.ok(turning.length > 0, 'a fold turns at least one crease')
+  assert.ok(turning.some((r) => !(onLine(r.a as number) && onLine(r.b as number))),
+    'a reverse fold turns a crease off its own fold line')
+  for (const r of turning) assert.ok(r.mv === 'M' || r.mv === 'V')
+})
+
+// `layers` is a stacking ORDER — a permutation, one rank per face. The count
+// of sheets actually piled up at a face is a different number entirely.
+test('face rows carry ply depth, distinct from the stacking rank', () => {
+  const program = compileFoldTable([
+    { step: 'diag', p1: '0,0', p2: '1,1', move: '0.667,0.333' },
+    { step: 'rev', p1: '0,0.5', p2: '1,0.5', move: '0.333,0.167', kind: 'reverse' },
+  ])
+  const faces = program.faces.filter((r) => r.step === 1)
+  assert.equal(faces.length, program.steps[1].FV.length, 'one row per face')
+  const ranks = faces.map((r) => r.layer as number).sort((a, b) => a - b)
+  assert.deepEqual(ranks, ranks.map((_, i) => i), 'layer is a rank, not a count')
+  for (const r of faces) {
+    assert.ok((r.plies as number) >= 1 && (r.plies as number) <= faces.length)
+    assert.equal(typeof r.moving, 'boolean')
+  }
+  assert.ok(faces.some((r) => r.moving), 'the fold moves something')
+  assert.ok(faces.some((r) => !r.moving), 'and leaves something still')
+})

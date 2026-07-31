@@ -100,8 +100,9 @@ function sampleColor(events: Row[], createEv: Row, i: number): { color: number |
 }
 
 // Numeric fields that must NOT interpolate as tracks: timing bookkeeping,
-// identity, and color (which has its own pulse semantics).
-const NO_TRACK = new Set(['frame', 'beat', 'loop', 'dur', 'id', 'color'])
+// identity, and the colors (a packed 0xRRGGBB lerps as one integer, which
+// bleeds channels; `color` also has its own pulse semantics).
+const NO_TRACK = new Set(['frame', 'beat', 'loop', 'dur', 'id', 'color', 'backColor'])
 
 function sampleObject(events: Row[], i: number, extent: number): SampledState | null {
   const createEv = events.find((e) => e.event === 'create')
