@@ -47,6 +47,27 @@ export interface PostAPI {
 
 const BLUR_SIGMA = 4
 
+// Deterministic 2D hash → two values in [0, 1), the fract(sin(dot)) trick the
+// grain op uses, doubled up. Shared by the noise/voronoi generators; no wall
+// time anywhere, so both scrub deterministically.
+const hash2 = (p: Node): Node =>
+  t.fract(t.sin(t.vec2(t.dot(p, t.vec2(127.1, 311.7)), t.dot(p, t.vec2(269.5, 183.3)))).mul(43758.5453))
+
+// One octave of 2D Perlin noise at `p`, remapped to roughly 0→1: the classic
+// quintic-faded bilinear mix of four corner gradient·offset dot products.
+function perlin(p: Node): Node {
+  const i = t.floor(p)
+  const f = t.fract(p)
+  const corner = (ox: number, oy: number): Node => {
+    const o = t.vec2(ox, oy)
+    return t.dot(hash2(i.add(o)).mul(2).sub(1), f.sub(o))
+  }
+  const w = f.mul(f).mul(f).mul(f.mul(f.mul(6).sub(15)).add(10))
+  const x0 = t.mix(corner(0, 0), corner(1, 0), w.x)
+  const x1 = t.mix(corner(0, 1), corner(1, 1), w.x)
+  return t.clamp(t.mix(x0, x1, w.y).mul(0.7).add(0.5), 0, 1)
+}
+
 // The initial value for op arg `i`: its constant when the arg is a plain number,
 // else the registry default (a function-valued arg is overwritten every frame).
 function liveInit(op: OpCall, i: number): number {
@@ -262,13 +283,49 @@ export function initPost(
           const angle = live(liveInit(op, 0))
           const d = t.vec2(t.cos(angle), t.sin(angle))
           const l = t.clamp(t.dot(t.uv().sub(0.5), d).add(0.5), 0, 1)
+          if (op.args[1]?.value === 1) {
+            // Hue sweep along the ramp: three phase-shifted cosines, the cheap
+            // rainbow palette (no HSV round-trip).
+            const ph = l.mul(Math.PI * 2)
+            const rgb = t.cos(t.vec3(ph, ph.add(Math.PI * 2 / 3), ph.add(Math.PI * 4 / 3))).mul(0.5).add(0.5)
+            return t.vec4(rgb, 1)
+          }
           return t.vec4(t.vec3(l), 1)
         }
         case 'noise': {
           const scale = live(liveInit(op, 0))
-          const cell = t.uv().mul(scale).floor()
-          const n = t.fract(t.sin(t.dot(cell, t.vec2(12.9898, 78.233))).mul(43758.5453))
-          return t.vec4(t.vec3(n), 1)
+          const octaves = Math.min(4, Math.max(1, Math.round(op.args[1]?.value as number)))
+          const p = t.uv().mul(scale)
+          let n = perlin(p)
+          // Fractal stack: each octave doubles frequency, halves amplitude; the
+          // running sum is renormalized so the result stays in 0→1.
+          let amp = 1
+          let total = 1
+          for (let o = 1; o < octaves; o++) {
+            amp *= 0.5
+            total += amp
+            n = n.add(perlin(p.mul(2 ** o)).mul(amp))
+          }
+          return t.vec4(t.vec3(n.div(total)), 1)
+        }
+        case 'voronoi': {
+          const scale = live(liveInit(op, 0))
+          const jitter = live(liveInit(op, 1))
+          const p = t.uv().mul(scale)
+          const i = t.floor(p)
+          const f = t.fract(p)
+          // Nearest feature point over the 3×3 neighbourhood, unrolled (the
+          // offsets are constants, so no TSL loop is needed).
+          let d: Node | null = null
+          for (let oy = -1; oy <= 1; oy++) {
+            for (let ox = -1; ox <= 1; ox++) {
+              const o = t.vec2(ox, oy)
+              const pt = o.add(hash2(i.add(o)).sub(0.5).mul(jitter).add(0.5))
+              const dist = t.length(pt.sub(f))
+              d = d === null ? dist : t.min(d, dist)
+            }
+          }
+          return t.vec4(t.vec3(t.clamp(d, 0, 1)), 1)
         }
         case 'stripes': {
           const count = live(liveInit(op, 0))
