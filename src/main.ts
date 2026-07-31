@@ -260,7 +260,12 @@ function cellTarget(table: string, rowIndex: number, col: string, value: string)
           : Number.isFinite(Number(trimmed)) ? Number(trimmed) : text
       const liveRow = editableStore.get(table)?.rows[rowIndex]
       if (!liveRow || String(liveRow[col] ?? '') !== baseline) {
-        host.setError(`${label} changed underneath this edit — it was not applied`, label)
+        // Warn once, then get out of the way: rebasing onto what the cell holds
+        // now means a second Apply goes through, so a stale baseline (a peer's
+        // edit, a scrub, a row that moved) can never lock the editor. Refusing
+        // every time would leave no way to apply at all.
+        baseline = String(liveRow?.[col] ?? '')
+        host.setError(`${label} changed underneath this edit — Apply again to overwrite it`, label)
         return
       }
       editableStore.setCell(table, rowIndex, col, stored)

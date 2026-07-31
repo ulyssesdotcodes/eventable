@@ -83,6 +83,12 @@ export function createEditorHost(
 
   function promote(next: EditTarget, mount?: HTMLElement): void {
     if (promoted() === next.label) {
+      // Same cell: adopt the caller's fresher target (the panel rebuilds these
+      // on every store change, so it carries the cell's current stored text and
+      // a commit bound to it) without touching the buffer, which holds edits
+      // the user has not applied yet.
+      setTarget(next)
+      refresh()
       cm.focus()
       return
     }
