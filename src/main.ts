@@ -30,7 +30,7 @@ import type { ApplyNode } from './branches.js'
 import { createMidiInput, subscribeWebMidi, type MidiInput, type MidiStore } from './midi.js'
 import { createSliderInput, sliderDefs, sameSliderDefs, type SliderDef, type SliderInput } from './sliders.js'
 import { createSliderPanel } from './ui/slider-panel.js'
-import { beatToFrame } from './constants.js'
+import { beatToFrame, DEFAULT_LOOP_BEATS } from './constants.js'
 import { createTapLog } from './tap-log.js'
 import { connectMultiplayer } from './multiplayer.js'
 import type { MultiplayerConnection, MultiplayerStatus } from './multiplayer.js'
@@ -337,9 +337,16 @@ const playbackOptions: PlaybackOptions = {
 // The loop length rides the activity table so it syncs, persists, and replays
 // like any other session state. The guard stops a value we just folded back
 // out of the table (a session load, a peer's change) from echoing a duplicate.
+function currentLoopBeats(): number {
+  return loopBeatsFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? []) ?? DEFAULT_LOOP_BEATS
+}
+
 function recordLoopBeats(n: number): void {
   if (loopBeatsFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? []) === n) return
   editableStore.record(ACTIVITY_TABLE, 'set-loop-beats', { beats: n, at: Date.now() })
+  // A timeline row's pass length is the loop length, so cook-time .retime()
+  // placements are stale until the program re-cooks against the new value.
+  if (liveCode != null) void evaluate(liveCode, { setError: editor.setError, seed: liveSeed, broadcast: false })
 }
 
 // Play/pause ride the activity table too, so they sync, persist, and show in
@@ -389,7 +396,7 @@ async function cookInWorker(code: string, seed: number, seeds?: Record<string, R
   for (const name of [ACTIVITY_TABLE, 'code' + EVENTS_SUFFIX]) {
     if (!logs.some((l) => l.name === name)) logs.push({ name, rows: [] })
   }
-  const { cooked, declared, sliders } = await cookClient.cook({ code, seed, dataCache, tapRows: tapRows(), editables, seeds, logs })
+  const { cooked, declared, sliders } = await cookClient.cook({ code, seed, dataCache, tapRows: tapRows(), loopBeats: currentLoopBeats(), editables, seeds, logs })
   for (const d of declared) editableStore.ensure(d.name, d.schema, d.seedRows)
   // Every run of ours logs its slider declarations (the stream is the record
   // of what happened); a reactive re-cook of a peer's run declares nothing —
@@ -1185,6 +1192,8 @@ async function bootRoom(room: string): Promise<void> {
     if (loopBeatsChanged) {
       const n = loopBeatsFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? [])
       if (n != null) playback.setLoopBeats(n)
+      // Re-place cook-time .retime() rows against the new pass length.
+      if (liveCode != null) void evaluate(liveCode, { setError: editor.setError, seed: liveSeed, broadcast: false })
     }
     // A peer toggled play/pause — mirror it locally so the whole room's
     // transport stays together. play()/pause() are idempotent, so this is

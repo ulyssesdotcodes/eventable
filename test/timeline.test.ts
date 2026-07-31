@@ -310,6 +310,21 @@ test('retime with an empty timeline is a no-op', () => {
   assert.deepEqual(content.retime([]).rows, [{ id: 'a', beat: 2 }])
 })
 
+test('.retime fills the real loop length, not a hardcoded 16-beat pass', () => {
+  // The last row's window runs to the end of the pass, so its 8-beat block
+  // repeats across it. With the loop set to 32 that is four blocks — before
+  // the runtime supplied the length, .retime() assumed 16 and left everything
+  // past beat 17 empty.
+  const code = `
+    define("warp", () => rows([{ event: "retime", beat: 1, from: 1, to: 5, outTo: 9 }]))
+    define("hits", () => rows([{ id: "x", beat: 1 }]).retime(table("warp")))
+  `
+  const beatsOf = (loopBeats: number): unknown[] =>
+    createRuntime({ loopBeats: () => loopBeats }).run(code, { seed: 1 }).views.get('hits')!.rows.map((r) => r.beat)
+  assert.deepEqual(beatsOf(32), [1, 9, 17, 25], 'the block repeats to the end of the 32-beat pass')
+  assert.deepEqual(beatsOf(16), [1, 9], 'a 16-beat pass fits two blocks')
+})
+
 test('a user timeline table (editable, schemas.timeline) remaps other tables in a program', () => {
   const rt = createRuntime({ editableRows: (_name, _schema, seedRows) => seedRows ?? [] })
   const code = `

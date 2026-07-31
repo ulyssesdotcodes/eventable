@@ -9,6 +9,7 @@ import {
 } from './dsl.js'
 import { evalRowExprCells } from './expr-cell.js'
 import { getLineage, withLineage, type Row } from './lineage.js'
+import { DEFAULT_LOOP_BEATS } from './constants.js'
 import type { ColumnType } from './editable-tables.js'
 
 type DefEntry =
@@ -49,6 +50,8 @@ const beatSorted = (ins: Row[][]): Row[] => {
 export interface RuntimeOptions {
   physics?: () => PhysicsEngine | null
   tapRows?: () => Row[] | null
+  // The GUI loop length — see DSLContext.loopBeats.
+  loopBeats?: () => number
   editableRows?: (name: string, schema: Record<string, ColumnType>, seedRows?: Row[]) => Row[]
   // The streaming log tables — the read-only event histories the table panel
   // shows ("code·events", "activity", "midi·events", …). Consulted only when
@@ -65,7 +68,7 @@ export interface RunOptions {
   dataCache?: Map<string, string>
 }
 
-export function createRuntime({ physics, tapRows, editableRows, logRows, defineSlider }: RuntimeOptions = {}): { run: (code: string, opts?: RunOptions) => RuntimeResult } {
+export function createRuntime({ physics, tapRows, loopBeats, editableRows, logRows, defineSlider }: RuntimeOptions = {}): { run: (code: string, opts?: RunOptions) => RuntimeResult } {
   let defs: Map<string, DefEntry>
   let cache: Map<string, Table>
   let deps: Map<string, string[]>
@@ -190,6 +193,7 @@ export function createRuntime({ physics, tapRows, editableRows, logRows, defineS
     },
     physics: () => (physics ? physics() : null),
     tapRows: () => (tapRows ? tapRows() : null),
+    loopBeats: () => (loopBeats ? loopBeats() : DEFAULT_LOOP_BEATS),
     getData: (url: string) => dataCache.get(url) ?? '',
     // "=" cells in number columns evaluate here, per row, inside the cook —
     // so a cell's expr.slider() declaration flows through ctx.defineSlider
