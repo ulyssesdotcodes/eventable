@@ -5,8 +5,9 @@
 // or, if it sets `outTo`, to that explicit end frame.
 // The pass length is the GUI loop-beats value the engine supplies, NOT the
 // timeline's own extent — so buildTimeline/timelineSegments/windowsFor all
-// take it as an argument (defaulting to DEFAULT_LOOP_BEATS for cook-time
-// .retime, which has no playback loop to read).
+// take it as an argument. Playback reads it from the transport; a cook-time
+// .retime() gets the same value through ctx.loopBeats, so both agree on where
+// the last row's window ends.
 //
 // Each event warps its window onto source beats of the baked content —
 // "retime" stretches input `from`..`to` into the output block

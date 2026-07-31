@@ -17,6 +17,8 @@ export interface CookInput {
   seed: number
   dataCache: Map<string, string>
   tapRows: Row[]
+  // See CookRequest.loopBeats.
+  loopBeats?: number
   editables: Array<{ name: string; rows: Row[] }>
   // See CookRequest.seeds.
   seeds?: Record<string, Row[]>
@@ -55,6 +57,7 @@ export function createCookClient(worker: WorkerLike): CookClient {
         seed: input.seed,
         dataCache: [...input.dataCache],
         tapRows: input.tapRows,
+        ...(input.loopBeats !== undefined ? { loopBeats: input.loopBeats } : {}),
         editables: input.editables,
         ...(input.seeds !== undefined ? { seeds: input.seeds } : {}),
         ...(input.logs !== undefined ? { logs: input.logs } : {}),

@@ -11,6 +11,7 @@ import { sliderDeclsInCode } from './post-lang.js'
 import { exprSliderDecls } from './expr-cell.js'
 import { conformRow, schemaColumns, EVENTS_SUFFIX, type Schema } from './editable-tables.js'
 import { packCooked, type PackedCook } from './cook-transfer.js'
+import { DEFAULT_LOOP_BEATS } from './constants.js'
 import type { PhysicsEngine } from './dsl.js'
 import type { Row } from './lineage.js'
 
@@ -20,6 +21,8 @@ export interface CookRequest {
   seed: number
   dataCache: Array<[string, string]>
   tapRows: Row[]
+  // The GUI loop length — the pass length cook-time .retime() warps within.
+  loopBeats?: number
   // Rows of every editable table, folded through any active replay view —
   // exactly what ensure() would serve on the main thread.
   editables: Array<{ name: string; rows: Row[] }>
@@ -64,6 +67,7 @@ export function createCookService({ physics }: { physics?: () => PhysicsEngine |
   let snapshot = new Map<string, Row[]>()
   let logs = new Map<string, Row[]>()
   let taps: Row[] = []
+  let loopBeats = DEFAULT_LOOP_BEATS
   let seeds: Record<string, Row[]> = {}
   let declared: DeclaredEditable[] = []
   let sliders = new Map<string, DeclaredSlider>()
@@ -71,6 +75,7 @@ export function createCookService({ physics }: { physics?: () => PhysicsEngine |
   const runtime = createRuntime({
     physics: physics ?? (() => null),
     tapRows: () => taps,
+    loopBeats: () => loopBeats,
     logRows: (name) => logs.get(name) ?? null,
     editableRows: (name, schema, seedRows) => {
       // Inline seedRows win over an example-provided seed; reporting the
@@ -97,6 +102,7 @@ export function createCookService({ physics }: { physics?: () => PhysicsEngine |
       snapshot = new Map(req.editables.map((e) => [e.name, e.rows]))
       logs = new Map((req.logs ?? []).map((l) => [l.name, l.rows]))
       taps = req.tapRows
+      loopBeats = req.loopBeats ?? DEFAULT_LOOP_BEATS
       seeds = req.seeds ?? {}
       declared = []
       sliders = new Map()

@@ -525,6 +525,11 @@ export interface DSLContext {
   physics?: () => PhysicsEngine | null
   // The tap-beat rows — the tempo source for tempo()/beats().
   tapRows?: () => Row[] | null
+  // The GUI loop length in beats — a timeline row's pass length. Cook-time
+  // .retime() needs the same value playback hands buildTimeline, or its last
+  // row's window ends at DEFAULT_LOOP_BEATS and the rest of the pass gets no
+  // rows placed in it.
+  loopBeats?: () => number
   // The run seed; folded into seed-sensitive node hashes.
   seed?: number
   // Synchronous lookup for pre-fetched data() URLs.
@@ -893,8 +898,11 @@ export class Table {
    * paper.spawn().concat(paper.sequence().retime(table("warp"))).
    */
   retime(timeline: Table | Row[] | null | undefined): Table {
-    return this._xf('retime', {}, (ins) => {
-      const segments = timelineSegments(ins[1])
+    // In the spec, not just the closure: the pass length changes where rows
+    // land, so a resized loop must miss the memoized node.
+    const loopBeats = this._ctx?.loopBeats?.()
+    return this._xf('retime', { loopBeats }, (ins) => {
+      const segments = timelineSegments(ins[1], loopBeats)
       if (!segments.length) return ins[0].map(recarry)
       return ins[0].flatMap((r) => {
         if (typeof r.beat !== 'number') return [recarry(r)]
