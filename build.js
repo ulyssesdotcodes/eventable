@@ -53,6 +53,4 @@ const html = readFileSync('index.html', 'utf8')
   .replace('src="/src/main.ts"', 'src="./assets/index.js"')
 writeFileSync('public/index.html', html)
 
-// Version the service worker off the finished build, so a deploy activates a
-// fresh cache, evicts the previous one, and reloads open pages (static/sw.js).
 stampServiceWorker()

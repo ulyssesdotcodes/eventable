@@ -1527,37 +1527,29 @@ async function boot(): Promise<void> {
   }
 }
 
-// Register the offline service worker (static/sw.js). It serves the app
-// cache-first, so an open paints the last build instantly; freshness comes from
-// asking for a new worker in the background — at load, and whenever the page
-// returns to the foreground, which on mobile is when a backgrounded PWA is
-// reopened. updateViaCache 'none' keeps that check off the HTTP cache, which is
-// what made mobile sit on an old build. The new worker precaches the new build
-// before it takes control, so reloading when it does is a swap to files already
-// on disk. Best-effort: an unsupported browser or a failed registration just
-// means no offline caching.
+// Register the offline service worker (static/sw.js), which serves the app
+// cache-first. Freshness comes from checking for a new worker in the background
+// — on load and on every return to the foreground, which on mobile is when a
+// backgrounded PWA is reopened. Best-effort: an unsupported browser or a failed
+// registration just means no offline caching.
 if ('serviceWorker' in navigator) {
   const container = navigator.serviceWorker
-  // A worker taking control means a newer build is cached and ready — reload
-  // onto it.
   let controlled = !!container.controller
   let reloading = false
   container.addEventListener('controllerchange', () => {
     if (reloading) return
-    // The claim right after a first install is not an update: the page loaded
-    // these very files from the network. Every handover after that is a new
-    // build, including later ones on a page that did the first install itself.
+    // The claim after a first install is not an update — the page loaded these
+    // very files from the network. Every handover after it is a new build.
     if (!controlled) { controlled = true; return }
     reloading = true
     location.reload()
   })
-  // Attached up front and resolved through container.ready, not through the
-  // register() promise: a reload can leave register() queued behind the
-  // worker's own work for seconds, and hanging the listener off it would leave
-  // the page with no update check at all for that whole window.
+  // Resolved through container.ready rather than the register() promise, which
+  // a reload can leave pending indefinitely behind the worker's own work.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') void container.ready.then((reg) => reg.update()).catch(() => {})
   })
+  // updateViaCache 'none' keeps the check itself off the HTTP cache.
   addEventListener('load', () => { void container.register('/sw.js', { updateViaCache: 'none' }).catch(() => {}) })
 }
 

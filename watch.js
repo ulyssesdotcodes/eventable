@@ -20,11 +20,9 @@ const html = readFileSync('index.html', 'utf8')
   .replace('src="/src/main.ts"', 'src="./assets/index.js"')
 writeFileSync('public/index.html', html)
 
-// The worker serves cache-first, so in dev it has to be restamped after every
-// rebuild or it replays the first build it saw. Restamping is what reloads the
-// page on a change: a new hash is a new worker, which caches the new bundles
-// and takes over (see static/sw.js). Stamped eagerly too so public/sw.js exists
-// before the server comes up.
+// Cache-first means dev has to restamp after every rebuild or it replays the
+// first build it saw; the new stamp is also what reloads the open page. Stamped
+// eagerly too, so public/sw.js exists before the server comes up.
 stampServiceWorker()
 const stampSw = { name: 'stamp-sw', setup: (build) => { build.onEnd(() => { stampServiceWorker() }) } }
 

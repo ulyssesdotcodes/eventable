@@ -1,13 +1,10 @@
 // Offline service worker. Precaches the app shell on install, then serves
 // same-origin GETs cache-first, so an open paints the last-known-good build
-// immediately — online or off — instead of waiting on a mobile network that
-// may be slow, flaky, or answering from a stale HTTP cache.
-//
-// Freshness rides the worker update check instead of the request path: VERSION
-// is stamped in at build time (scripts/stamp-sw.js) from a hash of everything
-// in the build, so a new deploy is a new script, which installs the new files
-// into a new cache before taking over. src/main.ts asks for that check in the
-// background and reloads the page once the new worker is in control.
+// immediately rather than waiting on a mobile network. Freshness rides the
+// worker update check instead of the request path: VERSION is stamped in at
+// build time (scripts/stamp-sw.js) from a hash of the whole build, so a deploy
+// is a new script, which caches the new files before taking over — src/main.ts
+// runs that check in the background and reloads once it does.
 const VERSION = '__BUILD_VERSION__'
 const CACHE = `eventable-${VERSION}`
 
@@ -27,12 +24,10 @@ const SHELL = [
 ]
 
 self.addEventListener('install', (event) => {
-  // Never awaited inside waitUntil: skipWaiting() only settles once this worker
-  // activates, activation waits on install, and install would be waiting on
-  // skipWaiting() — a deadlock that leaves an update wedged mid-install and
-  // blocks every later update check on this scope. A first install has no
-  // waiting phase and slips through, which is what made the app install fine
-  // and then never update.
+  // Never awaited inside waitUntil: skipWaiting() settles only once this worker
+  // activates, which waits on install — a deadlock that wedges the update and
+  // blocks every later check on this scope. A first install has no waiting
+  // phase and slips through, which is why it broke updates and not installs.
   void self.skipWaiting()
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE)
@@ -52,7 +47,6 @@ self.addEventListener('activate', (event) => {
     for (const key of await caches.keys()) {
       if (key !== CACHE && key.startsWith('eventable-')) await caches.delete(key)
     }
-    // Taking control is what tells the open pages to reload onto this build.
     await self.clients.claim()
   })())
 })
@@ -70,9 +64,8 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(cacheFirst(req.mode === 'navigate' ? '/index.html' : req))
 })
 
-// A hit is never stale for the running page: CACHE is version-keyed, so it
-// holds exactly one build, and a changed file arrives as a new worker with a
-// new cache rather than as a revalidation of this one.
+// A hit is never stale: CACHE is version-keyed, so a changed file arrives as a
+// new worker with a new cache rather than as a revalidation of this one.
 async function cacheFirst(req) {
   const cache = await caches.open(CACHE)
   const cached = await cache.match(req)
