@@ -53,7 +53,9 @@ export function TimelinePane(props: {
   resolveSource: ResolveSource
   presence: Accessor<PeerPresence[]>
   focusedRow: Accessor<{ table: string; row: number } | null>
-  onSelectRow?: (table: string, row: number | null) => void
+  // `edit` asks the panel to open that row's editor, not just focus it — a
+  // keyframe drawn on the band exists to be filled in.
+  onSelectRow?: (table: string, row: number | null, edit?: boolean) => void
   // The row the pane is pointing at (hover or live drag), for the panel's
   // row-level highlight; null when the pointer leaves or the gesture ends.
   onStripRowChange?: (row: { table: string; row: number } | null) => void
@@ -324,7 +326,7 @@ export function TimelinePane(props: {
       props.store.setRow(made.table, row, made.values)
       props.onDragCommit?.()
       props.onSelectView?.(made.table)
-      props.onSelectRow?.(made.table, row)
+      props.onSelectRow?.(made.table, row, true)
     }
 
     // One store.setRow for the whole gesture (a no-op if it snapped back to

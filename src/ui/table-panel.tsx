@@ -81,7 +81,7 @@ interface PanelProps extends TablePanelOptions {
   // (ui/timeline-strip.tsx): the view hands back a function that focuses a
   // row's first cell when that row's table is the open tab, or clears the
   // focus (row === null) when a background click deselects.
-  registerFocusRow: (fn: (table: string, row: number | null) => void) => void
+  registerFocusRow: (fn: (table: string, row: number | null, edit?: boolean) => void) => void
   // Mirrors the view's focused cell out to the controller (table-scoped),
   // so the strip can ring the matching handle.
   reportFocusedRow: (focus: { table: string; row: number } | null) => void
@@ -318,8 +318,10 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   // A handle click on the timeline strip lands here: focus the row's first
   // column (a no-op if the click's table isn't the open tab — the strip only
   // ever renders handles for the current table, so this is a safety guard,
-  // not the common path).
-  props.registerFocusRow((table, row) => {
+  // not the common path). `edit` opens that cell's editor too, for a keyframe
+  // the timeline just drew: it exists to be filled in, so land in the editor
+  // rather than one keypress short of it.
+  props.registerFocusRow((table, row, edit) => {
     if (table !== current()) return
     if (row === null) { setFocusedCell(null); return }
     const firstCol = fieldCols()[0]?.name
@@ -327,6 +329,9 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     const fc = { row, col: firstCol }
     setFocusedCell(fc)
     scrollCellIntoView(fc)
+    // After the row's cells render — the card is new, so its editor has
+    // nothing to open onto yet.
+    if (edit) queueMicrotask(beginEditFocused)
   })
 
   // Mirror the focused cell out to the controller, table-scoped, so the strip
@@ -354,7 +359,12 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
       cellEl(fc.row, col.name)?.querySelector('select')?.focus()
       return
     }
-    setEditingCell(`${fc.row}::${col.name}`)
+    const key = `${fc.row}::${col.name}`
+    setEditingCell(key)
+    // A store write may still be settling (this is how a keyframe the timeline
+    // just drew lands in its editor) — the refresh blurs the fresh input, and
+    // that blur would commit-and-close it.
+    guardFocus(key)
   }
 
   function onGridKeyDown(e: KeyboardEvent): void {
@@ -1449,7 +1459,7 @@ export interface TablePanelController extends TablePanel, PanelProps {
   // Focus `row`'s first cell in the panel when `table` is the open tab, or
   // clear the focus (row === null) — wired from the timeline strip's handle
   // clicks and its background-click deselect.
-  focusRow(table: string, row: number | null): void
+  focusRow(table: string, row: number | null, edit?: boolean): void
   // The panel's current focus, table-scoped; null once focus leaves that
   // table (tab switch, or no focus yet). Consumed by the strip to ring the
   // matching handle.
@@ -1475,7 +1485,7 @@ export function createTablePanel(
   // Set by the view once mounted; lets focusGrid pull focus back to the grid.
   let gridFocus: (() => void) | null = null
   // Set by the view once mounted; lets focusRow drive the panel's focused cell.
-  let focusRowImpl: ((table: string, row: number | null) => void) | null = null
+  let focusRowImpl: ((table: string, row: number | null, edit?: boolean) => void) | null = null
   const [focusedRow, setFocusedRow] = createSignal<{ table: string; row: number } | null>(null)
   const [stripRow, setStripRowSignal] = createSignal<{ table: string; row: number } | null>(null)
 
@@ -1503,14 +1513,14 @@ export function createTablePanel(
     focusGrid(): void {
       gridFocus?.()
     },
-    registerFocusRow(fn: (table: string, row: number | null) => void): void {
+    registerFocusRow(fn: (table: string, row: number | null, edit?: boolean) => void): void {
       focusRowImpl = fn
     },
     reportFocusedRow(focus: { table: string; row: number } | null): void {
       setFocusedRow(focus)
     },
-    focusRow(table: string, row: number | null): void {
-      focusRowImpl?.(table, row)
+    focusRow(table: string, row: number | null, edit?: boolean): void {
+      focusRowImpl?.(table, row, edit)
     },
     focusedRow,
     stripRow,
