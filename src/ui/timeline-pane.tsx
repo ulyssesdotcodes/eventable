@@ -8,7 +8,7 @@
 import { createSignal, createMemo, createEffect, onMount, onCleanup, For, Index, Show, type Accessor } from 'solid-js'
 import { Transport } from './transport.js'
 import {
-  beatToX, xToBeat, gridLines, sectionLayout, hitTest, resolveHandle, snapDelta, dragUpdate,
+  beatToX, xToBeat, gridLines, sectionLayout, hitTest, resolveHandle, snapDelta, dragUpdate, createAt,
   withPreview, columnsFromRows, valuesDiffer, exceedsDragThreshold, coverageBands,
   meaningfulSummary, pendingTimelineRows,
   type StripGeometry, type Handle, type HandleSource, type ResolveSource, type DragOptions, type SnapMode,
@@ -92,7 +92,7 @@ export function TimelinePane(props: {
     onCleanup(() => ro.disconnect())
   })
 
-  function snapModeFor(e: PointerEvent): SnapMode {
+  function snapModeFor(e: MouseEvent): SnapMode {
     return e.shiftKey ? 'coarse' : e.altKey ? 'free' : 'quarter'
   }
 
@@ -211,7 +211,10 @@ export function TimelinePane(props: {
     // The floating readout's lines: the row's meaningful columns — what it IS —
     // never its position, which the band shows visually and the handle's own
     // unlabeled tag states precisely.
-    const readout = createMemo<{ left: number; lines: string[] } | null>(() => {
+    // Viewport coordinates, because the panel is `position: fixed`: a band is
+    // shorter than the readout and the section list clips, so an absolutely
+    // positioned one is cut off whichever way it floats.
+    const readout = createMemo<{ left: number; top: number; lines: string[] } | null>(() => {
       const h = activeHandle()
       const row = h ? sec().rows[h.row] : undefined
       if (!h || !row) return null
@@ -220,8 +223,10 @@ export function TimelinePane(props: {
       if (h.ghost) lines.push('ghost placement')
       if (!lines.length) return null
       const geo = geometry()
-      const left = Math.max(READOUT_MARGIN, Math.min(geo.width - READOUT_MARGIN, beatToX(geo, h.beat)))
-      return { left, lines }
+      const band = bandEl?.getBoundingClientRect()
+      if (!band) return null
+      const x = Math.max(READOUT_MARGIN, Math.min(geo.width - READOUT_MARGIN, beatToX(geo, h.beat)))
+      return { left: band.left + x, top: band.bottom + 6, lines }
     })
 
     function report(next: { table: string; row: number } | null): void {
@@ -273,12 +278,20 @@ export function TimelinePane(props: {
       return Math.min(count - 1, Math.max(0, Math.floor(((clientY - rect.top) / rect.height) * count)))
     }
 
-    function handleAt(e: PointerEvent): Handle | undefined {
+    function handleAt(e: MouseEvent): Handle | undefined {
       if (!bandEl) return undefined
       const x = e.clientX - bandEl.getBoundingClientRect().left
       const lane = laneAt(e.clientY)
       const row = hitTest(layout().handles, geometry(), x, lane)
       return row == null ? undefined : resolveHandle(layout().handles, geometry(), row, x, lane)
+    }
+
+    // The warp band's own rows are already playback-axis positions — only a
+    // content row's write needs mapping back through sourceBeatAt.
+    function warpOpts(): DragOptions {
+      if (sec().kind === 'timeline') return {}
+      const tl = buildTimeline(props.timelineRows(), loopBeats())
+      return tl.active ? { timeline: tl } : {}
     }
 
     // Pointer dx (converted to beats, snapped per the live modifier keys) →
@@ -292,14 +305,26 @@ export function TimelinePane(props: {
       const rect = bandEl.getBoundingClientRect()
       const raw = xToBeat(geo, e.clientX - rect.left) - xToBeat(geo, g.x0 - rect.left)
       const dBeats = snapDelta(g.handle.beat, raw, { mode: snapModeFor(e) })
-      const opts: DragOptions = {}
-      // The warp band's own rows are already playback-axis positions — only a
-      // content row's drop needs mapping back through sourceBeatAt.
-      if (sec().kind !== 'timeline') {
-        const tl = buildTimeline(props.timelineRows(), loopBeats())
-        if (tl.active) opts.timeline = tl
-      }
-      setPreview({ row: g.handle.row, values: dragUpdate(g.handle, dBeats, opts).values })
+      setPreview({ row: g.handle.row, values: dragUpdate(g.handle, dBeats, warpOpts()).values })
+    }
+
+    // Double-click on empty band space: a new keyframe there, seeded like
+    // "+ row" plus the double-clicked beat, then opened in the panel to fill
+    // in. Read-only bands (createAt finds no store table behind them) create
+    // nothing. The band's own label overlays it and is not empty space, so its
+    // clicks (which bubble here) are skipped like a handle's.
+    function onDoubleClick(e: MouseEvent): void {
+      if (!bandEl || handleAt(e) || (e.target as HTMLElement).closest('.timeline-section-header')) return
+      const beat = xToBeat(geometry(), e.clientX - bandEl.getBoundingClientRect().left)
+      const made = createAt(layout().handles, beat, { ...warpOpts(), mode: snapModeFor(e), pass: timelinePass() })
+      const rows = made && props.store.get(made.table)?.rows
+      if (!made || !rows) return
+      const row = rows.length
+      props.store.addRow(made.table)
+      props.store.setRow(made.table, row, made.values)
+      props.onDragCommit?.()
+      props.onSelectView?.(made.table)
+      props.onSelectRow?.(made.table, row)
     }
 
     // One store.setRow for the whole gesture (a no-op if it snapped back to
@@ -414,112 +439,114 @@ export function TimelinePane(props: {
     })
 
     return (
-      <div>
-        <div class="timeline-section-header">
-          <button
-            class="timeline-section-name"
-            title={`Open the ${sec().view} table`}
-            onClick={() => props.onSelectView?.(sec().view)}
-          >
-            {sec().name}
-          </button>
-          <Show when={at().loops > 1}>
-            <span class="timeline-section-beat">
-              {`pass ${at().pass + 1}/${at().loops} · beat ${at().beat.toFixed(1)}`}
-            </span>
-          </Show>
-        </div>
-        {/* The readout floats above the band's own overflow:hidden, so it
-            renders as a sibling in a plain (overflow: visible) wrapper. */}
-        <div class="timeline-strip-wrap">
-          <Show when={readout()}>
-            {(r) => (
-              <div class="timeline-strip-readout" style={{ left: `${r().left}px` }}>
-                <For each={r().lines}>{(line) => <div class="timeline-strip-readout-line">{line}</div>}</For>
-              </div>
+      <div class="timeline-section">
+        <Show when={readout()}>
+          {(r) => (
+            <div class="timeline-strip-readout" style={{ left: `${r().left}px`, top: `${r().top}px` }}>
+              <For each={r().lines}>{(line) => <div class="timeline-strip-readout-line">{line}</div>}</For>
+            </div>
+          )}
+        </Show>
+        <div
+          class="timeline-strip"
+          ref={bandEl}
+          classList={{
+            'timeline-strip-multilane': laneCount() > 1,
+            'timeline-strip-dragging-move': !!preview(),
+            'timeline-strip-hover-grab': !preview() && hover()?.drag === true,
+          }}
+          style={{ '--lane-rows': String(laneCount()) }}
+          onPointerDown={onPointerDown}
+          onDblClick={onDoubleClick}
+          onPointerMove={onPointerMove}
+          onPointerUp={() => endGesture(true)}
+          onPointerCancel={() => { if (gesture) endGesture(false) }}
+          onPointerLeave={() => { if (!gesture) { setHover(null); report(null) } }}
+        >
+          <For each={coverage()}>
+            {(seg) => (
+              <div
+                class={`timeline-strip-coverage timeline-strip-coverage-${seg.kind ?? 'plain'}`}
+                style={{ left: `${seg.left}px`, width: `${seg.width}px`, top: '0', height: '100%' }}
+              />
             )}
+          </For>
+          <div class="timeline-strip-elapsed" style={{ width: `${playheadX()}px` }} />
+          <For each={grid()}>
+            {(line) => <div class={`timeline-strip-tick timeline-strip-tick-${line.kind}`} style={{ left: `${line.x}px` }} />}
+          </For>
+          <Show when={sec().kind === 'channel'}>
+            <canvas class="timeline-section-canvas" ref={(el) => (canvasEl = el)} />
           </Show>
-          <div
-            class="timeline-strip"
-            ref={bandEl}
-            classList={{
-              'timeline-strip-multilane': laneCount() > 1,
-              'timeline-strip-dragging-move': !!preview(),
-              'timeline-strip-hover-grab': !preview() && hover()?.drag === true,
-            }}
-            style={{ '--lane-rows': String(laneCount()) }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={() => endGesture(true)}
-            onPointerCancel={() => { if (gesture) endGesture(false) }}
-            onPointerLeave={() => { if (!gesture) { setHover(null); report(null) } }}
-          >
-            <For each={coverage()}>
-              {(seg) => (
+          <div class="timeline-strip-handles">
+            <For each={glideArrows()}>
+              {(a) => (
                 <div
-                  class={`timeline-strip-coverage timeline-strip-coverage-${seg.kind ?? 'plain'}`}
-                  style={{ left: `${seg.left}px`, width: `${seg.width}px`, top: '0', height: '100%' }}
-                />
+                  class="timeline-strip-glide"
+                  classList={{ 'timeline-strip-handle-linked': linked().has(a.row) }}
+                  style={{
+                    left: `${a.left}px`, width: `${a.width}px`,
+                    top: `${(a.lane / laneCount()) * 100}%`, height: `${100 / laneCount()}%`,
+                  }}
+                >
+                  <span class="timeline-strip-glide-arrow" />
+                </div>
               )}
             </For>
-            <div class="timeline-strip-elapsed" style={{ width: `${playheadX()}px` }} />
-            <For each={grid()}>
-              {(line) => <div class={`timeline-strip-tick timeline-strip-tick-${line.kind}`} style={{ left: `${line.x}px` }} />}
+            <For each={layout().handles}>
+              {(h) => (
+                <div
+                  class={`timeline-strip-handle timeline-strip-handle-${h.kind}`}
+                  classList={{
+                    'timeline-strip-handle-ghost': h.ghost,
+                    'timeline-strip-handle-disabled': h.disabled,
+                    'timeline-strip-handle-inert': !h.source,
+                    'timeline-strip-handle-pending': pending().has(h.row),
+                    'timeline-strip-handle-dragging': preview()?.row === h.row,
+                    'timeline-strip-handle-linked': linked().has(h.row),
+                  }}
+                  style={{ ...handleBox(h), 'box-shadow': ringStyle(h) }}
+                >
+                  <Show when={h.kind === 'point'}>
+                    <span class="timeline-strip-handle-dot" />
+                  </Show>
+                  <Show when={h.kind === 'span'}>
+                    <span class="timeline-strip-handle-edge timeline-strip-handle-edge-start" />
+                    <span class="timeline-strip-handle-edge timeline-strip-handle-edge-end" />
+                    {/* A fold transition's end edge points to its destination
+                        setCode's dot — the arrowhead meets that point handle. */}
+                    <Show when={h.endRow !== undefined}>
+                      <span class="timeline-strip-handle-arrow" />
+                    </Show>
+                  </Show>
+                  <Show when={isActive(h)}>
+                    <span class="timeline-strip-handle-postag">{posTag(h)}</span>
+                  </Show>
+                </div>
+              )}
             </For>
-            <Show when={sec().kind === 'channel'}>
-              <canvas class="timeline-section-canvas" ref={(el) => (canvasEl = el)} />
+          </div>
+          {/* This band's own current beat, on its own content axis — the
+              shared playhead below tracks playback's axis instead. */}
+          <div class="timeline-section-marker" style={{ left: `${beatToX(geometry(), srcBeat())}px` }} />
+          {/* The band's label, overlaid rather than stacked above it — a
+              header line of its own cost every section a whole extra row of
+              pane height. A CHILD of the band, so a press on it still
+              bubbles to the band's own coordinate hit test and the handles
+              underneath stay grabbable. */}
+          <div class="timeline-section-header">
+            <button
+              class="timeline-section-name"
+              title={`Open the ${sec().view} table`}
+              onClick={() => props.onSelectView?.(sec().view)}
+            >
+              {sec().name}
+            </button>
+            <Show when={at().loops > 1}>
+              <span class="timeline-section-beat">
+                {`pass ${at().pass + 1}/${at().loops} · beat ${at().beat.toFixed(1)}`}
+              </span>
             </Show>
-            <div class="timeline-strip-handles">
-              <For each={glideArrows()}>
-                {(a) => (
-                  <div
-                    class="timeline-strip-glide"
-                    classList={{ 'timeline-strip-handle-linked': linked().has(a.row) }}
-                    style={{
-                      left: `${a.left}px`, width: `${a.width}px`,
-                      top: `${(a.lane / laneCount()) * 100}%`, height: `${100 / laneCount()}%`,
-                    }}
-                  >
-                    <span class="timeline-strip-glide-arrow" />
-                  </div>
-                )}
-              </For>
-              <For each={layout().handles}>
-                {(h) => (
-                  <div
-                    class={`timeline-strip-handle timeline-strip-handle-${h.kind}`}
-                    classList={{
-                      'timeline-strip-handle-ghost': h.ghost,
-                      'timeline-strip-handle-disabled': h.disabled,
-                      'timeline-strip-handle-inert': !h.source,
-                      'timeline-strip-handle-pending': pending().has(h.row),
-                      'timeline-strip-handle-dragging': preview()?.row === h.row,
-                      'timeline-strip-handle-linked': linked().has(h.row),
-                    }}
-                    style={{ ...handleBox(h), 'box-shadow': ringStyle(h) }}
-                  >
-                    <Show when={h.kind === 'point'}>
-                      <span class="timeline-strip-handle-dot" />
-                    </Show>
-                    <Show when={h.kind === 'span'}>
-                      <span class="timeline-strip-handle-edge timeline-strip-handle-edge-start" />
-                      <span class="timeline-strip-handle-edge timeline-strip-handle-edge-end" />
-                      {/* A fold transition's end edge points to its destination
-                          setCode's dot — the arrowhead meets that point handle. */}
-                      <Show when={h.endRow !== undefined}>
-                        <span class="timeline-strip-handle-arrow" />
-                      </Show>
-                    </Show>
-                    <Show when={isActive(h)}>
-                      <span class="timeline-strip-handle-postag">{posTag(h)}</span>
-                    </Show>
-                  </div>
-                )}
-              </For>
-            </div>
-            {/* This band's own current beat, on its own content axis — the
-                shared playhead below tracks playback's axis instead. */}
-            <div class="timeline-section-marker" style={{ left: `${beatToX(geometry(), srcBeat())}px` }} />
           </div>
         </div>
       </div>

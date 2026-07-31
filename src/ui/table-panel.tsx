@@ -8,10 +8,11 @@ import {
   createSignal, createMemo, createEffect, on, onCleanup, untrack,
   For, Index, Show, type Accessor, type JSX, type Setter,
 } from 'solid-js'
+import { Dynamic } from 'solid-js/web'
 import { SERIES_COLORS, chartDataFor, computeColRanges, drawSeriesChart, fmtNum, PANEL_CHART_STYLE, type ColRange } from '../graph-panel.js'
 import {
   MAX_ROWS, COLUMN_TYPES, EVENTS_SUFFIX, formatCell, formatEditableCell,
-  allNames, nextTableName, fallbackTab, chartFor, bottomSlotFor, hasCodeColumn,
+  allNames, nextTableName, fallbackTab, chartFor, showsWarpMap, hasCodeColumn, showsCodeEditor,
   displayOrder, activeRowIndex,
   tabRingStyle, viewersOf, lastEditors, moveFocus, isCellInert,
   type TablePanel, type TablePanelOptions, type PeerPresence, type CellFocus, type FocusDir,
@@ -27,7 +28,7 @@ import { Icon } from './icon.js'
 import type { GraphSpec, Table } from '../dsl.js'
 import type { EditTarget } from '../editor-host.js'
 import type { Row } from '../lineage.js'
-import { DISABLED_COL, cellValid, invalidColumns, isExprCellText, type EditableTableStore, type ColumnType, type EditableColumn } from '../editable-tables.js'
+import { DISABLED_COL, cellValid, invalidColumns, isExprCellText, type EditableTableStore, type EditableTableData, type ColumnType, type EditableColumn } from '../editable-tables.js'
 // Registers the "=" cell checker cellValid consults (see editable-tables.ts).
 import '../expr-cell.js'
 
@@ -124,7 +125,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   const [openColMenu, setOpenColMenu] = createSignal<string | null>(null)
   const [openInfoRow, setOpenInfoRow] = createSignal<string | null>(null)
   const [subView, setSubView] = createSignal<'table' | 'events'>('table')
-  // Live, not a one-shot read: the facades below are <Index>-keyed, so their
+  // Live, not a one-shot read: the cards' facades are <Index>-keyed, so their
   // props are only evaluated once per slot and a frozen `.matches` would keep
   // routing promotion the wrong way after a resize or rotation.
   const mobileQuery = window.matchMedia('(max-width: 767px)')
@@ -221,6 +222,25 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     return data ? { name, data } : null
   })
 
+  // A code-bearing table renders as the editor list — one card per row, its
+  // non-code cells columnar with that row's editor underneath — instead of the
+  // grid, so the code column is never a cell there.
+  const editorList = createMemo(() => {
+    const ed = editableData()
+    return !!ed && hasCodeColumn(ed.data.columns)
+  })
+  const fieldCols = createMemo(() => {
+    const cols = editableData()?.data.columns ?? []
+    return editorList() ? cols.filter((c) => c.type !== 'code') : cols
+  })
+  // Separate grids don't share sizing, so every card's field line reads one
+  // track list off the container — that, plus the fixed row-tools track, is
+  // what keeps the columns aligned down the list under a single header.
+  const tracks = createMemo(() => [
+    ...fieldCols().map((c) => (c.type === 'number' || c.type === 'boolean' ? 'minmax(52px, 0.6fr)' : 'minmax(78px, 1fr)')),
+    '76px',
+  ].join(' '))
+
   // Keep a just-opened editor focused across the async panel refresh a store
   // write triggers (the refresh blurs the editor, whose blur handler would
   // close it): commit's viaBlur guard ignores the spurious blur, and this
@@ -242,13 +262,13 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   }
 
   // Tab/Shift+Tab out of a cell editor (the caller commits first): move to
-  // the adjacent column, wrapping to the next/previous display row. Code
-  // cells open in the main editor; every other type edits inline.
+  // the adjacent column, wrapping to the next/previous display row. "="
+  // expression cells open in the main editor; every other type edits inline.
   function advanceEdit(rowIndex: number, colName: string, dir: 1 | -1): void {
     const ed = editableData()
     if (!ed) return
     const { name: table, data } = ed
-    const cols = data.columns
+    const cols = fieldCols()
     const cIdx = cols.findIndex((c) => c.name === colName)
     if (cIdx < 0) return
     let nextRow = rowIndex
@@ -262,8 +282,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
       nextIdx = dir > 0 ? 0 : cols.length - 1
     }
     const target = cols[nextIdx]
-    const tv = data.rows[nextRow]?.[target.name]
-    if (target.type === 'code' || isExprCellText(tv)) {
+    if (isExprCellText(data.rows[nextRow]?.[target.name])) {
       openCell(table, nextRow, target)
       return
     }
@@ -281,24 +300,15 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     requestAnimationFrame(() => cellEl(fc.row, fc.col)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }))
   }
 
-  // A code or "=" cell edits in the app's one roving CodeMirror, never an
-  // inline input: a code cell hands the view to its facade in the bottom slot
-  // (focusing the facade is what promotes it), an "=" cell gets an overlay
-  // anchored under its <td>, and on a phone either opens the full-screen
-  // popover instead — the facades are unreadable at that width.
+  // An "=" cell edits in the app's one roving CodeMirror, never an inline
+  // input: it gets an overlay anchored under the cell, and on a phone the
+  // full-screen popover instead — the overlay is unreadable at that width.
+  // (Code cells never get here: their editor is the card they sit in.)
   function openCell(table: string, rowIndex: number, col: EditableColumn, override?: string): void {
     const v = override ?? editableData()?.data.rows[rowIndex]?.[col.name]
     const target = props.targetFor(table, rowIndex, col.name, v == null ? '' : String(v))
     if (window.matchMedia('(max-width: 767px)').matches) {
       setPopoverTarget(target)
-      return
-    }
-    if (col.type === 'code') {
-      requestAnimationFrame(() => {
-        const el = bottomEl?.querySelector<HTMLElement>(`.code-facade[data-label="${CSS.escape(target.label)}"] .facade-code`)
-        el?.scrollIntoView({ block: 'nearest' })
-        el?.focus()
-      })
       return
     }
     const anchor = cellEl(rowIndex, col.name)
@@ -312,7 +322,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   props.registerFocusRow((table, row) => {
     if (table !== current()) return
     if (row === null) { setFocusedCell(null); return }
-    const firstCol = editableData()?.data.columns[0]?.name
+    const firstCol = fieldCols()[0]?.name
     if (!firstCol) return
     const fc = { row, col: firstCol }
     setFocusedCell(fc)
@@ -327,17 +337,16 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     props.reportFocusedRow(fc && cur ? { table: cur, row: fc.row } : null)
   })
 
-  // Enter on the focused cell: code cells (and "=" expression cells) open in
-  // the main editor, enums focus their live dropdown, everything else opens
-  // its inline editor.
+  // Enter on the focused cell: "=" expression cells open in the main editor,
+  // enums focus their live dropdown, everything else opens its inline editor.
   function beginEditFocused(): void {
     const fc = focusedCell()
     const ed = editableData()
     if (!fc || !ed) return
-    const col = ed.data.columns.find((c) => c.name === fc.col)
+    const col = fieldCols().find((c) => c.name === fc.col)
     if (!col) return
     const v = ed.data.rows[fc.row]?.[col.name]
-    if (col.type === 'code' || (col.type !== 'enum' && isExprCellText(v))) {
+    if (col.type !== 'enum' && isExprCellText(v)) {
       openCell(ed.name, fc.row, col)
       return
     }
@@ -359,8 +368,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     if (!isEditableTable()) return
     const ed = editableData()
     if (!ed) return
-    const cols = ed.data.columns
-    const order = displayOrder(ed.data.rows, cols).filter(edRowVisible)
+    const cols = fieldCols()
+    const order = displayOrder(ed.data.rows, ed.data.columns).filter(edRowVisible)
     if (!cols.length || !order.length) return
     const fc = focusedCell()
     // No cursor yet, or it points at a now-hidden/removed cell: land on the
@@ -405,26 +414,32 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     editableData() || (isEditableTable() && subView() === 'events') ? null : chartFor(current(), views(), graphs(), store)
   ))
 
-  // What sits below the grid: one facade per code-bearing row (the `code`
-  // table's rows *are* the program's fragments), a passive warp map for a
-  // timeline-schema table, or nothing.
-  const bottomSlot = createMemo(() => {
+  // What sits below the grid: a passive warp map for a timeline-schema table,
+  // or nothing (a code table's editors live in its cards).
+  const warpSlot = createMemo(() => {
     tick(); views()
-    return subView() === 'events' ? 'none' : bottomSlotFor(current(), views(), store)
+    return subView() !== 'events' && showsWarpMap(current(), views(), store)
   })
+
+  // The editors one row's card shows, in column order — the code cells that
+  // pass showsCodeEditor.
+  const rowCodeTargets = (rowIndex: number): EditTarget[] => {
+    const ed = editableData()
+    const row = ed?.data.rows[rowIndex]
+    if (!ed || !row || !editorList()) return []
+    return ed.data.columns.flatMap((c) =>
+      c.type === 'code' && showsCodeEditor(row, c, ed.data.columns)
+        ? [props.targetFor(ed.name, rowIndex, c.name, row[c.name] == null ? '' : String(row[c.name]))]
+        : [])
+  }
 
   const codeTargets = createMemo<EditTarget[]>(() => {
     const ed = editableData()
-    if (!ed || bottomSlot() !== 'facades') return []
-    const codeCols = ed.data.columns.filter((c) => c.type === 'code')
-    return displayOrder(ed.data.rows, ed.data.columns).flatMap((i) =>
-      codeCols.map((c) => {
-        const v = ed.data.rows[i]?.[c.name]
-        return props.targetFor(ed.name, i, c.name, v == null ? '' : String(v))
-      }))
+    if (!ed) return []
+    return displayOrder(ed.data.rows, ed.data.columns).flatMap(rowCodeTargets)
   })
 
-  // A facade slot is <Index>-keyed by position and labeled by row index, so a
+  // A card's facade is <Index>-keyed by position and labeled by row index, so a
   // tab switch or a row insert/delete rebinds a live slot to a different row
   // in place — no unmount, so CodeFacade's onCleanup demote never fires and
   // the promoted view is left orphaned under a label that now means something
@@ -539,7 +554,6 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   // A timeline-schema table's compiled segments, plotted as source beat against
   // playback beat: the shape of the warp the retimed content rides.
   let warpCanvas: HTMLCanvasElement | undefined
-  let bottomEl: HTMLDivElement | undefined
 
   function drawWarp(): void {
     if (!warpCanvas?.isConnected) return
@@ -561,13 +575,15 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   // observer's initial notification, so a combined effect drew twice per frame.
   createEffect(() => {
     warpRo.disconnect()
-    if (bottomSlot() === 'warp' && warpCanvas) warpRo.observe(warpCanvas)
+    if (warpSlot() && warpCanvas) warpRo.observe(warpCanvas)
   })
   createEffect(() => { tick(); views(); props.playIndex(); drawWarp() })
 
   // --- editable sub-views ------------------------------------------------------
 
-  function ColHeader(colProps: { table: string; col: EditableColumn }) {
+  // `tag` is the grid's <th>/<td> or the editor list's plain <div> — the two
+  // layouts differ only in the element the shared cell markup hangs off.
+  function ColHeader(colProps: { table: string; col: EditableColumn; tag: 'th' | 'div' }) {
     const { table, col } = colProps
     const [renaming, setRenaming] = createSignal(false)
     const [menuPos, setMenuPos] = createSignal<{ top: number; left: number } | null>(null)
@@ -592,7 +608,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     })
 
     return (
-      <th class="editable-col-head">
+      <Dynamic component={colProps.tag} class="editable-col-head">
         <div class="col-head-row">
           <Show
             when={renaming()}
@@ -655,11 +671,11 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             </div>
           </div>
         </div>
-      </th>
+      </Dynamic>
     )
   }
 
-  function AddColHeader(colProps: { table: string }) {
+  function AddColHeader(colProps: { table: string; tag: 'th' | 'div' }) {
     const [adding, setAdding] = createSignal(false)
     let nameInput: HTMLInputElement | undefined
     let typeSel: HTMLSelectElement | undefined
@@ -669,7 +685,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
       setAdding(false)
     }
     return (
-      <th class="add-col-head">
+      <Dynamic component={colProps.tag} class="add-col-head">
         <Show
           when={adding()}
           fallback={<button class="add-col-btn" onClick={() => setAdding(true)}>+ column</button>}
@@ -685,7 +701,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
           </select>
           <button class="col-confirm-btn" onClick={commit}>Add</button>
         </Show>
-      </th>
+      </Dynamic>
     )
   }
 
@@ -695,7 +711,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   // event. Values that don't fit the column type get a `cell-invalid` marker.
   // A cell whose column the row's event/type ignores gets `cell-inert`
   // (dimmed, but stays fully editable — see isCellInert in table-panel.ts).
-  function EditableCell(cellProps: { table: string; rowIndex: number; col: EditableColumn }) {
+  // `tag` picks the layout it sits in (see ColHeader).
+  function EditableCell(cellProps: { table: string; rowIndex: number; col: EditableColumn; tag: 'td' | 'div' }) {
     const { table, rowIndex, col } = cellProps
     const key = `${rowIndex}::${col.name}`
     const editing = () => editingCell() === key
@@ -748,13 +765,12 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
 
     // Collaborators whose last edit landed on this cell.
     const editors = () => lastEditors(presence(), table, rowIndex, col.name)
-    // Only read for a code chip's tint; targetFor owns the language ladder.
-    const cellLang = (): string => props.targetFor(table, rowIndex, col.name, String(raw() ?? '')).lang
 
     const focused = () => focusedCell()?.row === rowIndex && focusedCell()?.col === col.name
 
     return (
-      <td
+      <Dynamic
+        component={cellProps.tag}
         class="editable-cell"
         classList={{ editing: editing(), 'cell-invalid': invalid(), 'cell-focused': focused(), 'cell-inert': inert() }}
         data-row={rowIndex}
@@ -763,9 +779,9 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
         onClick={() => {
           setFocusedCell({ row: rowIndex, col: col.name })
           if (editing() || col.type === 'enum') return
-          // "=" expression cells edit like code cells — in the roving editor —
-          // never the coercing primitive editors.
-          if (col.type === 'code' || isExprCellText(raw())) openCell(table, rowIndex, col)
+          // "=" expression cells edit in the roving editor, never the coercing
+          // primitive editors.
+          if (isExprCellText(raw())) openCell(table, rowIndex, col)
           else setEditingCell(key)
         }}
       >
@@ -793,17 +809,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
           when={col.type !== 'enum' && editing()}
           fallback={
             <Show when={col.type !== 'enum'}>
-              {/* A code cell is a chip tinted by its language — the same tint
-                  its facade wears below the grid — and clicking it promotes
-                  that facade rather than opening an inline input. */}
-              <Show
-                when={col.type === 'code'}
-                fallback={<span class="cell-value">{formatEditableCell(col.type, raw())}</span>}
-              >
-                <span class="cell-value code-chip" data-lang={cellLang()}>
-                  {formatEditableCell('code', raw())}
-                </span>
-              </Show>
+              <span class="cell-value">{formatEditableCell(col.type, raw())}</span>
             </Show>
           }
         >
@@ -861,7 +867,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
               )
             })()}
           </Show>
-          <Show when={col.type === 'string' || col.type === 'code'}>
+          <Show when={col.type === 'string'}>
             {(() => {
               let txt: HTMLInputElement | undefined
               // Commit directly rather than via blur(): a synchronous blur()
@@ -882,12 +888,12 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             })()}
           </Show>
         </Show>
-      </td>
+      </Dynamic>
     )
   }
 
   // Which tables get the per-row ⓘ: the same "has a code-typed column" test the
-  // facade stack uses, plus an `event` column, since the popover shows the
+  // editor list uses, plus an `event` column, since the popover shows the
   // sketch compiled up to and including *this event* (the `code` table's
   // fragments have no such fold).
   const rowInfoTable = createMemo(() => {
@@ -959,6 +965,43 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
       </div>
     )
   }
+
+  // The per-row buttons, in the grid's actions cell and in a card's field line.
+  function RowTools(rowProps: { table: string; rowIndex: number }) {
+    return (
+      <>
+        <Show when={rowInfoTable()}>
+          <RowInfo table={rowProps.table} rowIndex={rowProps.rowIndex} />
+        </Show>
+        <button
+          class="row-dup-btn"
+          title="Duplicate row"
+          aria-label="Duplicate row"
+          onClick={() => store.duplicateRow(rowProps.table, rowProps.rowIndex)}
+        >
+          ⧉
+        </button>
+        <button
+          class="row-del-btn"
+          title="Delete row"
+          aria-label="Delete row"
+          onClick={() => store.removeRow(rowProps.table, rowProps.rowIndex)}
+        >
+          ×
+        </button>
+      </>
+    )
+  }
+
+  // Row-level state, worn by a grid <tr> and by a card alike.
+  const rowClasses = (ed: { name: string; data: EditableTableData }, i: number) => ({
+    'row-source': !!lineageSet()?.has(i),
+    // A boolean column named "disabled" is the row's own mute switch (see
+    // DISABLED_COL).
+    'row-disabled': ed.data.rows[i]?.[DISABLED_COL] === true,
+    'row-invalid': invalidColumns(ed.data.rows[i], ed.data.columns).length > 0,
+    'row-strip-active': props.stripRow()?.table === ed.name && props.stripRow()?.row === i,
+  })
 
   function Tab(tabProps: { name: string }) {
     const { name } = tabProps
@@ -1249,95 +1292,112 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
           onKeyDown={onGridKeyDown}
           onScroll={() => { if (!suppressScrollEvent) props.setUserScrolled(true) }}
         >
-          <table class="events-table">
-            <Show
-              when={editableData()}
-              fallback={
-                <>
-                  <thead>
-                    <Show when={roTable()?.length}>
-                      <tr>
-                        <For each={roCols()}>{(col) => <th>{col}</th>}</For>
-                      </tr>
-                    </Show>
-                  </thead>
-                  <tbody>
-                    <Index each={shownRows()}>
-                      {(row, i) => (
-                        <tr
-                          ref={(el) => { roRowEls[i] = el }}
-                          hidden={!roRowVisible(i)}
-                          classList={{
-                            'row-active': i === activeIdx(),
-                            'row-source': !!lineageSet()?.has(i),
-                          }}
-                        >
-                          <For each={roCols()}>{(col) => <td>{formatCell(col, row()[col])}</td>}</For>
-                        </tr>
-                      )}
-                    </Index>
-                  </tbody>
-                </>
-              }
-            >
-              {(ed) => (
-                <>
-                  <thead>
-                    <tr>
-                      <th class="row-actions-head" />
-                      <For each={ed().data.columns}>
-                        {(col) => <ColHeader table={ed().name} col={col} />}
-                      </For>
-                      <AddColHeader table={ed().name} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <For each={displayOrder(ed().data.rows, ed().data.columns)}>
-                      {(i) => (
-                        <tr
-                          hidden={!edRowVisible(i)}
-                          classList={{
-                            'row-source': !!lineageSet()?.has(i),
-                            // A boolean column named "disabled" is the row's
-                            // own mute switch (see DISABLED_COL).
-                            'row-disabled': ed().data.rows[i]?.[DISABLED_COL] === true,
-                            'row-invalid': invalidColumns(ed().data.rows[i], ed().data.columns).length > 0,
-                            'row-strip-active': props.stripRow()?.table === ed().name && props.stripRow()?.row === i,
-                          }}
-                        >
-                          <td class="row-actions">
-                            <Show when={rowInfoTable()}>
-                              <RowInfo table={ed().name} rowIndex={i} />
-                            </Show>
-                            <button
-                              class="row-dup-btn"
-                              title="Duplicate row"
-                              aria-label="Duplicate row"
-                              onClick={() => store.duplicateRow(ed().name, i)}
+          {/* A code table renders as the editor list: one card per row, its
+              non-code cells columnar over that row's own editor. Every card's
+              field line reads the container's --tracks, so the columns line up
+              down the list under one header. */}
+          <Show
+            when={editorList() ? editableData() : null}
+            fallback={
+              <table class="events-table">
+                <Show
+                  when={editableData()}
+                  fallback={
+                    <>
+                      <thead>
+                        <Show when={roTable()?.length}>
+                          <tr>
+                            <For each={roCols()}>{(col) => <th>{col}</th>}</For>
+                          </tr>
+                        </Show>
+                      </thead>
+                      <tbody>
+                        <Index each={shownRows()}>
+                          {(row, i) => (
+                            <tr
+                              ref={(el) => { roRowEls[i] = el }}
+                              hidden={!roRowVisible(i)}
+                              classList={{
+                                'row-active': i === activeIdx(),
+                                'row-source': !!lineageSet()?.has(i),
+                              }}
                             >
-                              ⧉
-                            </button>
-                            <button
-                              class="row-del-btn"
-                              title="Delete row"
-                              aria-label="Delete row"
-                              onClick={() => store.removeRow(ed().name, i)}
-                            >
-                              ×
-                            </button>
-                          </td>
-                          <For each={ed().data.columns}>
-                            {(col) => <EditableCell table={ed().name} rowIndex={i} col={col} />}
+                              <For each={roCols()}>{(col) => <td>{formatCell(col, row()[col])}</td>}</For>
+                            </tr>
+                          )}
+                        </Index>
+                      </tbody>
+                    </>
+                  }
+                >
+                  {(ed) => (
+                    <>
+                      <thead>
+                        <tr>
+                          <th class="row-actions-head" />
+                          <For each={fieldCols()}>
+                            {(col) => <ColHeader tag="th" table={ed().name} col={col} />}
                           </For>
-                          <td />
+                          <AddColHeader tag="th" table={ed().name} />
                         </tr>
-                      )}
-                    </For>
-                  </tbody>
-                </>
-              )}
-            </Show>
-          </table>
+                      </thead>
+                      <tbody>
+                        <For each={displayOrder(ed().data.rows, ed().data.columns)}>
+                          {(i) => (
+                            <tr hidden={!edRowVisible(i)} classList={rowClasses(ed(), i)}>
+                              <td class="row-actions">
+                                <RowTools table={ed().name} rowIndex={i} />
+                              </td>
+                              <For each={fieldCols()}>
+                                {(col) => <EditableCell tag="td" table={ed().name} rowIndex={i} col={col} />}
+                              </For>
+                              <td />
+                            </tr>
+                          )}
+                        </For>
+                      </tbody>
+                    </>
+                  )}
+                </Show>
+              </table>
+            }
+          >
+            {(ed) => (
+              <div class="editor-list-wrap" style={{ '--tracks': tracks() }}>
+                <div class="editor-list-head">
+                  <For each={fieldCols()}>
+                    {(col) => <ColHeader tag="div" table={ed().name} col={col} />}
+                  </For>
+                  <AddColHeader tag="div" table={ed().name} />
+                </div>
+                <div class="editor-list">
+                  <For each={displayOrder(ed().data.rows, ed().data.columns)}>
+                    {(i) => (
+                      <div class="row-card" hidden={!edRowVisible(i)} classList={rowClasses(ed(), i)}>
+                        <div class="card-fields">
+                          <For each={fieldCols()}>
+                            {(col) => <EditableCell tag="div" table={ed().name} rowIndex={i} col={col} />}
+                          </For>
+                          <div class="row-actions">
+                            <RowTools table={ed().name} rowIndex={i} />
+                          </div>
+                        </div>
+                        <Index each={rowCodeTargets(i)}>
+                          {(target) => (
+                            <CodeFacade
+                              host={props.host}
+                              target={target()}
+                              onPromote={isMobile() ? setPopoverTarget : undefined}
+                            />
+                          )}
+                        </Index>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </div>
+            )}
+          </Show>
         </div>
         <Show when={editableData()}>
           <div class="edit-toolbar" style={{ display: 'flex' }}>
@@ -1351,19 +1411,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
         </Show>
         {/* Bottom slot (capped and scrollable so it shares the pane's
             height with the chart above rather than fighting it). */}
-        <div class="table-bottom-slot" ref={bottomEl}>
-          <Show when={bottomSlot() === 'facades'}>
-            <Index each={codeTargets()}>
-              {(target) => (
-                <CodeFacade
-                  host={props.host}
-                  target={target()}
-                  onPromote={isMobile() ? setPopoverTarget : undefined}
-                />
-              )}
-            </Index>
-          </Show>
-          <Show when={bottomSlot() === 'warp'}>
+        <div class="table-bottom-slot">
+          <Show when={warpSlot()}>
             <canvas class="warp-canvas" ref={warpCanvas} />
           </Show>
         </div>

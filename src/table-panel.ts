@@ -203,12 +203,21 @@ export function chartFor(
   return chartDataFor(rows, spec.table.columns, cols, name)
 }
 
-// A table can be edited through the grid's own code chip, or facade-promoted
-// to the main editor — either way, the trigger is the same: some column is
-// typed `code`. Shared with RowInfo's per-row trigger (today a hardcoded
+// A table with a code-typed column renders as the editor list (one card per
+// row: its non-code cells columnar, its code editor underneath) instead of the
+// grid. Shared with RowInfo's per-row trigger (today a hardcoded
 // bauble/post/hydra ternary) so the two tests can't drift apart.
 export function hasCodeColumn(columns: EditableColumn[]): boolean {
   return columns.some((c) => c.type === 'code')
+}
+
+// Whether a card shows an editor for this code cell: text always does, and an
+// empty one only when its column is live for the row's event — that's where
+// code goes (an empty setCode row), while a pulse row's empty code cell would
+// just be a box nobody can fill.
+export function showsCodeEditor(row: Row, col: EditableColumn, columns: EditableColumn[]): boolean {
+  const v = row[col.name]
+  return (v != null && String(v) !== '') || !isCellInert(row, col, columns)
 }
 
 // Column names schemas.timeline declares (dsl.ts) — checked by name, not by a
@@ -221,21 +230,19 @@ function isTimelineSchema(columnNames: string[]): boolean {
   return TIMELINE_SCHEMA_COLS.every((c) => set.has(c))
 }
 
-// The table pane's bottom slot, below the grid: a code-bearing editable table
-// gets its rows' facades; a timeline-schema table gets a passive warp map
-// (timelineSegments -> drawSeriesChart) instead; anything else, nothing.
-// 'slider'/'midi' are panel-only synthetic views spliced in by tablesForDisplay
-// (main.ts), never real editableStore tables.
-export function bottomSlotFor(
+// The table pane's bottom slot, below the grid: a timeline-schema table gets a
+// passive warp map (timelineSegments -> drawSeriesChart); anything else,
+// nothing. 'slider'/'midi' are panel-only synthetic views spliced in by
+// tablesForDisplay (main.ts), never real editableStore tables.
+export function showsWarpMap(
   name: string | null,
   views: Map<string, Table>,
   editableStore: EditableTableStore,
-): 'facades' | 'warp' | 'none' {
-  if (!name || name === 'slider' || name === 'midi') return 'none'
+): boolean {
+  if (!name || name === 'slider' || name === 'midi') return false
   const data = editableStore.get(name)
-  if (data && hasCodeColumn(data.columns)) return 'facades'
   const columnNames = data ? data.columns.map((c) => c.name) : (views.get(name)?.columns ?? [])
-  return isTimelineSchema(columnNames) ? 'warp' : 'none'
+  return isTimelineSchema(columnNames)
 }
 
 // Display order only: sorted by `beat` (stable) when the table has one. The

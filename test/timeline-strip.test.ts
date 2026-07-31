@@ -15,6 +15,7 @@ import {
   snap,
   snapDelta,
   dragUpdate,
+  createAt,
   valuesDiffer,
   exceedsDragThreshold,
   withPreview,
@@ -400,6 +401,21 @@ test('dragUpdate maps a wrapped ghost back through its own pass, not pass 0', ()
   const handle: Handle = { row: 0, kind: 'point', beat: 2, lane: 1, ghost: true, disabled: false, pass: 1 }
   const { values } = dragUpdate(handle, 0, { timeline })
   assert.equal(values.beat, 7, "pass 2's hold source (7), not pass 1's (3)")
+})
+
+test('createAt seeds a keyframe in the band\'s own store table at the snapped source beat, and refuses a read-only band', () => {
+  // Half speed: source 1..5 stretched across playback 1..9 (loop-beats 8).
+  const timeline = buildTimeline([{ event: 'retime', beat: 1, from: 1, to: 5 }], 8)
+  const editable: Handle[] = [
+    { row: 0, kind: 'point', beat: 1, lane: 0, ghost: false, disabled: false, source: { table: 'path', row: 0 } },
+  ]
+  assert.deepEqual(createAt(editable, 4.9), { table: 'path', values: { beat: 5 } }, 'quarter-snapped')
+  assert.deepEqual(
+    createAt(editable, 5, { timeline })?.values, { beat: timeline.sourceBeatAt(5) },
+    'stored in source space, like a drag drop',
+  )
+  const cooked = editable.map((h) => ({ ...h, source: undefined }))
+  assert.equal(createAt(cooked, 5), null, 'nothing traceable behind the band — creates nothing')
 })
 
 // --- drag gesture helpers (phase 4) ----------------------------------------
