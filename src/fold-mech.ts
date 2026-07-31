@@ -6,6 +6,7 @@
 // closes the loop with one angle φ, solved from "the pair's seam stays in
 // the mirror plane". No tuning: the opening angle is the branch point.
 import type { FoldAnim, FoldOutcome, Line, Vec2 } from './fold-engine.js'
+import { polyArea } from './fold-relax.js'
 import { X } from './vendor/flatfolder/conversion.js'
 
 // what a finished reverse fold leaves behind: the hinge it swung about,
@@ -154,13 +155,7 @@ export const buildReverseMech = (
   addLine(cuts, { line, kind: 'hinge' })
   const escalation = [...history].reverse()
 
-  const area = (F: number[]): number => {
-    let s = 0
-    for (let i = 0, j = F.length - 1; i < F.length; j = i++) {
-      s += sheet[F[j]][0] * sheet[F[i]][1] - sheet[F[i]][0] * sheet[F[j]][1]
-    }
-    return Math.abs(s / 2)
-  }
+  const area = (F: number[]): number => polyArea(F, sheet)
 
   const dbg = typeof process !== 'undefined' && process.env?.MECH_DEBUG
     ? (msg: string): void => { console.log(`  [mech] ${msg}`) }

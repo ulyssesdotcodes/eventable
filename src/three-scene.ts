@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu'
+import { attribute, materialColor, mix } from 'three/tsl'
 import { createParticleSystem, type ParticleSystem } from './compute/particles.js'
 import { FontLoader, type Font } from 'three/addons/loaders/FontLoader.js'
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js'
@@ -331,41 +332,111 @@ interface OrigamiObject {
   program: FoldTableProgram
   fold: number
   shown: number
+  paint: Paint
+  painted: unknown            // the rows `paint` was built from, to skip rebuilds
   posAttr: THREE.BufferAttribute
   linePosAttr: THREE.BufferAttribute
-  front: THREE.MeshStandardMaterial
-  back: THREE.MeshStandardMaterial
-  line: THREE.LineBasicMaterial
+  tintAttr: THREE.BufferAttribute
+  maskAttr: THREE.BufferAttribute
+  lineTintAttr: THREE.BufferAttribute
+  lineMaskAttr: THREE.BufferAttribute
+  front: THREE.MeshStandardNodeMaterial
+  back: THREE.MeshStandardNodeMaterial
+  line: THREE.LineBasicNodeMaterial
   geometry: THREE.BufferGeometry
   lineGeometry: THREE.BufferGeometry
 }
 
 const PAPER_BACK = 0xf4efe2
 
+// A painted element: colour in the renderer's working space, plus how much the
+// paint follows the swing (0 = held for the whole fold, 1 = a pulse peaking
+// mid-swing).
+interface Tint { r: number; g: number; b: number; fade: number }
+// step → element → tint. Faces key on the face index, edges on "a,b" — the
+// same numbering foldTablePositions hands back, valid within one step.
+export interface Paint {
+  faces: Map<number, Map<number, Tint>>
+  edges: Map<number, Map<string, Tint>>
+}
+
+const _tint = new THREE.Color()
+
+const tintOf = (row: Record<string, unknown>): Tint | null => {
+  if (row.color == null) return null
+  _tint.set(row.color as number)
+  const fade = typeof row.fade === 'number' ? Math.min(1, Math.max(0, row.fade)) : 0
+  return { r: _tint.r, g: _tint.g, b: _tint.b, fade }
+}
+
+/**
+ * Index paint rows by (step, element). Rows without a `color` paint nothing;
+ * later rows win, so a broad rule can be overridden by a narrower one after it.
+ * Pure and exported: every decision the origami renderer acts on is testable
+ * without a GPU.
+ */
+export function paintTables(
+  faceRows: Record<string, unknown>[] | undefined,
+  edgeRows: Record<string, unknown>[] | undefined,
+): Paint {
+  const paint: Paint = { faces: new Map(), edges: new Map() }
+  for (const row of faceRows ?? []) {
+    const tint = tintOf(row)
+    if (tint == null || typeof row.step !== 'number' || typeof row.face !== 'number') continue
+    const at = paint.faces.get(row.step) ?? new Map<number, Tint>()
+    at.set(row.face, tint)
+    paint.faces.set(row.step, at)
+  }
+  for (const row of edgeRows ?? []) {
+    const tint = tintOf(row)
+    if (tint == null || typeof row.step !== 'number') continue
+    if (typeof row.a !== 'number' || typeof row.b !== 'number') continue
+    const at = paint.edges.get(row.step) ?? new Map<string, Tint>()
+    at.set(row.a < row.b ? `${row.a},${row.b}` : `${row.b},${row.a}`, tint)
+    paint.edges.set(row.step, at)
+  }
+  return paint
+}
+
 function fillOrigami(obj: OrigamiObject): void {
   const { program } = obj
-  const { FV, pos, zOff, zDir } = foldTablePositions(program, obj.fold)
+  const { FV, pos, zOff, zDir, step, swing } = foldTablePositions(program, obj.fold)
   // Layer offsets ride the paper: along the face's carried direction when the
   // motion provides one, else world z (the flat-state stacking axis).
   const offX = (fi: number): number => (zDir ? zDir[fi][0] * zOff[fi] : 0)
   const offY = (fi: number): number => (zDir ? zDir[fi][1] * zOff[fi] : 0)
   const offZ = (fi: number): number => (zDir ? zDir[fi][2] * zOff[fi] : zOff[fi])
+  // How strongly a fading tint shows right now: nothing at either rest state,
+  // full at the top of the swing. `fade: 0` opts out and paints throughout.
+  const env = Math.sin(Math.PI * swing)
+  const facePaint = obj.paint.faces.get(step)
+  const edgePaint = obj.paint.edges.get(step)
   const P = obj.posAttr.array as Float32Array
-  let n = 0
+  const T = obj.tintAttr.array as Float32Array
+  const K = obj.maskAttr.array as Float32Array
+  let n = 0, k = 0
   for (let fi = 0; fi < FV.length; ++fi) {
     const F = FV[fi]
     const ox = offX(fi), oy = offY(fi), oz = offZ(fi)
+    const tint = facePaint?.get(fi)
+    const mask = tint ? 1 - tint.fade + tint.fade * env : 0
     for (let j = 1; j + 1 < F.length; ++j) {
       for (const vi of [F[0], F[j], F[j + 1]]) {
         const v = pos[vi]
         P[n++] = v[0] + ox; P[n++] = v[1] + oy; P[n++] = v[2] + oz
+        T[k * 3] = tint?.r ?? 0; T[k * 3 + 1] = tint?.g ?? 0; T[k * 3 + 2] = tint?.b ?? 0
+        K[k++] = mask
       }
     }
   }
   obj.geometry.setDrawRange(0, n / 3)
   obj.posAttr.needsUpdate = true
+  obj.tintAttr.needsUpdate = true
+  obj.maskAttr.needsUpdate = true
   const L = obj.linePosAttr.array as Float32Array
-  let m = 0
+  const LT = obj.lineTintAttr.array as Float32Array
+  const LK = obj.lineMaskAttr.array as Float32Array
+  let m = 0, e = 0
   const seen = new Set<string>()
   for (let fi = 0; fi < FV.length; ++fi) {
     const F = FV[fi]
@@ -379,10 +450,18 @@ function fillOrigami(obj: OrigamiObject): void {
       seen.add(key)
       L[m++] = pos[a][0] + ox; L[m++] = pos[a][1] + oy; L[m++] = pos[a][2] + oz
       L[m++] = pos[b][0] + ox; L[m++] = pos[b][1] + oy; L[m++] = pos[b][2] + oz
+      const tint = edgePaint?.get(key)
+      const mask = tint ? 1 - tint.fade + tint.fade * env : 0
+      for (let end = 0; end < 2; ++end) {
+        LT[e * 3] = tint?.r ?? 0; LT[e * 3 + 1] = tint?.g ?? 0; LT[e * 3 + 2] = tint?.b ?? 0
+        LK[e++] = mask
+      }
     }
   }
   obj.lineGeometry.setDrawRange(0, m / 3)
   obj.linePosAttr.needsUpdate = true
+  obj.lineTintAttr.needsUpdate = true
+  obj.lineMaskAttr.needsUpdate = true
   obj.shown = obj.fold
 }
 
@@ -395,10 +474,18 @@ function makeOrigami(row: Record<string, unknown>): OrigamiObject {
     maxEdges = Math.max(maxEdges, step.FV.reduce((s, F) => s + F.length, 0))
   }
 
-  const posAttr = new THREE.BufferAttribute(new Float32Array(maxTris * 9), 3)
-  posAttr.setUsage(THREE.DynamicDrawUsage)
+  const dyn = (n: number, size: number): THREE.BufferAttribute => {
+    const a = new THREE.BufferAttribute(new Float32Array(n), size)
+    a.setUsage(THREE.DynamicDrawUsage)
+    return a
+  }
+  const posAttr = dyn(maxTris * 9, 3)
+  const tintAttr = dyn(maxTris * 9, 3)
+  const maskAttr = dyn(maxTris * 3, 1)
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', posAttr)
+  geometry.setAttribute('tint', tintAttr)
+  geometry.setAttribute('tintMask', maskAttr)
 
   const color = row.color != null ? (row.color as number) : 0xd94f2a
   const backColor = row.backColor != null ? (row.backColor as number) : PAPER_BACK
@@ -413,14 +500,27 @@ function makeOrigami(row: Record<string, unknown>): OrigamiObject {
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
   }
-  const front = new THREE.MeshStandardMaterial({ ...common, color, side: THREE.FrontSide })
-  const back = new THREE.MeshStandardMaterial({ ...common, color: backColor, side: THREE.BackSide })
+  // Per-element paint blends OVER each material's own colour rather than
+  // multiplying it (what `vertexColors` would do): front and back share one
+  // geometry, so a multiplied tint could never leave the two papers different
+  // colours. `materialColor` reads material.color live, so an unpainted model
+  // and the `color` decay pulse both keep working with no buffer refill.
+  const paintNode = () =>
+    mix(materialColor, attribute('tint', 'vec3'), attribute('tintMask', 'float'))
+  const front = new THREE.MeshStandardNodeMaterial({ ...common, color, side: THREE.FrontSide })
+  const back = new THREE.MeshStandardNodeMaterial({ ...common, color: backColor, side: THREE.BackSide })
+  front.colorNode = paintNode()
+  back.colorNode = paintNode()
 
-  const linePosAttr = new THREE.BufferAttribute(new Float32Array(maxEdges * 6), 3)
-  linePosAttr.setUsage(THREE.DynamicDrawUsage)
+  const linePosAttr = dyn(maxEdges * 6, 3)
+  const lineTintAttr = dyn(maxEdges * 6, 3)
+  const lineMaskAttr = dyn(maxEdges * 2, 1)
   const lineGeometry = new THREE.BufferGeometry()
   lineGeometry.setAttribute('position', linePosAttr)
-  const line = new THREE.LineBasicMaterial({ color: 0x1c1713, transparent: true, opacity: 0.5 })
+  lineGeometry.setAttribute('tint', lineTintAttr)
+  lineGeometry.setAttribute('tintMask', lineMaskAttr)
+  const line = new THREE.LineBasicNodeMaterial({ color: 0x1c1713, transparent: true, opacity: 0.5 })
+  line.colorNode = paintNode()
 
   const root = new THREE.Group()
   root.add(new THREE.Mesh(geometry, front))
@@ -429,7 +529,9 @@ function makeOrigami(row: Record<string, unknown>): OrigamiObject {
 
   const obj: OrigamiObject = {
     root, program, fold: 0, shown: -1,
-    posAttr, linePosAttr, front, back, line, geometry, lineGeometry,
+    paint: { faces: new Map(), edges: new Map() }, painted: undefined,
+    posAttr, linePosAttr, tintAttr, maskAttr, lineTintAttr, lineMaskAttr,
+    front, back, line, geometry, lineGeometry,
   }
   applyOrigamiRow(obj, row)
   fillOrigami(obj)
@@ -439,8 +541,22 @@ function makeOrigami(row: Record<string, unknown>): OrigamiObject {
 function applyOrigamiRow(obj: OrigamiObject, row: Record<string, unknown>): void {
   applyTransform(obj.root, row)
   if (row.color != null) obj.front.color.set(row.color as number)
+  if (row.backColor != null) obj.back.color.set(row.backColor as number)
   if (typeof row.fold === 'number' && Number.isFinite(row.fold)) obj.fold = row.fold
+  // Paint rows arrive as the same array object every frame (rasterize carries
+  // extras through by reference), so identity is enough to skip the rebuild.
+  const key = row.faces ?? row.edges ? [row.faces, row.edges] : undefined
+  if (key && !sameRefs(obj.painted, key)) {
+    obj.paint = paintTables(
+      row.faces as Record<string, unknown>[] | undefined,
+      row.edges as Record<string, unknown>[] | undefined)
+    obj.painted = key
+    obj.shown = NaN   // force a refill: the fold value alone hasn't changed
+  }
 }
+
+const sameRefs = (a: unknown, b: unknown[]): boolean =>
+  Array.isArray(a) && a.length === b.length && a.every((v, i) => v === b[i])
 
 function disposeOrigami(obj: OrigamiObject): void {
   obj.geometry.dispose()
@@ -660,6 +776,19 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
       }
       const origami = origamis.get(id)
       if (origami) {
+        // An edited fold table re-cooks the program, but a re-run always
+        // arrives here rather than as a create — so a changed program has to
+        // rebuild the object. Its buffers are sized for the old topology and
+        // its paint is keyed by the old face numbering; keeping it would draw
+        // the wrong paper in the wrong colours.
+        if (row.program && row.program !== origami.program) {
+          scene.remove(origami.root)
+          disposeOrigami(origami)
+          const rebuilt = makeOrigami(row)
+          scene.add(rebuilt.root)
+          origamis.set(id, rebuilt)
+          return
+        }
         applyOrigamiRow(origami, row)
         return
       }
