@@ -525,7 +525,7 @@ function recordLoopBeats(n: number): void {
   editableStore.record(ACTIVITY_TABLE, 'set-loop-beats', { beats: n, at: Date.now() })
   // A timeline row's pass length is the loop length, so cook-time .retime()
   // placements are stale until the program re-cooks against the new value.
-  if (liveCode != null) void evaluate(liveCode, { setError: editor.setError, seed: liveSeed, broadcast: false })
+  if (liveCode != null) void evaluate(liveCode, { setError: (msg) => host.setError(msg), seed: liveSeed, broadcast: false })
 }
 
 // Play/pause ride the activity table so they sync, persist and replay. Only a
@@ -1447,7 +1447,7 @@ async function bootRoom(room: string): Promise<void> {
       const n = loopBeatsFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? [])
       if (n != null) playback.setLoopBeats(n)
       // Re-place cook-time .retime() rows against the new pass length.
-      if (liveCode != null) void evaluate(liveCode, { setError: editor.setError, seed: liveSeed, broadcast: false })
+      if (liveCode != null) void evaluate(liveCode, { setError: (msg) => host.setError(msg), seed: liveSeed, broadcast: false })
     }
     // A peer toggled play/pause — mirror it (idempotent, so an echo is harmless).
     if (transportChanged) {
