@@ -1261,8 +1261,10 @@ export const SCHEMAS = deepFreeze({
    * `mosaic`, `rgbshift`, `strobe`, `film`, plus combines `blend`/`add`/`mult`/
    * `diff`/`mask`/`layer` whose argument is another chain — `prev()` (the
    * previous output frame, for feedback), `scene()` (the raw scene), or a
-   * generator: `gradient(angle)` (a 0→1 luminance ramp), `noise(scale)` (a
-   * dissolve field), `stripes(count, angle)` (blinds), reshaped by
+   * generator — the mask sources a transition wipes through: `gradient(angle)`
+   * (a 0→1 luminance ramp), `noise(scale, octaves)` (Perlin, a soft dissolve),
+   * `voronoi(scale, jitter)` (cells, a shatter), `stripes(count, angle)`
+   * (blinds), reshaped by
    * `.thresh(edge, softness)` (a moving wipe edge — ride `edge` on
    * `progress().oneSub()`) and `.polar(cx, cy)` (resample in radius/angle, turning
    * a gradient into an iris or clock). Every op argument is either LIVE (the default: a number, or a

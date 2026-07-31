@@ -59,8 +59,19 @@ export const POST_OPS: Record<string, OpSpec> = {
   },
   noise: {
     kind: 'head',
-    args: [{ name: 'scale', arg: 'live', default: 3 }],
-    doc: 'Static value-noise luminance at `scale` cells across (live) — a dissolve source; deterministic (no self-animation, drive it with progress()). noise(3).thresh(progress().oneSub()) dissolves.',
+    args: [
+      { name: 'scale', arg: 'live', default: 3 },
+      { name: 'octaves', arg: 'structural', default: 1 },
+    ],
+    doc: 'Static Perlin (gradient) noise luminance at `scale` cells across (live) — a soft-edged dissolve mask; deterministic (no self-animation, drive it with progress()). `octaves` (structural, 1–4) stacks halving-amplitude layers, breaking the blobs up into finer, more ragged detail. noise(3).thresh(progress().oneSub()) dissolves.',
+  },
+  voronoi: {
+    kind: 'head',
+    args: [
+      { name: 'scale', arg: 'live', default: 6 },
+      { name: 'jitter', arg: 'live', default: 1 },
+    ],
+    doc: 'Cellular (Worley) noise: `scale` cells across, each with a feature point offset by `jitter` (0 = a regular grid, 1 = fully scattered; both live). Luminance is the distance to the nearest point — dark cell centres, bright borders. voronoi(8).thresh(progress().oneSub()) wipes cell by cell, a shatter; .invert() first and the cells fill from their edges inward.',
   },
   stripes: {
     kind: 'head',
