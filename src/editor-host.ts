@@ -22,6 +22,9 @@ export interface EditTarget {
   // drawn behind this target while it is promoted. Only hydra/post code cells
   // have one — see main.ts's previewCode and ui/facade.tsx's previewMounts.
   preview?(text: string): string | null
+  // The row's identifying cells (`beat 3`, `setCode`, `o0`) — a stack of
+  // facades has to say which row each one edits without reading the code.
+  context?: string[]
 }
 
 export interface EditorHost {

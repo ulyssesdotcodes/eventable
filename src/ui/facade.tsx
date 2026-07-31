@@ -123,6 +123,9 @@ function PromotedSurface(props: { host: EditorHost; target: EditTarget; onClose:
     <div class="editor-surface" classList={{ previewing: !!preview() }} ref={surface}>
       <div class="editor-surface-head">
         <span class="editor-surface-label">{props.target.label}</span>
+        <For each={props.target.context ?? []}>
+          {(part) => <span class="facade-context">{part}</span>}
+        </For>
         <button
           class="run-btn"
           disabled={!props.host.dirty(props.target.label)}
@@ -179,6 +182,9 @@ export function CodeFacade(props: {
     <div class="code-facade" classList={{ 'facade-live': live(), previewing: !!preview() }} data-lang={props.target.lang} data-label={props.target.label} ref={facade}>
       <div class="facade-head">
         <span class="facade-label">{props.target.label}</span>
+        <For each={props.target.context ?? []}>
+          {(part) => <span class="facade-context">{part}</span>}
+        </For>
         <button
           class="run-btn facade-run"
           disabled={!props.host.dirty(props.target.label)}

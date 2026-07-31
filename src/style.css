@@ -845,19 +845,42 @@ html, body {
 .facade-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 3px 8px;
+  overflow: hidden;
 }
 
 .facade-label,
 .editor-surface-label {
-  flex: 1;
   color: #8ca0b8;
   font-family: monospace;
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* The row's other cells, so a stack of editors is identifiable at a glance.
+   They take the header's slack (the label and Apply keep their size) and the
+   ones that do not fit are dropped rather than wrapping the header taller. */
+.facade-context {
+  color: #cfe0f0;
+  background: #16324f;
+  border: 1px solid #24466b;
+  border-radius: 3px;
+  padding: 0 5px;
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.facade-context:last-of-type {
+  margin-right: auto;
 }
 
 .facade-run {
@@ -2129,6 +2152,9 @@ html, body {
    tooltip-like panel tracking the dragged handle's x, allowed to overflow
    the strip's own top edge (see .timeline-strip-wrap above). Non-interactive:
    it only ever reflects the live preview, never receives input. */
+/* Floats above its band, where there is room for it — except on the first
+   band, whose "above" is outside the scrolling section list and would be
+   clipped away (the rule after this one flips it below). */
 .timeline-strip-readout {
   position: absolute;
   bottom: 100%;
@@ -2143,6 +2169,14 @@ html, body {
   text-align: left;
   pointer-events: none;
   z-index: 3;
+}
+
+/* The beat ruler is the sibling before the first band, so this is "the top
+   band" without measuring anything. */
+.timeline-pane-axis + .timeline-section .timeline-strip-readout {
+  bottom: auto;
+  top: 100%;
+  transform: translate(-50%, 6px);
 }
 
 /* One meaningful column per line, stacked. */

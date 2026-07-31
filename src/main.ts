@@ -16,7 +16,7 @@ import { createCmEditor } from './ui/cm-editor.js'
 import { createEditorHost, type EditTarget } from './editor-host.js'
 import { defaultProgram, defaultTables, defaultTable, programText } from './editor-support.js'
 import { createTablePanel } from './ui/table-panel.js'
-import { EVENTS_SUFFIX } from './table-panel.js'
+import { EVENTS_SUFFIX, formatEditableCell, isCellInert } from './table-panel.js'
 import { createPlaybackController, type PlaybackController } from './ui/transport.js'
 import { createSessionBar } from './ui/session-bar.js'
 import { createSessionSelector } from './ui/session-selector.js'
@@ -225,6 +225,24 @@ function cellLanguage(table: string, row: Row | undefined, col: EditableColumn |
 // re-cooks at the *current* seed, so tweaking a sketch never re-randomizes the
 // scene. A "code" row is a program fragment, so its commit re-joins the whole
 // table (see programText) instead of re-running the last cooked text.
+// What the row is, for the facade's header: its other filled-in cells, the
+// `beat` first since that is how a performer finds a row. The code column
+// itself is the facade's body, so it never repeats here.
+function rowContext(row: Row | undefined, columns: EditableColumn[] | undefined, col: string): string[] {
+  if (!row || !columns) return []
+  const cells = columns
+    .filter((c) => c.name !== col && c.type !== 'code' && c.name !== DISABLED_COL)
+    .filter((c) => !isCellInert(row, c, columns))
+    .map((c) => ({ c, v: row[c.name] }))
+    // Blank cells conform to 0, so a numeric 0 reads as "unset" here the same
+    // way the schemas treat it (beats are 1-indexed).
+    .filter(({ v }) => v != null && v !== '' && v !== false && v !== 0)
+  const beat = cells.find(({ c }) => c.name === 'beat')
+  const rest = cells.filter((x) => x !== beat).slice(0, 3)
+  return [...(beat ? [beat] : []), ...rest].map(({ c, v }) =>
+    c.name === 'event' ? String(v) : `${c.name} ${formatEditableCell(c.type, v)}`)
+}
+
 function cellTarget(table: string, rowIndex: number, col: string, value: string): EditTarget {
   const data = editableStore.get(table)
   const colSpec = data?.columns.find((c) => c.name === col)
@@ -241,6 +259,7 @@ function cellTarget(table: string, rowIndex: number, col: string, value: string)
     label,
     lang,
     text: value,
+    context: rowContext(data?.rows[rowIndex], data?.columns, col),
     // Only hydra and post have something to draw; the fold is the one the row's
     // ⓘ popover shows, with the pending text spliced back into its row.
     preview: lang !== 'hydra' && lang !== 'post' ? undefined : (text) => {
