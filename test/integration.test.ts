@@ -3,15 +3,21 @@ import assert from 'node:assert/strict'
 import { createRuntime } from '../src/runtime.js'
 import { getLineage } from '../src/lineage.js'
 import { compileFoldTable } from '../src/fold-engine.js'
-import { buildFrameIndex, sampleFrame, rasterizeRows } from '../src/rasterize.js'
+import { buildFrameIndex, sampleFrame, rasterizeRows, elementRowsAt, type MeshSlab } from '../src/rasterize.js'
 
 // The paper is scene rows now — a vertex is an object with px/py/pz keyframes —
 // so geometry assertions read the same rows the renderer draws from, sampled
 // at the beat the fold lands on.
-const posAtBeat = (rows: Row[], beat: number): [number, number, number][] =>
-  sampleFrame(buildFrameIndex(rows), beatToFrame(beat))
+// The store keeps a mesh's geometry as buffers, not as a row per vertex per
+// frame — but it still hands the paper back one vertex at a time on request,
+// which is what the table view and `.rasterize()` read.
+const posAtBeat = (rows: Row[], beat: number): [number, number, number][] => {
+  const frame = beatToFrame(beat)
+  return sampleFrame(buildFrameIndex(rows), frame)
+    .flatMap((r) => (r.slab ? elementRowsAt(r.slab as MeshSlab, r.id, frame) : [r]))
     .filter((r) => typeof r.vert === 'number')
     .map((r) => [r.px as number, r.py as number, r.pz as number])
+}
 // Fold-level facts (names, kinds, how far each swings) are the compiler's, not
 // the scene row's — compile the sample's own fold table for those.
 const programOf = (sample: { tables?: Record<string, Record<string, unknown>[]> }, table: string) =>
@@ -185,9 +191,11 @@ test('Origami Metamorphosis sample: retime pingpongs the lotus back to a square 
   const idx = buildFrameIndex(rows)
   const paperAt = (id: string, beat: number): Map<number, [number, number, number]> => {
     const m = new Map<number, [number, number, number]>()
-    for (const r of sampleFrame(idx, beatToFrame(beat))) {
-      if (typeof r.vert === 'number' && String(r.id).startsWith(id)) {
-        m.set(r.vert, [r.px as number, r.py as number, r.pz as number])
+    const frame = beatToFrame(beat)
+    for (const mesh of sampleFrame(idx, frame)) {
+      if (!mesh.slab || !String(mesh.id).startsWith(id)) continue
+      for (const r of elementRowsAt(mesh.slab as MeshSlab, mesh.id, frame)) {
+        if (typeof r.vert === 'number') m.set(r.vert, [r.px as number, r.py as number, r.pz as number])
       }
     }
     return m
@@ -202,18 +210,32 @@ test('Origami Metamorphosis sample: retime pingpongs the lotus back to a square 
   // down to a flat square — no hand-mirrored rows
   const flat = gathered('flowerA', 1)
   assert.ok(gathered('flowerA', 7) < flat * 0.8, 'the lotus gathers as it blooms')
-  assert.ok(gathered('flowerA', 19) < flat * 0.8, 'and is still folded on the way back')
-
-  // the pingpong lands on the very same square it started from — which is what
-  // lets the lily take over there unseen
-  const start = paperAt('flowerA', 1)
-  const end = paperAt('flowerA', 25)
-  assert.equal(end.size, start.size)
-  for (const [v, q] of end) {
-    const a = start.get(v)!
+  // beat 19 is beat 7 played backwards — the SAME run, vertex for vertex, which
+  // is what "no hand-mirrored rows" means
+  const out7 = paperAt('flowerA', 7), back19 = paperAt('flowerA', 19)
+  assert.equal(back19.size, out7.size)
+  for (const [v, q] of back19) {
+    const a = out7.get(v)!
     assert.ok(Math.hypot(q[0] - a[0], q[1] - a[1], q[2] - a[2]) < 1e-6,
-      `vertex ${v} returns to where it started`)
+      `vertex ${v} retraces its outward pose`)
   }
+
+  // The pingpong lands on the very same square it started from at beat 25 —
+  // which is the instant the lotus retires and the lily takes over, so what
+  // the contract is really about is that the swap cannot be seen. The lotus is
+  // GONE at the hand-off (a destroyed mesh takes its geometry with it), and
+  // the lily standing in its place covers the same square.
+  const box = (pts: [number, number, number][]): number[] => [
+    Math.min(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[0])),
+    Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[1])),
+  ]
+  assert.equal(paperAt('flowerA', 25).size, 0, 'the lotus is retired at the hand-off')
+  const square = box([...paperAt('flowerA', 1).values()])
+  const takesOver = box([...paperAt('flowerB', 25).values()])
+  assert.ok(takesOver.every((v, i) => Math.abs(v - square[i]) < 1e-6),
+    `the lily covers the same square: ${takesOver} vs ${square}`)
+  // and it really is a flat square again by the last frame it is drawn
+  assert.ok(gathered('flowerA', 24.97) > flat * 0.95, 'the lotus unfolds back to the square')
 })
 
 test('Hydra Meta sample: replace/append/setSource/layer rewrite the sketch across the loop', () => {

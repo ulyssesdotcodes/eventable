@@ -277,6 +277,135 @@ export interface FrameStore {
   maxFrame: number
 }
 
+// ── A mesh as buffers ───────────────────────────────────────────────────────
+// Element rows describe a mesh one vertex, face, triangle and crease at a time,
+// which is what makes it inspectable and joinable — and hopeless as a
+// transport: a folded paper is a couple of thousand sibling objects, each
+// materialised into a row on every frame, then gathered back out of hash maps
+// by the renderer. The store compiles them ONCE into what a renderer actually
+// wants. The rows stay in the table; nothing downstream has to walk them.
+//
+// Positions sit on one shared keyframe axis, so a frame is a single search and
+// two lerps for the whole mesh rather than a search per column per element.
+// Everything else is fixed topology as plain indices, which is what a corner
+// of a triangle needs to know to find its vertex.
+export interface MeshSlab {
+  axis: Int32Array          // frames the positions are keyed on
+  vpos: Float32Array        // axis.length blocks of nv * 3
+  foff: Float32Array        // axis.length blocks of nf * 3 — the layer offset
+  cornerVert: Int32Array    // 3 per triangle, in draw order
+  cornerFace: Int32Array    // 1 per triangle
+  endVert: Int32Array       // 2 per crease
+  endFace: Int32Array       // 1 per crease, -1 where no face claims it
+  nv: number
+  nf: number
+}
+
+// An element row names which piece of the mesh it IS. `of` is what ties it to
+// the mesh — a row without one is an ordinary object that happens to have a
+// `face` column.
+const elementOf = (r: Row): { kind: 'vert' | 'face' | 'tri' | 'edge'; i: number } | null => {
+  if (r.of == null) return null
+  // `tri` first: a triangle names the face it belongs to as well as itself
+  for (const kind of ['tri', 'vert', 'face', 'edge'] as const) {
+    if (typeof r[kind] === 'number') return { kind, i: r[kind] as number }
+  }
+  return null
+}
+
+// Value of a numeric column at a frame, holding the last keyframe and easing
+// into the next — the same reading rowAt gives it, done for one column.
+const valueAt = (t: Track | undefined, frame: number): number => {
+  if (!t || !t.at.length) return 0
+  let lo = 0, hi = t.at.length - 1, i = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (t.at[mid] <= frame) { i = mid; lo = mid + 1 } else hi = mid - 1
+  }
+  if (i < 0) return typeof t.val[0] === 'number' ? (t.val[0] as number) : 0
+  const v = t.val[i]
+  if (typeof v !== 'number') return 0
+  const nx = t.val[i + 1]
+  const span = i + 1 < t.at.length ? t.at[i + 1] - t.at[i] : 0
+  if (typeof nx !== 'number' || span <= 0 || t.ease?.[i + 1] === 'step') return v
+  const raw = Math.min(1, Math.max(0, (frame - t.at[i]) / span))
+  const fn = easeFnOf(t.ease?.[i + 1])
+  return v + (nx - v) * (fn ? fn(raw) : raw)
+}
+
+// Compile one mesh's element objects into buffers. Topology is whatever the
+// elements last say it is — the emitters state it once and never restate it,
+// which is what lets a corner index mean the same paper for the whole timeline.
+function buildSlab(elements: ObjectTracks[]): MeshSlab | null {
+  const of: Record<'vert' | 'face' | 'tri' | 'edge', Map<number, ObjectTracks>> = {
+    vert: new Map(), face: new Map(), tri: new Map(), edge: new Map(),
+  }
+  const at = new Set<number>()
+  for (const o of elements) {
+    for (const kind of ['tri', 'vert', 'face', 'edge'] as const) {
+      const t = o.cols[kind]
+      if (!t || typeof t.val[0] !== 'number') continue
+      of[kind].set(t.val[0] as number, o)
+      break
+    }
+    for (const c of ['px', 'py', 'pz', 'ox', 'oy', 'oz']) {
+      const t = o.cols[c]
+      if (t) for (const f of t.at) at.add(f)
+    }
+  }
+  if (!of.tri.size) return null
+  const axis = Int32Array.from(at.size ? [...at].sort((a, b) => a - b) : [0])
+  const nv = Math.max(0, ...of.vert.keys()) + (of.vert.size ? 1 : 0)
+  const nf = Math.max(0, ...of.face.keys()) + (of.face.size ? 1 : 0)
+
+  const vpos = new Float32Array(axis.length * nv * 3)
+  const foff = new Float32Array(axis.length * nf * 3)
+  for (let k = 0; k < axis.length; ++k) {
+    for (const [i, o] of of.vert) {
+      const b = (k * nv + i) * 3
+      vpos[b] = valueAt(o.cols.px, axis[k])
+      vpos[b + 1] = valueAt(o.cols.py, axis[k])
+      vpos[b + 2] = valueAt(o.cols.pz, axis[k])
+    }
+    for (const [i, o] of of.face) {
+      const b = (k * nf + i) * 3
+      foff[b] = valueAt(o.cols.ox, axis[k])
+      foff[b + 1] = valueAt(o.cols.oy, axis[k])
+      foff[b + 2] = valueAt(o.cols.oz, axis[k])
+    }
+  }
+
+  // draw order is the element numbering, so what is drawn never depends on the
+  // order rows happened to arrive in
+  const tris = [...of.tri.keys()].sort((a, b) => a - b)
+  const cornerVert = new Int32Array(tris.length * 3)
+  const cornerFace = new Int32Array(tris.length)
+  tris.forEach((ti, n) => {
+    const c = of.tri.get(ti)!.cols
+    cornerFace[n] = (c.face?.val[0] as number) ?? 0
+    cornerVert[n * 3] = (c.v0?.val[0] as number) ?? 0
+    cornerVert[n * 3 + 1] = (c.v1?.val[0] as number) ?? 0
+    cornerVert[n * 3 + 2] = (c.v2?.val[0] as number) ?? 0
+  })
+  // a crease is drawn on the layer of a face that owns it, as before: the first
+  // triangle in draw order that names one of its ends
+  const faceOfVert = new Int32Array(nv).fill(-1)
+  for (let n = tris.length - 1; n >= 0; --n) {
+    for (let c = 0; c < 3; ++c) faceOfVert[cornerVert[n * 3 + c]] = cornerFace[n]
+  }
+  const edges = [...of.edge.keys()].sort((a, b) => a - b)
+  const endVert = new Int32Array(edges.length * 2)
+  const endFace = new Int32Array(edges.length)
+  edges.forEach((ei, n) => {
+    const c = of.edge.get(ei)!.cols
+    const a = (c.a?.val[0] as number) ?? 0, b = (c.b?.val[0] as number) ?? 0
+    endVert[n * 2] = a
+    endVert[n * 2 + 1] = b
+    endFace[n] = faceOfVert[a] >= 0 ? faceOfVert[a] : faceOfVert[b]
+  })
+  return { axis, vpos, foff, cornerVert, cornerFace, endVert, endFace, nv, nf }
+}
+
 // Fields eased between whole frames; everything else steps. The runs hold the
 // exact per-frame values either way — this only decides what a FRACTIONAL
 // frame does, so playback stays smooth when the playhead crosses frames slower
@@ -361,6 +490,42 @@ const runAt = (t: Track, frame: number): { i: number; v: unknown } | null => {
   return found < 0 ? null : { i: found, v: t.val[found] }
 }
 
+// Every element becomes part of its mesh's buffers instead of an object of its
+// own. The mesh keeps their lineage, so the table still lights up the rows the
+// paper came from, and it is one object per frame instead of thousands.
+function foldElementsIntoMeshes(objects: ObjectTracks[]): ObjectTracks[] {
+  const byMesh = new Map<unknown, ObjectTracks[]>()
+  const kept: ObjectTracks[] = []
+  for (const o of objects) {
+    const of = o.cols.of?.val[0]
+    if (of == null || !elementOf(rowOfCreate(o))) { kept.push(o); continue }
+    const at = byMesh.get(of)
+    if (at) at.push(o)
+    else byMesh.set(of, [o])
+  }
+  for (const mesh of kept) {
+    const elements = byMesh.get(mesh.id)
+    if (!elements) continue
+    const slab = buildSlab(elements)
+    if (!slab) continue
+    mesh.cols.slab = { at: [mesh.born], val: [slab], keyed: true }
+    mesh.lineage = unionLineage(
+      [mesh, ...elements].map((o) => withLineage({} as Row, o.lineage)))
+    byMesh.delete(mesh.id)
+  }
+  // elements whose mesh never appeared keep their rows, so a table that names
+  // no mesh still shows something rather than silently emptying
+  for (const orphans of byMesh.values()) kept.push(...orphans)
+  return kept
+}
+
+// The columns an object states once, as a row — enough to ask what it is.
+const rowOfCreate = (o: ObjectTracks): Row => {
+  const r: Row = {}
+  for (const k in o.cols) r[k] = o.cols[k].val[0]
+  return r
+}
+
 export function buildFrameStore(
   eventRows: Row[] | null | undefined, maxBeats?: number,
 ): FrameStore {
@@ -408,17 +573,60 @@ export function buildFrameStore(
     o.lineage = unionLineage([...seenSource])
     if (o.born >= 0) objects.push(o)
   }
-  return { objects, maxFrame }
+  return { objects: foldElementsIntoMeshes(objects), maxFrame }
+}
+
+// The mesh's elements as rows again, at one frame. Playback never asks — it
+// hands the buffers to the renderer whole — but a reader that wants the paper
+// one vertex at a time (the inspector, `.rasterize()`) gets the same rows the
+// table has, with this frame's geometry filled in.
+export function elementRowsAt(slab: MeshSlab, of: unknown, frameFloat: number): Row[] {
+  const { axis, vpos, foff, cornerVert, cornerFace, endVert, endFace, nv, nf } = slab
+  let lo = 0, hi = axis.length - 1, i = 0
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1
+    if (axis[m] <= frameFloat) { i = m; lo = m + 1 } else hi = m - 1
+  }
+  const j = Math.min(i + 1, axis.length - 1)
+  const span = axis[j] - axis[i]
+  const u = span > 0 ? Math.min(1, Math.max(0, (frameFloat - axis[i]) / span)) : 0
+  const at = (a: Float32Array, n: number, e: number, c: number): number => {
+    const p = (i * n + e) * 3 + c, q = (j * n + e) * 3 + c
+    return a[p] + (a[q] - a[p]) * u
+  }
+  const out: Row[] = []
+  for (let v = 0; v < nv; ++v) {
+    out.push({ id: `${String(of)}:v${v}`, of, frame: frameFloat, vert: v,
+      px: at(vpos, nv, v, 0), py: at(vpos, nv, v, 1), pz: at(vpos, nv, v, 2) })
+  }
+  for (let f = 0; f < nf; ++f) {
+    out.push({ id: `${String(of)}:f${f}`, of, frame: frameFloat, face: f,
+      ox: at(foff, nf, f, 0), oy: at(foff, nf, f, 1), oz: at(foff, nf, f, 2) })
+  }
+  for (let t = 0; t < cornerFace.length; ++t) {
+    out.push({ id: `${String(of)}:t${t}`, of, frame: frameFloat, tri: t, face: cornerFace[t],
+      v0: cornerVert[t * 3], v1: cornerVert[t * 3 + 1], v2: cornerVert[t * 3 + 2] })
+  }
+  for (let e = 0; e < endFace.length; ++e) {
+    out.push({ id: `${String(of)}:e${e}`, of, frame: frameFloat, edge: e,
+      a: endVert[e * 2], b: endVert[e * 2 + 1] })
+  }
+  return out
 }
 
 // Rebuild a dense row per object per frame — what `.rasterize()` hands a user
-// program, and the shape every consumer outside playback still expects.
+// program, and the shape every consumer outside playback still expects. A mesh
+// expands back into its elements here: the buffers are a transport, not a
+// different kind of scene.
 export function storeRows(store: FrameStore): Row[] {
   const out: Row[] = []
   for (let frame = 0; frame <= store.maxFrame; frame++) {
     for (const o of store.objects) {
       const row = rowAt(o, frame)
-      if (row) out.push(row)
+      if (!row) continue
+      const { slab, ...rest } = row
+      out.push(slab ? rest : row)
+      if (slab) out.push(...elementRowsAt(slab as MeshSlab, row.id, frame))
     }
   }
   return out

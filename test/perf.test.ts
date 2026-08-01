@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { createRuntime } from '../src/runtime.js'
 import { cookProgram } from '../src/replay.js'
 import { packCooked } from '../src/cook-transfer.js'
-import { sampleFrame } from '../src/rasterize.js'
+import { sampleFrame, elementRowsAt, type MeshSlab } from '../src/rasterize.js'
 import { SAMPLES } from '../src/samples.js'
 import { conformRow, schemaColumns, type ColumnType } from '../src/editable-tables.js'
 import { outViewName, isBinding } from '../src/dsl.js'
@@ -70,25 +70,61 @@ test('the packed payload does not grow with the frame count', () => {
 })
 
 test('the store keeps only what changes', () => {
-  // the columns that say which paper an element IS, as opposed to where it is
-  const TOPOLOGY = new Set(['vert', 'face', 'edge', 'tri', 'v0', 'v1', 'v2', 'a', 'b'])
-  let runs = 0, cols = 0, restated = 0, moved = 0
+  let runs = 0, cols = 0
   for (const o of cooked.scene.objects) {
-    for (const [k, t] of Object.entries(o.cols)) {
-      runs += t.at.length
-      cols++
-      if (TOPOLOGY.has(k) && t.at.length > 1) restated++
-      if (k === 'px' && t.at.length > 1) moved++
-    }
+    for (const t of Object.values(o.cols)) { runs += t.at.length; cols++ }
   }
   const dense = (cooked.scene.maxFrame + 1) * cols
   assert.ok(runs < dense / 10,
     `${runs} entries for what a per-frame bake would store as ${dense} cells`)
-  assert.ok(moved > 10, 'vertices really do move — otherwise the bound above is free')
-  // The paper has ONE topology for the whole folding, so a triangle's vertices
-  // and an edge's ends are stated once and never again. That is the property
-  // that makes an element number mean the same paper throughout.
-  assert.equal(restated, 0, 'a topology column is stated once')
+})
+
+// The paper is a couple of thousand elements. As sibling objects they cost the
+// playhead a row each, every frame, and the renderer a hash lookup each to
+// gather them back — for geometry that is the same paper all the way through.
+// The store compiles them into buffers once, so a frame is one object.
+test('a mesh reaches the playhead as buffers, not as an object per element', () => {
+  const objects = cooked.scene.objects
+  assert.equal(objects.length, 1, `${objects.length} objects for one folded paper`)
+  const slab = objects[0].cols.slab.val[0] as MeshSlab
+  assert.ok(slab.vpos instanceof Float32Array && slab.cornerVert instanceof Int32Array)
+  // positions sit on ONE keyframe axis for the whole mesh, so a frame is a
+  // single search rather than one per column per element
+  assert.equal(slab.vpos.length, slab.axis.length * slab.nv * 3)
+  assert.equal(slab.foff.length, slab.axis.length * slab.nf * 3)
+  assert.ok(slab.axis.length < cooked.scene.maxFrame,
+    `${slab.axis.length} keyframes for ${cooked.scene.maxFrame + 1} frames`)
+  // and the corner order is topology: stated once, as plain indices
+  assert.equal(slab.cornerVert.length, slab.cornerFace.length * 3)
+  assert.ok(slab.cornerVert.every((v) => v >= 0 && v < slab.nv), 'every corner names a vertex')
+  assert.ok(slab.endVert.every((v) => v >= 0 && v < slab.nv), 'every crease end names a vertex')
+})
+
+// Playback hands the buffers straight to the renderer; everything else — the
+// table view, .rasterize(), an inspector — can still ask for the paper one
+// vertex at a time, and must get the same geometry.
+test('the buffers still describe every element as a row', () => {
+  const frame = 400.5
+  const mesh = sampleFrame(cooked.scene, frame)[0]
+  const els = elementRowsAt(mesh.slab as MeshSlab, mesh.id, frame)
+  const verts = els.filter((r) => typeof r.vert === 'number')
+  const tris = els.filter((r) => typeof r.tri === 'number')
+  assert.ok(verts.length > 10 && tris.length > 10)
+  for (const r of els) {
+    for (const k in r) {
+      const v = r[k]
+      assert.ok(v === null || typeof v === 'number' || typeof v === 'string',
+        `${k} is a scalar`)
+    }
+  }
+  // a triangle's corners are vertices that exist and have been placed
+  const at = new Map(verts.map((r) => [r.vert, r]))
+  for (const t of tris) {
+    for (const c of ['v0', 'v1', 'v2']) {
+      const v = at.get(t[c] as number)
+      assert.ok(v && Number.isFinite(v.px as number), `corner ${c} of tri ${t.tri} is placed`)
+    }
+  }
 })
 
 test('sampling the playhead stays far inside real time', () => {
@@ -101,7 +137,7 @@ test('sampling the playhead stays far inside real time', () => {
   for (let f = 0; f < FRAMES; f++) rows += sampleFrame(index, f + 0.5).length
   const ms = performance.now() - started
   assert.ok(rows > 0, 'the scene is not empty')
-  // ~150ms alone, up to ~280ms when the whole suite runs in parallel — the
-  // budget clears both and still catches a return to per-frame work
-  assert.ok(ms < 500, `${FRAMES} frames sampled in ${ms.toFixed(0)}ms — budget 500ms, real time is 10,000ms`)
+  // ~3ms now that a mesh is one object rather than 400 — the budget is loose
+  // enough to survive a busy machine and still catch a return to per-element rows
+  assert.ok(ms < 200, `${FRAMES} frames sampled in ${ms.toFixed(0)}ms — budget 200ms, real time is 10,000ms`)
 })

@@ -7,6 +7,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import helvetiker from 'three/examples/fonts/helvetiker_regular.typeface.json'
 import { geometryDims, primitiveGeometry, type GeometryDims } from './three-points.js'
 import type { PostAPI } from './post-scene.js'
+import type { MeshSlab } from './rasterize.js'
 
 export interface SceneAPI {
   createObject(row: Record<string, unknown>): void
@@ -323,31 +324,17 @@ function disposeLight(obj: LightObject): void {
   obj.light.dispose()
 }
 
-// A mesh assembled from ELEMENT ROWS. Vertices, faces and edges each arrive
-// as their own scene object — a vertex is a row with px/py/pz keyframes, a
-// face is a row naming the vertices around it — linked to their mesh by `of`.
-// Nothing here knows how the elements got their positions; it groups them and
-// draws. Faces render as a per-face triangle soup so each can carry its own
-// offset (origami nudges each face by its layer); edges are lines from the
-// same positions.
-interface MeshVert { x: number; y: number; z: number }
-interface MeshFace { ox: number; oy: number; oz: number }
-interface MeshTri { face: number; v0: number; v1: number; v2: number }
-interface MeshEdge { a: number; b: number }
-
+// A mesh drawn from the buffers the store compiled out of its element rows.
+// Nothing here knows how the elements got their positions — it lerps two
+// keyframes and lays them out. Faces render as a per-face triangle soup so
+// each can carry its own offset (origami nudges each face by its layer);
+// edges are lines from the same positions.
 interface MeshObject {
   root: THREE.Group
   fold: number
-  dirty: boolean
-  // keyed by the element's own number, which is unique among the elements
-  // alive at any moment (a folding paper renumbers between folds, and the old
-  // elements are destroyed as the new ones appear)
-  verts: Map<number, MeshVert>
-  faces: Map<number, MeshFace>
-  tris: Map<number, MeshTri>
-  edges: Map<number, MeshEdge>
-  // element row id → what it is, so a destroy row can find it again
-  owned: Map<unknown, { kind: 'v' | 'f' | 't' | 'e'; i: number }>
+  // the mesh's geometry, compiled by the store from its element rows
+  slab: MeshSlab | null
+  frame: number
   vertColor: PartColors
   faceColor: PartColors
   edgeColor: PartColors
@@ -391,54 +378,63 @@ const dynAttr = (n: number, size: number): THREE.BufferAttribute => {
   return a
 }
 
-// Buffers are sized to what the elements currently need and grown when they
-// outgrow it — element rows arrive incrementally, so there is no up-front
-// count to size from.
-function ensureRoom(obj: MeshObject): void {
-  const tris = obj.tris.size
-  const ends = obj.edges.size * 2
-  if (tris * 9 > obj.posAttr.array.length) {
-    obj.posAttr = dynAttr(tris * 9 * 2, 3)
-    obj.tintAttr = dynAttr(tris * 9 * 2, 3)
-    obj.maskAttr = dynAttr(tris * 3 * 2, 1)
+// Buffers are sized to the mesh's fixed topology, once.
+function ensureRoom(obj: MeshObject, s: MeshSlab): void {
+  const corners = s.cornerVert.length
+  const ends = s.endVert.length
+  if (corners * 3 > obj.posAttr.array.length) {
+    obj.posAttr = dynAttr(corners * 3, 3)
+    obj.tintAttr = dynAttr(corners * 3, 3)
+    obj.maskAttr = dynAttr(corners, 1)
     obj.geometry.setAttribute('position', obj.posAttr)
     obj.geometry.setAttribute('tint', obj.tintAttr)
     obj.geometry.setAttribute('tintMask', obj.maskAttr)
   }
   if (ends * 3 > obj.linePosAttr.array.length) {
-    obj.linePosAttr = dynAttr(ends * 3 * 2, 3)
-    obj.lineTintAttr = dynAttr(ends * 3 * 2, 3)
-    obj.lineMaskAttr = dynAttr(ends * 2, 1)
+    obj.linePosAttr = dynAttr(ends * 3, 3)
+    obj.lineTintAttr = dynAttr(ends * 3, 3)
+    obj.lineMaskAttr = dynAttr(ends, 1)
     obj.lineGeometry.setAttribute('position', obj.linePosAttr)
     obj.lineGeometry.setAttribute('tint', obj.lineTintAttr)
     obj.lineGeometry.setAttribute('tintMask', obj.lineMaskAttr)
   }
 }
 
+// One frame of the paper: find the keyframes either side of it, then walk the
+// fixed corner order writing vertex + its face's layer offset. Both are lerped
+// with the same weight, and lerp is linear, so adding them after interpolating
+// is exactly the same paper as interpolating the sum.
 function fillMesh(obj: MeshObject): void {
-  ensureRoom(obj)
-  const { verts, faces, tris, edges, vertColor, faceColor, edgeColor } = obj
+  const s = obj.slab
+  if (!s) return
+  ensureRoom(obj, s)
+  let lo = 0, hi = s.axis.length - 1, i = 0
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1
+    if (s.axis[m] <= obj.frame) { i = m; lo = m + 1 } else hi = m - 1
+  }
+  const j = Math.min(i + 1, s.axis.length - 1)
+  const span = s.axis[j] - s.axis[i]
+  const u = span > 0 ? Math.min(1, Math.max(0, (obj.frame - s.axis[i]) / span)) : 0
+  const { vpos, foff, cornerVert, cornerFace, endVert, endFace, nv, nf } = s
+  const va = i * nv * 3, vb = j * nv * 3, fa = i * nf * 3, fb = j * nf * 3
+  const { vertColor, faceColor, edgeColor } = obj
+
   const P = obj.posAttr.array as Float32Array
   const T = obj.tintAttr.array as Float32Array
   const K = obj.maskAttr.array as Float32Array
-  let n = 0, k = 0
-  // triangle order is the element numbering, so what is drawn never depends on
-  // the order rows happened to arrive in
-  for (const ti of [...tris.keys()].sort((x, y) => x - y)) {
-    const t = tris.get(ti)!
-    const f = faces.get(t.face)
-    const ox = f?.ox ?? 0, oy = f?.oy ?? 0, oz = f?.oz ?? 0
-    for (const vi of [t.v0, t.v1, t.v2]) {
-      const v = verts.get(vi)
-      if (!v) { P[n++] = 0; P[n++] = 0; P[n++] = 0 } else {
-        P[n++] = v.x + ox; P[n++] = v.y + oy; P[n++] = v.z + oz
-      }
-      // a corner's own colour is the more specific one, so it wins there —
-      // which is what lets a few painted vertices shade across a face
-      writeTint(T, K, k++, vertColor?.[vi] ?? faceColor?.[t.face])
+  for (let c = 0; c < cornerVert.length; ++c) {
+    const v = cornerVert[c] * 3
+    const f = cornerFace[(c / 3) | 0] * 3
+    for (let k = 0; k < 3; ++k) {
+      P[c * 3 + k] = vpos[va + v + k] + (vpos[vb + v + k] - vpos[va + v + k]) * u
+        + foff[fa + f + k] + (foff[fb + f + k] - foff[fa + f + k]) * u
     }
+    // a corner's own colour is the more specific one, so it wins there —
+    // which is what lets a few painted vertices shade across a face
+    writeTint(T, K, c, vertColor?.[cornerVert[c]] ?? faceColor?.[cornerFace[(c / 3) | 0]])
   }
-  obj.geometry.setDrawRange(0, n / 3)
+  obj.geometry.setDrawRange(0, cornerVert.length)
   obj.posAttr.needsUpdate = true
   obj.tintAttr.needsUpdate = true
   obj.maskAttr.needsUpdate = true
@@ -446,30 +442,20 @@ function fillMesh(obj: MeshObject): void {
   const L = obj.linePosAttr.array as Float32Array
   const LT = obj.lineTintAttr.array as Float32Array
   const LK = obj.lineMaskAttr.array as Float32Array
-  // an edge is drawn on the layer of a face that owns it, as before
-  const faceOfVert = new Map<number, MeshFace>()
-  for (const t of tris.values()) {
-    const f = faces.get(t.face)
-    if (!f) continue
-    for (const v of [t.v0, t.v1, t.v2]) if (!faceOfVert.has(v)) faceOfVert.set(v, f)
+  for (let e = 0; e < endVert.length; ++e) {
+    const v = endVert[e] * 3
+    const fi = endFace[(e / 2) | 0]
+    const f = fi >= 0 ? fi * 3 : -1
+    for (let k = 0; k < 3; ++k) {
+      L[e * 3 + k] = vpos[va + v + k] + (vpos[vb + v + k] - vpos[va + v + k]) * u
+        + (f < 0 ? 0 : foff[fa + f + k] + (foff[fb + f + k] - foff[fa + f + k]) * u)
+    }
+    writeTint(LT, LK, e, vertColor?.[endVert[e]] ?? edgeColor?.[(e / 2) | 0])
   }
-  let m = 0, e = 0
-  for (const ei of [...edges.keys()].sort((x, y) => x - y)) {
-    const { a, b } = edges.get(ei)!
-    const va = verts.get(a), vb = verts.get(b)
-    if (!va || !vb) continue
-    const f = faceOfVert.get(a) ?? faceOfVert.get(b)
-    const ox = f?.ox ?? 0, oy = f?.oy ?? 0, oz = f?.oz ?? 0
-    L[m++] = va.x + ox; L[m++] = va.y + oy; L[m++] = va.z + oz
-    L[m++] = vb.x + ox; L[m++] = vb.y + oy; L[m++] = vb.z + oz
-    writeTint(LT, LK, e++, vertColor?.[a] ?? edgeColor?.[ei])
-    writeTint(LT, LK, e++, vertColor?.[b] ?? edgeColor?.[ei])
-  }
-  obj.lineGeometry.setDrawRange(0, m / 3)
+  obj.lineGeometry.setDrawRange(0, endVert.length)
   obj.linePosAttr.needsUpdate = true
   obj.lineTintAttr.needsUpdate = true
   obj.lineMaskAttr.needsUpdate = true
-  obj.dirty = false
 }
 
 function makeMesh(row: Record<string, unknown>): MeshObject {
@@ -522,54 +508,13 @@ function makeMesh(row: Record<string, unknown>): MeshObject {
   root.add(new THREE.LineSegments(lineGeometry, line))
 
   const obj: MeshObject = {
-    root, fold: 0, dirty: true,
-    verts: new Map(), faces: new Map(), tris: new Map(), edges: new Map(), owned: new Map(),
+    root, fold: 0, slab: null, frame: 0,
     vertColor: undefined, faceColor: undefined, edgeColor: undefined,
     posAttr, linePosAttr, tintAttr, maskAttr, lineTintAttr, lineMaskAttr,
     front, back, line, geometry, lineGeometry,
   }
   applyMeshRow(obj, row)
   return obj
-}
-
-// One element row folded into its mesh. Vertices carry a position, faces the
-// vertices around them plus the offset they ride on, edges their two ends.
-function applyElementRow(obj: MeshObject, row: Record<string, unknown>): void {
-  const num_ = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d)
-  if (typeof row.vert === 'number') {
-    const i = row.vert
-    obj.owned.set(row.id, { kind: 'v', i })
-    obj.verts.set(i, { x: num_(row.px, 0), y: num_(row.py, 0), z: num_(row.pz, 0) })
-  } else if (typeof row.tri === 'number') {
-    const i = row.tri
-    obj.owned.set(row.id, { kind: 't', i })
-    const prevT = obj.tris.get(i)
-    obj.tris.set(i, {
-      face: num_(row.face, prevT?.face ?? 0),
-      v0: num_(row.v0, prevT?.v0 ?? 0), v1: num_(row.v1, prevT?.v1 ?? 0), v2: num_(row.v2, prevT?.v2 ?? 0),
-    })
-  } else if (typeof row.face === 'number') {
-    const i = row.face
-    obj.owned.set(row.id, { kind: 'f', i })
-    obj.faces.set(i, { ox: num_(row.ox, 0), oy: num_(row.oy, 0), oz: num_(row.oz, 0) })
-  } else if (typeof row.edge === 'number') {
-    const i = row.edge
-    obj.owned.set(row.id, { kind: 'e', i })
-    const prevE = obj.edges.get(i)
-    obj.edges.set(i, { a: num_(row.a, prevE?.a ?? 0), b: num_(row.b, prevE?.b ?? 0) })
-  } else return
-  obj.dirty = true
-}
-
-function dropElement(obj: MeshObject, id: unknown): void {
-  const at = obj.owned.get(id)
-  if (!at) return
-  obj.owned.delete(id)
-  if (at.kind === 'v') obj.verts.delete(at.i)
-  else if (at.kind === 'f') obj.faces.delete(at.i)
-  else if (at.kind === 't') obj.tris.delete(at.i)
-  else obj.edges.delete(at.i)
-  obj.dirty = true
 }
 
 function disposeMesh(obj: MeshObject): void {
@@ -586,15 +531,12 @@ function applyMeshRow(obj: MeshObject, row: Record<string, unknown>): void {
   if (row.backColor != null) obj.back.color.set(row.backColor as number)
   // rasterize hands the same array back on frames where no element's colour
   // changed, so identity alone decides whether the buffers need refilling.
-  const vertColor = row.vertColor as PartColors
-  const faceColor = row.faceColor as PartColors
-  const edgeColor = row.edgeColor as PartColors
-  if (vertColor !== obj.vertColor || faceColor !== obj.faceColor || edgeColor !== obj.edgeColor) {
-    obj.vertColor = vertColor
-    obj.faceColor = faceColor
-    obj.edgeColor = edgeColor
-    obj.dirty = true
-  }
+  obj.vertColor = row.vertColor as PartColors
+  obj.faceColor = row.faceColor as PartColors
+  obj.edgeColor = row.edgeColor as PartColors
+  if (row.slab) obj.slab = row.slab as MeshSlab
+  obj.frame = typeof row.frame === 'number' ? row.frame : obj.frame
+  fillMesh(obj)
 }
 
 
@@ -642,7 +584,6 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
   const objects = new Map<unknown, THREE.Mesh>()
   const meshes = new Map<unknown, MeshObject>()
   // element rows can be applied before their mesh's create row lands
-  const pendingElements = new Map<unknown, Record<string, unknown>[]>()
   const texts = new Map<unknown, TextObject>()
   const lights = new Map<unknown, LightObject>()
   const cameras = new Set<unknown>()
@@ -725,9 +666,6 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
   let post: PostAPI | null = null
 
   function animate(): void {
-    for (const o of meshes.values()) {
-      if (o.dirty) fillMesh(o)
-    }
     if (particles?.sprite.visible) particles.tick(particleTime)
     if (!post?.render()) renderer.render(scene, camera)
     requestAnimationFrame(animate)
@@ -764,13 +702,6 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
     },
     createObject(row: Record<string, unknown>): void {
       const { id, shape, color } = row
-      // an element row belongs to a mesh, not to the scene
-      if (row.of != null) {
-        const owner = meshes.get(row.of)
-        if (owner) applyElementRow(owner, row)
-        else (pendingElements.get(row.of) ?? pendingElements.set(row.of, []).get(row.of)!).push(row)
-        return
-      }
       if (objects.has(id) || meshes.has(id) || texts.has(id) || lights.has(id) || cameras.has(id)) return
       if (shape === 'camera') {
         applyCamera(row)
@@ -785,9 +716,6 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
         const obj = makeMesh(row)
         scene.add(obj.root)
         meshes.set(id, obj)
-        // elements that arrived before their mesh did
-        for (const el of pendingElements.get(id) ?? []) applyElementRow(obj, el)
-        pendingElements.delete(id)
         return
       }
       if (shape === 'text') {
@@ -814,11 +742,6 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
 
     updateObject(row: Record<string, unknown>): void {
       const { id, color } = row
-      if (row.of != null) {
-        const owner = meshes.get(row.of)
-        if (owner) applyElementRow(owner, row)
-        return
-      }
       if (cameras.has(id)) {
         applyCamera(row)
         return
@@ -863,8 +786,6 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
     },
 
     destroyObject(id: unknown): void {
-      // element ids are not scene objects; ask every mesh to drop it
-      for (const m of meshes.values()) dropElement(m, id)
       if (cameras.has(id)) {
         cameras.delete(id)
         if (cameras.size === 0) resetCamera()
@@ -910,7 +831,6 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
         disposeMesh(m)
       }
       meshes.clear()
-      pendingElements.clear()
       for (const text of texts.values()) {
         scene.remove(text.mesh)
         disposeText(text)
