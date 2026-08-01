@@ -71,15 +71,22 @@ test('the packed payload does not grow with the frame count', () => {
 })
 
 test('the store keeps only what changes', () => {
-  let runs = 0, cols = 0
+  let runs = 0, cols = 0, constant = 0
   for (const o of cooked.scene.objects) {
-    for (const t of Object.values(o.cols)) { runs += t.at.length; cols++ }
+    for (const t of Object.values(o.cols)) {
+      runs += t.at.length
+      cols++
+      if (t.at.length === 1) constant++
+    }
   }
   const dense = (cooked.scene.maxFrame + 1) * cols
-  // Elements live for one fold and mostly hold still within it, so almost
-  // every track is a handful of runs against ~1,500 frames.
-  assert.ok(runs < dense / 100,
+  assert.ok(runs < dense / 10,
     `${runs} runs for what a per-frame bake would store as ${dense} cells`)
+  // The paper has ONE topology for the whole folding, so a triangle's vertices
+  // and a crease's ends cost a single run each — only positions move. That is
+  // the property that makes an element number mean the same paper throughout.
+  assert.ok(constant > cols * 0.8,
+    `${constant} of ${cols} tracks never change — topology is stated once`)
 })
 
 test('sampling the playhead stays far inside real time', () => {

@@ -1333,24 +1333,40 @@ export const foldElementRows = (
     return { pos: outPos, offs: outOffs }
   }
 
-  // Only what MOVED is written: a vertex that holds still through a fold costs
-  // one keyframe, not one per sample.
+  // Only what MOVED is written — but a skipped keyframe is a HOLD, and px/py/pz
+  // interpolate, so a gap would glide the element toward its next pose instead
+  // of leaving it still. Writing the previous value at the previous sample
+  // closes the segment before a move opens a new one.
   const lastPos: (readonly [number, number, number])[] = finalSheet.map(() => [NaN, NaN, NaN])
   const lastOff: (readonly [number, number, number])[] = faceCentre.map(() => [NaN, NaN, NaN])
+  const heldSince: number[] = finalSheet.map(() => -1)
+  const heldOffSince: number[] = faceCentre.map(() => -1)
   const near3 = (a: readonly number[], b: readonly number[]): boolean =>
     Math.abs(a[0] - b[0]) < 1e-7 && Math.abs(a[1] - b[1]) < 1e-7 && Math.abs(a[2] - b[2]) < 1e-7
+  let prevBeat = -1
   const emit = (beat: number, k: number, fold: number): void => {
     const { pos, offs } = sampleAt(k, fold)
     for (let v = 0; v < nv; ++v) {
-      if (near3(pos[v], lastPos[v])) continue
+      if (near3(pos[v], lastPos[v])) { if (heldSince[v] < 0) heldSince[v] = beat; continue }
+      const p = lastPos[v]
+      if (heldSince[v] >= 0 && prevBeat > heldSince[v] && Number.isFinite(p[0])) {
+        out.push({ id: eid(`v${v}`), of, event: 'update', beat: prevBeat, px: p[0], py: p[1], pz: p[2] })
+      }
+      heldSince[v] = -1
       lastPos[v] = pos[v]
       out.push({ id: eid(`v${v}`), of, event: 'update', beat, px: pos[v][0], py: pos[v][1], pz: pos[v][2] })
     }
     for (let f = 0; f < offs.length; ++f) {
-      if (near3(offs[f], lastOff[f])) continue
+      if (near3(offs[f], lastOff[f])) { if (heldOffSince[f] < 0) heldOffSince[f] = beat; continue }
+      const o0 = lastOff[f]
+      if (heldOffSince[f] >= 0 && prevBeat > heldOffSince[f] && Number.isFinite(o0[0])) {
+        out.push({ id: eid(`f${f}`), of, event: 'update', beat: prevBeat, ox: o0[0], oy: o0[1], oz: o0[2] })
+      }
+      heldOffSince[f] = -1
       lastOff[f] = offs[f]
       out.push({ id: eid(`f${f}`), of, event: 'update', beat, ox: offs[f][0], oy: offs[f][1], oz: offs[f][2] })
     }
+    prevBeat = beat
   }
 
   emit(1, 0, Number.EPSILON)

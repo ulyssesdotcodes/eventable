@@ -101,15 +101,14 @@ test('Origami Crane sample: 17 exact fold steps, wings held half-raised', () => 
   const kinds = program.steps.map((s) => s.type)
   assert.equal(kinds.filter((k) => k === 'Inside Reverse').length, 9)
 
-  // the folding is carried by the elements themselves: each fold replaces the
-  // paper's elements, so the last fold's vertices arrive with it and no
-  // earlier fold's outlive it
-  const vertsOfLastFold = events.rows.filter(
-    (r) => typeof r.vert === 'number' && r.event === 'create'
-      && (r.beat as number) === program.steps[16].t0)
-  assert.equal(vertsOfLastFold.length, program.steps[16].Vfrom.length)
-  assert.ok(events.rows.some((r) => r.event === 'destroy' && typeof r.id === 'string'
-    && r.id.includes(':s15:')), 'the fold before it is retired')
+  // ONE topology for the whole folding: folding only subdivides, so the last
+  // fold's vertices cover every earlier state. They are stated once and never
+  // replaced, which is what makes an element number the same piece of paper
+  // from the first beat to the last.
+  const created = events.rows.filter((r) => r.event === 'create' && typeof r.vert === 'number')
+  assert.equal(created.length, program.steps[16].Vfrom.length, 'every vertex of the final fold')
+  assert.equal(new Set(created.map((r) => r.beat)).size, 1, 'all stated at one beat')
+  assert.equal(events.rows.filter((r) => r.event === 'destroy').length, 0, 'and none is ever retired')
 
   // exact states at every landed fold: all flat (|z| only layer nudges = 0
   // here, raw positions), and the finished pose has the wings up
@@ -181,23 +180,40 @@ test('Origami Metamorphosis sample: retime pingpongs the lotus back to a square 
   assert.ok(rows.some((r) => r.event === 'create' && r.id === 'flowerB'), 'lily spawns')
   assert.ok(rows.some((r) => r.event === 'destroy' && r.id === 'flowerA'), 'lotus is retired')
 
-  // How folded the paper is, read off the paper itself: a flat square spans
-  // its full width, and folding gathers it inwards.
-  const spread = (id: string, beat: number): number => {
-    const pos = sampleFrame(buildFrameIndex(rows), beatToFrame(beat))
-      .filter((r) => typeof r.vert === 'number' && String(r.id).startsWith(id))
-      .map((r) => [r.px as number, r.py as number])
-    if (!pos.length) return 0
-    const xs = pos.map((p) => p[0]), ys = pos.map((p) => p[1])
-    return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
+  // Read foldedness off the paper itself. A bounding box will not do — the
+  // corners stay put — but folding gathers the paper toward its own centre.
+  const idx = buildFrameIndex(rows)
+  const paperAt = (id: string, beat: number): Map<number, [number, number, number]> => {
+    const m = new Map<number, [number, number, number]>()
+    for (const r of sampleFrame(idx, beatToFrame(beat))) {
+      if (typeof r.vert === 'number' && String(r.id).startsWith(id)) {
+        m.set(r.vert, [r.px as number, r.py as number, r.pz as number])
+      }
+    }
+    return m
+  }
+  const gathered = (id: string, beat: number): number => {
+    const pts = [...paperAt(id, beat).values()]
+    const cx = pts.reduce((s, q) => s + q[0], 0) / pts.length
+    const cy = pts.reduce((s, q) => s + q[1], 0) / pts.length
+    return pts.reduce((s, q) => s + Math.hypot(q[0] - cx, q[1] - cy), 0) / pts.length
   }
   // the lotus folds up, then .retime(pingpong) folds the very same run back
   // down to a flat square — no hand-mirrored rows
-  const open = spread('flowerA', 1)
-  const bloomed = spread('flowerA', 13)
-  const backFlat = spread('flowerA', 24)
-  assert.ok(bloomed < open * 0.9, 'the lotus gathers as it blooms')
-  assert.ok(backFlat > bloomed * 1.1, 'and the pingpong opens it back out')
+  const flat = gathered('flowerA', 1)
+  assert.ok(gathered('flowerA', 7) < flat * 0.8, 'the lotus gathers as it blooms')
+  assert.ok(gathered('flowerA', 19) < flat * 0.8, 'and is still folded on the way back')
+
+  // the pingpong lands on the very same square it started from — which is what
+  // lets the lily take over there unseen
+  const start = paperAt('flowerA', 1)
+  const end = paperAt('flowerA', 25)
+  assert.equal(end.size, start.size)
+  for (const [v, q] of end) {
+    const a = start.get(v)!
+    assert.ok(Math.hypot(q[0] - a[0], q[1] - a[1], q[2] - a[2]) < 1e-6,
+      `vertex ${v} returns to where it started`)
+  }
 })
 
 test('Hydra Meta sample: replace/append/setSource/layer rewrite the sketch across the loop', () => {
