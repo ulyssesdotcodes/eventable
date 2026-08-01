@@ -323,7 +323,7 @@ function disposeLight(obj: LightObject): void {
   obj.light.dispose()
 }
 
-// A mesh assembled from ELEMENT ROWS. Vertices, faces and creases each arrive
+// A mesh assembled from ELEMENT ROWS. Vertices, faces and edges each arrive
 // as their own scene object — a vertex is a row with px/py/pz keyframes, a
 // face is a row naming the vertices around it — linked to their mesh by `of`.
 // Nothing here knows how the elements got their positions; it groups them and
@@ -446,7 +446,7 @@ function fillMesh(obj: MeshObject): void {
   const L = obj.linePosAttr.array as Float32Array
   const LT = obj.lineTintAttr.array as Float32Array
   const LK = obj.lineMaskAttr.array as Float32Array
-  // a crease is drawn on the layer of a face that owns it, as before
+  // an edge is drawn on the layer of a face that owns it, as before
   const faceOfVert = new Map<number, MeshFace>()
   for (const t of tris.values()) {
     const f = faces.get(t.face)
@@ -533,7 +533,7 @@ function makeMesh(row: Record<string, unknown>): MeshObject {
 }
 
 // One element row folded into its mesh. Vertices carry a position, faces the
-// vertices around them plus the offset they ride on, creases their two ends.
+// vertices around them plus the offset they ride on, edges their two ends.
 function applyElementRow(obj: MeshObject, row: Record<string, unknown>): void {
   const num_ = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d)
   if (typeof row.vert === 'number') {

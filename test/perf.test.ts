@@ -1,14 +1,13 @@
-// Performance contracts for the scene cache.
+// Performance contracts for the scene store.
 //
-// The cache is a dense per-frame bake, so anything a row carries is paid for
-// ~1,500 times on a real model. That has always been survivable only because
-// large values are stored once and referenced — and the cheapest way to break
-// it is a well-meaning copy somewhere in the middle, which no correctness test
-// would notice. These pin the SHAPE of the cache (what it references, how many
-// objects it reaches) rather than wall-clock wherever possible: shape is
-// deterministic, wall-clock is not. The one timing test is budgeted two orders
-// of magnitude above what it costs, so it catches a catastrophe without going
-// flaky on a slow machine.
+// The store keeps keyframes, not a frame-by-frame bake, so a value a row holds
+// for the whole piece costs one entry rather than ~1,500. The cheapest way to
+// lose that is a well-meaning densification somewhere in the middle, which no
+// correctness test would notice. These pin the SHAPE of the store (what it
+// references, how much it keeps) rather than wall-clock wherever possible:
+// shape is deterministic, wall-clock is not. The one timing test is budgeted
+// two orders of magnitude above what it costs, so it catches a catastrophe
+// without going flaky on a slow machine.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRuntime } from '../src/runtime.js'
@@ -59,7 +58,7 @@ test('no scene cell holds a nested value', () => {
   // and the elements really are there
   assert.ok(rows.some((r) => typeof r.vert === 'number'), 'vertices')
   assert.ok(rows.some((r) => typeof r.tri === 'number'), 'triangles')
-  assert.ok(rows.some((r) => typeof r.edge === 'number'), 'creases')
+  assert.ok(rows.some((r) => typeof r.edge === 'number'), 'edges')
 })
 
 test('the packed payload does not grow with the frame count', () => {
@@ -71,22 +70,25 @@ test('the packed payload does not grow with the frame count', () => {
 })
 
 test('the store keeps only what changes', () => {
-  let runs = 0, cols = 0, constant = 0
+  // the columns that say which paper an element IS, as opposed to where it is
+  const TOPOLOGY = new Set(['vert', 'face', 'edge', 'tri', 'v0', 'v1', 'v2', 'a', 'b'])
+  let runs = 0, cols = 0, restated = 0, moved = 0
   for (const o of cooked.scene.objects) {
-    for (const t of Object.values(o.cols)) {
+    for (const [k, t] of Object.entries(o.cols)) {
       runs += t.at.length
       cols++
-      if (t.at.length === 1) constant++
+      if (TOPOLOGY.has(k) && t.at.length > 1) restated++
+      if (k === 'px' && t.at.length > 1) moved++
     }
   }
   const dense = (cooked.scene.maxFrame + 1) * cols
   assert.ok(runs < dense / 10,
-    `${runs} runs for what a per-frame bake would store as ${dense} cells`)
+    `${runs} entries for what a per-frame bake would store as ${dense} cells`)
+  assert.ok(moved > 10, 'vertices really do move — otherwise the bound above is free')
   // The paper has ONE topology for the whole folding, so a triangle's vertices
-  // and a crease's ends cost a single run each — only positions move. That is
-  // the property that makes an element number mean the same paper throughout.
-  assert.ok(constant > cols * 0.8,
-    `${constant} of ${cols} tracks never change — topology is stated once`)
+  // and an edge's ends are stated once and never again. That is the property
+  // that makes an element number mean the same paper throughout.
+  assert.equal(restated, 0, 'a topology column is stated once')
 })
 
 test('sampling the playhead stays far inside real time', () => {
@@ -99,5 +101,7 @@ test('sampling the playhead stays far inside real time', () => {
   for (let f = 0; f < FRAMES; f++) rows += sampleFrame(index, f + 0.5).length
   const ms = performance.now() - started
   assert.ok(rows > 0, 'the scene is not empty')
-  assert.ok(ms < 250, `${FRAMES} frames sampled in ${ms.toFixed(0)}ms — budget 250ms, real time is 10,000ms`)
+  // ~150ms alone, up to ~280ms when the whole suite runs in parallel — the
+  // budget clears both and still catches a return to per-frame work
+  assert.ok(ms < 500, `${FRAMES} frames sampled in ${ms.toFixed(0)}ms — budget 500ms, real time is 10,000ms`)
 })

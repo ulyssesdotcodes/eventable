@@ -244,14 +244,18 @@ function sampleObject(events: Row[], i: number, extent: number): SampledState | 
 }
 
 // ── The frame store ─────────────────────────────────────────────────────────
-// A column of one object, run-length encoded: `at[i]` is the frame its value
-// starts on, `val[i]` the value it holds until the next run. Most columns of
-// most objects never change at all — a static prop is one run per column, and
-// even the crane holds 15 of its 35 columns constant for the whole folding —
-// so the dense bake was storing the same value ~1,500 times over.
+// A column of one object as a sparse list: `at[i]` is the frame its value
+// starts on, `val[i]` the value there. Most columns of most objects never
+// change at all — a static prop is one entry per column, and the crane's
+// topology is one entry per element — so a per-frame bake would be storing the
+// same value ~1,500 times over.
 interface Track {
   at: number[]
   val: unknown[]
+  // Easing INTO val[i], present when the entries are KEYFRAMES the reader
+  // interpolates between. Absent when they are RUNS of an already-resolved
+  // per-frame bake, which hold their value until the next one.
+  ease?: unknown[]
 }
 
 interface ObjectTracks {
@@ -283,7 +287,62 @@ const pushRun = (cols: Record<string, Track>, key: string, frame: number, value:
   t.val.push(value)
 }
 
-// Value of a track at a whole frame: the last run starting at or before it.
+// Columns a track never holds: identity, the sparse beat grid, and `ease`,
+// which shapes a segment rather than being one.
+const RESERVED_TRACK = new Set(['id', 'event', 'beat', 'loop', 'frame', 'ease'])
+
+// Most objects are plain keyframes: a position that eases, a topology column
+// that never changes. Those need no per-frame bake at all — keep the keyframes
+// and interpolate on read, which is both what playback wants and what stops a
+// scene of thousands of elements costing objects × frames to build.
+//
+// An object is only densified when something about it can change on a frame no
+// event names: a streaming { $expr } or a colour pulse decaying. A function
+// `ease` goes that way too — resolving it at bake time is what lets it close
+// over anything, since the store crosses to the worker as data. Everything
+// else takes this path.
+function keyframeObject(evs: Row[], maxFrame: number): ObjectTracks | null {
+  const createEv = evs.find((e) => e.event === 'create')
+  if (!createEv) return null
+  for (const e of evs) {
+    if (e.event === 'color' || typeof e.ease === 'function') return null
+    for (const k in e) if (isBinding(e[k])) return null
+  }
+  const destroy = evs.find((e) => e.event === 'destroy')
+  const o: ObjectTracks = {
+    id: evs[0].id,
+    born: createEv.frame as number,
+    dies: destroy ? (destroy.frame as number) : maxFrame + 1,
+    cols: {},
+    lineage: unionLineage(evs),
+  }
+  const key = (k: string, frame: number, v: unknown, ease: unknown): void => {
+    let t = o.cols[k]
+    if (!t) { t = { at: [], val: [], ease: [] }; o.cols[k] = t }
+    t.at.push(frame)
+    t.val.push(v)
+    t.ease!.push(ease)
+  }
+  // A create row's fields hold from its frame on, even where a later keyframe
+  // never mentions them again; `color` is one of them, since with no colour
+  // events there is no pulse to resolve. `vert`/`face`/`edge` are ordinary
+  // columns here — they name this element's own identity, not a handle into
+  // another object, which is only how a `color` row reads them.
+  for (const e of evs) {
+    if (e.event !== 'create' && e.event !== 'update') continue
+    for (const k in e) {
+      if (RESERVED_TRACK.has(k)) continue
+      key(k, e.frame as number, e[k], e.ease)
+    }
+  }
+  // the densified path resolves these for every object, so state them here too
+  // rather than let an object's columns depend on which path it took
+  if (!o.cols.color) key('color', o.born, null, undefined)
+  key('event', o.born, 'create', undefined)
+  return o
+}
+
+// Value of a track at a whole frame: the last entry starting at or before it.
 const runAt = (t: Track, frame: number): { i: number; v: unknown } | null => {
   let lo = 0, hi = t.at.length - 1, found = -1
   while (lo <= hi) {
@@ -307,6 +366,8 @@ export function buildFrameStore(
   )
   const objects: ObjectTracks[] = []
   for (const evs of buildTimelines(events).values()) {
+    const keyed = keyframeObject(evs, maxFrame)
+    if (keyed) { objects.push(keyed); continue }
     const o: ObjectTracks = {
       id: evs[0].id, born: -1, dies: maxFrame + 1, cols: {}, lineage: [],
     }
@@ -364,8 +425,20 @@ function rowAt(o: ObjectTracks, frameFloat: number): Row | null {
     const hit = runAt(t, f0)
     if (!hit) continue
     let v = hit.v
-    if (frac > 0 && INTERP_FIELDS.has(k) && typeof v === 'number') {
-      // the next whole frame's value, which is this run's unless one starts on it
+    if (t.ease) {
+      // keyframes: interpolate across the whole segment to the next one
+      const j = hit.i + 1
+      const nx = t.val[j]
+      if (typeof v === 'number' && typeof nx === 'number' && !NO_TRACK.has(k)) {
+        const span = t.at[j] - t.at[hit.i]
+        if (span > 0 && t.ease[j] !== 'step') {
+          const raw = Math.min(1, Math.max(0, (frameFloat - t.at[hit.i]) / span))
+          const fn = easeFnOf(t.ease[j])
+          v = v + (nx - v) * (fn ? fn(raw) : raw)
+        }
+      }
+    } else if (frac > 0 && INTERP_FIELDS.has(k) && typeof v === 'number') {
+      // densified: the next whole frame's value, if a run starts on it
       const nx = t.at[hit.i + 1] === f0 + 1 ? t.val[hit.i + 1] : v
       if (typeof nx === 'number' && nx !== v) v = v + (nx - v) * frac
     }
