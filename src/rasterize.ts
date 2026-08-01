@@ -26,7 +26,7 @@ function easeFnOf(e: unknown): ((t: number) => number) | null {
 interface SampledState {
   fields: Row
   sources: Row[]
-  parts: { face: (number | null)[]; edge: (number | null)[] } | null
+  parts: Record<PartKind, (number | null)[]> | null
 }
 
 // Fields rasterize interprets itself. Anything else — a custom field, or a
@@ -36,15 +36,25 @@ interface SampledState {
 const RESERVED = new Set([
   'id', 'event', 'beat', 'loop', 'dur', 'ease', 'to', 'shape', 'color',
   'px', 'py', 'pz', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz', 'frame',
-  // sub-object handles: interpreted into faceColor/edgeColor, never carried
-  'face', 'edge',
+  // element handles: interpreted into vertColor/faceColor/edgeColor
+  'vert', 'face', 'edge',
 ])
 
+type PartKind = 'vert' | 'face' | 'edge'
+const partKey = (e: Row): PartKind | null =>
+  typeof e.vert === 'number' ? 'vert'
+    : typeof e.face === 'number' ? 'face'
+      : typeof e.edge === 'number' ? 'edge' : null
+
 // Non-reserved fields visible at frame `i`: events at-or-before, last write wins.
+// An event addressing ONE element speaks only for that element, so its columns
+// stay out of the object's own state — otherwise painting a face by
+// origami().faces() would stamp that table's whole vocabulary (plies, layer,
+// sheetX, …) onto the paper itself.
 function gatherExtra(events: Row[], i: number): Row {
   const extra: Row = {}
   for (const e of events) {
-    if ((e.frame as number) > i) continue
+    if ((e.frame as number) > i || partKey(e)) continue
     for (const k in e) {
       if (!RESERVED.has(k)) extra[k] = e[k]
     }
@@ -78,9 +88,6 @@ function buildTimelines(events: Row[]): Map<unknown, Row[]> {
 
 // A `color` row carrying `face`/`edge` paints one element of the object, not
 // the object — it must not reach the whole-object color, and vice versa.
-const partKey = (e: Row): 'face' | 'edge' | null =>
-  typeof e.face === 'number' ? 'face' : typeof e.edge === 'number' ? 'edge' : null
-
 // One element's pulse at frame i. With `dur` it fades toward `to` — or, unset,
 // toward the object's own color — and RELEASES the element when it lands, so
 // the paint hands back to whatever the shape would have drawn. Without `dur`
@@ -103,8 +110,8 @@ function partPulseAt(colorEv: Row, objColor: number | null, i: number): number |
 // Per-element colors at frame i, indexed by element number (null = unpainted).
 function samplePartColors(
   events: Row[], createEv: Row, i: number,
-): { face: (number | null)[]; edge: (number | null)[] } {
-  const out = { face: [] as (number | null)[], edge: [] as (number | null)[] }
+): Record<PartKind, (number | null)[]> {
+  const out: Record<PartKind, (number | null)[]> = { vert: [], face: [], edge: [] }
   const objColor = (createEv.color as number | null | undefined) ?? null
   for (const e of events) {
     if (e.event !== 'color' || (e.frame as number) > i) continue
@@ -302,7 +309,7 @@ export function buildFrameStore(
       id: evs[0].id, born: -1, dies: maxFrame + 1, cols: {}, sources: [],
     }
     const seenSource = new Set<Row>()
-    let parts: { face: (number | null)[]; edge: (number | null)[] } = { face: [], edge: [] }
+    let parts: Record<PartKind, (number | null)[]> = { vert: [], face: [], edge: [] }
     for (let frame = 0; frame <= maxFrame; frame++) {
       const s = sampleObject(evs, frame, maxFrame)
       if (!s) {
@@ -316,9 +323,11 @@ export function buildFrameStore(
       const { beat: _beat, loop: _loop, ...fields } = s.fields
       if (s.parts) {
         parts = {
+          vert: sharedIfSame(parts.vert, s.parts.vert),
           face: sharedIfSame(parts.face, s.parts.face),
           edge: sharedIfSame(parts.edge, s.parts.edge),
         }
+        if (parts.vert.length) fields.vertColor = parts.vert
         if (parts.face.length) fields.faceColor = parts.face
         if (parts.edge.length) fields.edgeColor = parts.edge
       }

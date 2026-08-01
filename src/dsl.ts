@@ -1082,6 +1082,30 @@ export class OrigamiBuilder {
   }
 
   /**
+   * One row per (fold, vertex) — the corners the paper is folded about, in the
+   * numbering the renderer draws with. Carries the fold's `beat`/`dur` plus
+   * `step`/`name` which fold, `vert` its number within that fold, `hinge`
+   * whether it lies ON the fold line (which is exactly why the paper can turn
+   * there without tearing), `moving` whether any face meeting there swings,
+   * `faces` how many meet there, `cx`/`cy` where it is drawn, `sheetX`/`sheetY`
+   * where it sits on the unfolded square — the one coordinate that means the
+   * same thing in every fold.
+   *
+   * A scene "color" row carrying `vert` tints the paper at that corner, so a
+   * gradient across a flap is a table:
+   *
+   *   paper.verts().filter({ hinge: true })
+   *     .derive({ id: "crane", event: "color", color: 0xffcc00 }).outThree()
+   *
+   * `at` adds px/py/pz as in faces().
+   */
+  verts(opts: { at?: number } = {}): Table {
+    const p = this.program()
+    return new Table(
+      opts.at == null ? p.verts : foldPointsAt(p, p.verts, opts.at), this._ctx)
+  }
+
+  /**
    * One row per (fold, face) — the same face numbering the renderer draws
    * with, so a row addresses exactly one face of one fold. Carries the fold's
    * `beat`/`dur` plus: `step`/`name` which fold, `face` its number within that
@@ -1384,6 +1408,7 @@ export const SCHEMAS = deepFreeze({
     sy: { type: 'number', usedBy: ['create', 'update'] },
     sz: { type: 'number', usedBy: ['create', 'update'] },
     color: { type: 'number', usedBy: ['create', 'update', 'color'] },
+    vert: { type: 'number', usedBy: ['color'] },
     face: { type: 'number', usedBy: ['color'] },
     edge: { type: 'number', usedBy: ['color'] },
     dur: { type: 'number', usedBy: ['update', 'color'] },
@@ -1770,8 +1795,8 @@ export type DSLSurface = Easings & {
    * Folding paper: origami() is a bare sheet. Chain .steps(table) to fold it
    * by instructions (one fold per row — see schemas.origami), then
    * .spawn({ id, color, … }) for the create row and .sequence() for beat-timed
-   * fold keyframes. .folds(), .faces() and .edges() are what the folding KNOWS
-   * — a row per fold, per face, and per crease (which paper moves, which
+   * fold keyframes. .folds(), .verts(), .faces() and .edges() are what the folding
+   * KNOWS — a row per fold, per corner, per face, and per crease (which paper moves, which
    * creases the fold turns, how deep the stack is), each already carrying its
    * fold's beat/dur. They are ordinary tables routed like any other, so what
    * the paper does and how it is coloured stay separate:

@@ -547,6 +547,10 @@ rows([
 //       paper.edges().filter({ folds: true })
 //         .derive({ color: field("mv").eq("M").cond(0xff3b30, 0x2f6fff) })
 //   - Paint one flap: .filter(field("flap").eq(0)) instead of { moving: true }.
+//   - Corners too — paper.verts() is one row per (fold, corner), and a
+//     corner's colour beats its face's, so a few of them shade across a face:
+//       paper.verts().filter({ hinge: true })
+//         .derive({ id: "crane", event: "color", color: 0xffcc00 }).outThree()
 //   - Where a face IS, not just what it is: \`at\` samples each face partway
 //     through its OWN fold and adds px/py/pz, so the camera can chase the
 //     flap that is moving (paper frame, before the crane's own placement):
