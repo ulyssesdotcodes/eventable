@@ -138,7 +138,16 @@ export function TimelinePane(props: {
         s.drag === 'lineage' ? props.resolveSource : undefined,
       )
     })
-    const laneCount = createMemo(() => layout().laneCount)
+    // A band whose spans overlap packs them into sub-lanes. Collapsed (the
+    // default) they all draw on one row: the pane is a fixed four bands tall,
+    // so a band that grew with its own crowding would push the others out of
+    // it. Expanding is per band and survives re-cooks (`<Index>` keeps the
+    // component), which is what makes it usable while editing that band.
+    const [expanded, setExpanded] = createSignal(false)
+    const laneCount = createMemo(() => (expanded() ? layout().laneCount : 1))
+    const handles = createMemo(() => (
+      laneCount() > 1 ? layout().handles : layout().handles.map((h) => (h.lane === 0 ? h : { ...h, lane: 0 }))
+    ))
     // Dashed-outline "pending" style: the warp band's live rows against the
     // applied cook's (see pendingTimelineRows). Cooked bands are the applied
     // state by definition and never drift.
@@ -171,7 +180,7 @@ export function TimelinePane(props: {
       const hv = hover()
       const set = new Set<number>()
       if (!hv) return set
-      for (const h of layout().handles) {
+      for (const h of handles()) {
         const other = h.endRow ?? h.glideFrom
         if (other === undefined) continue
         if (h.row === hv.row || other === hv.row) { set.add(h.row); set.add(other) }
@@ -184,7 +193,7 @@ export function TimelinePane(props: {
     // run backward (the loop-wrap glide).
     const glideArrows = createMemo(() => {
       const geo = geometry()
-      const hs = layout().handles
+      const hs = handles()
       const arrows: { left: number; width: number; lane: number; row: number }[] = []
       for (const h of hs) {
         if (h.kind !== 'point' || h.glideFrom === undefined) continue
@@ -200,7 +209,7 @@ export function TimelinePane(props: {
     // and the unlabeled position tag describe. A live gesture wins over the
     // resting selection, which is the panel's shared focusedRow.
     const activeHandle = createMemo<Handle | null>(() => {
-      const hs = layout().handles
+      const hs = handles()
       const p = preview()
       if (p) return hs.find((h) => h.row === p.row) ?? null
       const hv = hover()
@@ -284,8 +293,8 @@ export function TimelinePane(props: {
       if (!bandEl) return undefined
       const x = e.clientX - bandEl.getBoundingClientRect().left
       const lane = laneAt(e.clientY)
-      const row = hitTest(layout().handles, geometry(), x, lane)
-      return row == null ? undefined : resolveHandle(layout().handles, geometry(), row, x, lane)
+      const row = hitTest(handles(), geometry(), x, lane)
+      return row == null ? undefined : resolveHandle(handles(), geometry(), row, x, lane)
     }
 
     // The warp band's own rows are already playback-axis positions — only a
@@ -318,7 +327,7 @@ export function TimelinePane(props: {
     function onDoubleClick(e: MouseEvent): void {
       if (!bandEl || handleAt(e) || (e.target as HTMLElement).closest('.timeline-section-header')) return
       const beat = xToBeat(geometry(), e.clientX - bandEl.getBoundingClientRect().left)
-      const made = createAt(layout().handles, beat, { ...warpOpts(), mode: snapModeFor(e), pass: timelinePass() })
+      const made = createAt(handles(), beat, { ...warpOpts(), mode: snapModeFor(e), pass: timelinePass() })
       const rows = made && props.store.get(made.table)?.rows
       if (!made || !rows) return
       const row = rows.length
@@ -495,7 +504,7 @@ export function TimelinePane(props: {
                 </div>
               )}
             </For>
-            <For each={layout().handles}>
+            <For each={handles()}>
               {(h) => (
                 <div
                   class={`timeline-strip-handle timeline-strip-handle-${h.kind}`}
@@ -548,6 +557,16 @@ export function TimelinePane(props: {
               <span class="timeline-section-beat">
                 {`pass ${at().pass + 1}/${at().loops} · beat ${at().beat.toFixed(1)}`}
               </span>
+            </Show>
+            <Show when={layout().laneCount > 1}>
+              <button
+                class="timeline-section-lanes"
+                title={expanded() ? 'Stack the overlapping rows back onto one line' : `Expand ${layout().laneCount} overlapping rows`}
+                onClick={() => setExpanded((v) => !v)}
+              >
+                <Icon name={expanded() ? 'chevron-up' : 'chevron-down'} />
+                {layout().laneCount}
+              </button>
             </Show>
           </div>
         </div>
