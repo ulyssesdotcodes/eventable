@@ -6,6 +6,7 @@
 // Origami renders through the scene visualizer, not a separate one.
 
 import { buildFrameIndex, sampleFrame } from './rasterize.js'
+import { resolveAssets, type Assets } from './cook-transfer.js'
 import { buildHydraIndex, hydraFrameAt } from './hydra.js'
 import { buildBaubleIndex, baubleFrameAt } from './bauble.js'
 import { buildPostIndex, postFrameAt } from './post.js'
@@ -28,6 +29,9 @@ export type LoopEpochs = Partial<Record<(typeof LOOP_KINDS)[number], number>>
 // whole object without knowing the names.
 export interface CookedVisualRows {
   sceneRows: Row[]
+  // Values the scene cache would otherwise repeat on every frame, stored once
+  // (hoistAssets). Optional so existing callers and fixtures stay assignable.
+  assets?: Assets
   hydraRows: Row[]
   // Optional so pre-bauble/pre-post callers (and their test fixtures) stay
   // assignable.
@@ -105,6 +109,7 @@ export interface Visualizer {
 // set of live objects so playback only creates/destroys what changed.
 export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
   let frameIndex = buildFrameIndex([])
+  let assets: Assets = {}
   let alive = new Set<unknown>()
   // 0 (the Unix epoch) until stamped — the same arbitrary-but-shared reference
   // the no-tap phase anchor uses.
@@ -120,6 +125,7 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
     kind: 'scene',
     load(cooked): void {
       frameIndex = buildFrameIndex(cooked.sceneRows ?? [])
+      assets = cooked.assets ?? {}
       if (typeof cooked.loopEpochs?.scene === 'number') epoch = cooked.loopEpochs.scene
     },
     hasContent: () => frameIndex.map.size > 0,
@@ -131,7 +137,10 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
       const { offset, ...p } = passOffset(frameIndex.maxFrame, loopFrames, passAt, epoch)
       pass = p
       const frameF = Math.min(offset + srcFrameF, frameIndex.maxFrame)
-      const baked = sampleFrame(frameIndex, frameF)
+      // Rows carry handles for anything the cache repeats every frame (see
+      // hoistAssets); swap them back — by reference, so identity holds — before
+      // anything downstream reads the row.
+      const baked = sampleFrame(frameIndex, frameF).map((s) => resolveAssets(s, assets))
       const states = ctx ? baked.map((s) => resolveBindings(s, ctx)) : baked
       const present = new Set<unknown>()
       for (const s of states) {

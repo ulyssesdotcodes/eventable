@@ -11,7 +11,7 @@
 // so pack/unpack memoize per object. Naive per-row deep copies multiplied the
 // program by the frame count and blew postMessage out of memory.
 
-import { Table } from './dsl.js'
+import { Table, isBinding } from './dsl.js'
 import { getLineage, withLineage, type Row } from './lineage.js'
 import type { CookedResult, CookedSigs } from './replay.js'
 
@@ -20,11 +20,17 @@ const LINEAGE_KEY = '$lineage'
 
 type Memo = Map<object, unknown>
 
+// Typed arrays are structured-clone natives: walking them like a plain object
+// would rebuild each one as { 0: …, 1: … }, which is both far larger on the
+// wire and no longer a typed array on the other side.
+const isTypedArray = (v: object): boolean => ArrayBuffer.isView(v) && !(v instanceof DataView)
+
 function packValue(v: unknown, memo: Memo): unknown {
   if (typeof v === 'function') return { [FN_KEY]: String(v) }
   if (v === null || typeof v !== 'object') return v
   const hit = memo.get(v)
   if (hit !== undefined) return hit
+  if (isTypedArray(v)) { memo.set(v, v); return v }
   if (Array.isArray(v)) {
     const out: unknown[] = []
     memo.set(v, out)
@@ -43,6 +49,7 @@ function unpackValue(v: unknown, memo: Memo): unknown {
   if (v === null || typeof v !== 'object') return v
   const hit = memo.get(v)
   if (hit !== undefined) return hit
+  if (isTypedArray(v)) { memo.set(v, v); return v }
   if (Array.isArray(v)) {
     const out: unknown[] = []
     memo.set(v, out)
@@ -84,6 +91,70 @@ export function unpackRows(rows: Row[], memo: Memo = new Map()): Row[] {
   })
 }
 
+const ASSET_KEY = '$asset'
+
+export type Assets = Record<string, unknown>
+
+/**
+ * Move values that repeat across rows into a side table, leaving a handle.
+ * The dense scene cache is a snapshot store — every frame's row must be able
+ * to construct its object on its own, because the playhead can be scrubbed or
+ * wrapped to any frame — so one compiled origami program (megabytes) sits on
+ * all ~1,500 of them. Packing memoizes by identity, so the wire size is fine
+ * TODAY, but only incidentally: any copy in between (a map, a JSON round-trip)
+ * silently multiplies it back out. A handle makes single-storage a property of
+ * the data rather than of the transfer.
+ *
+ * Resolution hands back the same object every time, so identity checks
+ * downstream (the renderer skips work when a row's array is the one it already
+ * has) keep working.
+ */
+export function hoistAssets(rows: Row[]): { rows: Row[]; assets: Assets } {
+  const count = new Map<object, number>()
+  for (const row of rows) {
+    for (const k in row) {
+      const v = row[k]
+      if (v === null || typeof v !== 'object' || isBinding(v)) continue
+      count.set(v, (count.get(v) ?? 0) + 1)
+    }
+  }
+  const key = new Map<object, string>()
+  const assets: Assets = {}
+  for (const [v, n] of count) {
+    if (n < 2) continue
+    const k = `a${key.size}`
+    key.set(v, k)
+    assets[k] = v
+  }
+  if (key.size === 0) return { rows, assets }
+  const out = rows.map((row) => {
+    let next: Row | null = null
+    for (const k in row) {
+      const v = row[k]
+      const at = v !== null && typeof v === 'object' ? key.get(v) : undefined
+      if (at === undefined) continue
+      next ??= { ...row }
+      next[k] = { [ASSET_KEY]: at }
+    }
+    return next ? withLineage(next, getLineage(row)) : row
+  })
+  return { rows: out, assets }
+}
+
+/** Swap a row's asset handles back for the real values, by reference. */
+export function resolveAssets(row: Row, assets: Assets): Row {
+  let next: Row | null = null
+  for (const k in row) {
+    const v = row[k]
+    if (v === null || typeof v !== 'object') continue
+    const at = (v as Record<string, unknown>)[ASSET_KEY]
+    if (typeof at !== 'string' || !(at in assets)) continue
+    next ??= { ...row }
+    next[k] = assets[at]
+  }
+  return next ? withLineage(next, getLineage(row)) : row
+}
+
 export interface PackedCook {
   views: Array<{ name: string; rows: Row[] }>
   // rows: null points at a packed view by name; an anonymous .graph(table)
@@ -94,6 +165,7 @@ export interface PackedCook {
   hydraRows: Row[]
   baubleRows: Row[]
   postRows: Row[]
+  assets: Assets
   sigs: CookedSigs
 }
 
@@ -115,6 +187,7 @@ export function packCooked(cooked: CookedResult): PackedCook {
     hydraRows: packRows(cooked.hydraRows, memo),
     baubleRows: packRows(cooked.baubleRows, memo),
     postRows: packRows(cooked.postRows, memo),
+    assets: packValue(cooked.assets, memo) as Assets,
     sigs: cooked.sigs,
   }
 }
@@ -140,6 +213,7 @@ export function unpackCooked(packed: PackedCook): CookedResult {
     // ?? tolerates a stale worker bundle from before bauble/post/sigs existed.
     baubleRows: unpackRows(packed.baubleRows ?? [], memo),
     postRows: unpackRows(packed.postRows ?? [], memo),
+    assets: unpackValue(packed.assets ?? {}, memo) as Assets,
     sigs: packed.sigs ?? { scene: '', timeline: '', hydra: '', bauble: '', post: '' },
   }
 }

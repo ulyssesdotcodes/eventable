@@ -8,6 +8,7 @@ import { hydraRows } from './hydra.js'
 import { baubleRows } from './bauble.js'
 import { postRows, buildPostIndex, postStateFrames, postFrameAt } from './post.js'
 import { hashOf, outViewName, type GraphSpec, type Table } from './dsl.js'
+import { hoistAssets, type Assets } from './cook-transfer.js'
 import type { Row } from './lineage.js'
 import type { RunOptions, RuntimeResult } from './runtime.js'
 
@@ -28,6 +29,9 @@ export interface CookedResult {
   views: Map<string, Table>
   graphs: GraphSpec[]
   sceneRows: Row[]
+  // Values the scene cache repeats on every frame (a compiled origami
+  // program), stored once and referenced by handle — see hoistAssets.
+  assets: Assets
   timelineRows: Row[]
   hydraRows: Row[]
   baubleRows: Row[]
@@ -48,7 +52,8 @@ export function cookProgram(runtime: Runtime, code: string, seed: number, dataCa
   // "three" is the 3D scene's event table (matching hydra/bauble/post naming);
   // "events" is its legacy name, kept so saved sessions still render.
   const three = view('three') ?? result.views.get('events')
-  const sceneRows = scene ? scene.rows : three ? rasterizeRows(three.rows) : []
+  const { rows: sceneRows, assets } = hoistAssets(
+    scene ? scene.rows : three ? rasterizeRows(three.rows) : [])
   const timeline = view('timeline')
   const timelineRows = timeline ? timeline.rows : []
   const hydra = view('hydra')
@@ -73,5 +78,5 @@ export function cookProgram(runtime: Runtime, code: string, seed: number, dataCa
     bauble: sig(bauble),
     post: sig(post),
   }
-  return { views: result.views, graphs: result.graphs, sceneRows, timelineRows, hydraRows: hydraSketchRows, baubleRows: baubleSketchRows, postRows: postSketchRows, sigs }
+  return { views: result.views, graphs: result.graphs, sceneRows, assets, timelineRows, hydraRows: hydraSketchRows, baubleRows: baubleSketchRows, postRows: postSketchRows, sigs }
 }
