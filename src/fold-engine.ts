@@ -1193,79 +1193,174 @@ export interface ElementRowOpts {
  * that holds them together. Together with a `shape: "mesh"` object of the same
  * `of` id, this is the whole paper — there is nothing else to send.
  */
+// Barycentric weights of a sheet point inside a sheet triangle, or null when
+// it falls outside. The tolerance lets a point sitting exactly on a shared
+// edge resolve through either neighbour — the paper does not tear, so both
+// give the same place in space.
+const baryOf = (
+  p: Vec2, a: Vec2, b: Vec2, c: Vec2,
+): [number, number, number] | null => {
+  const d = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+  if (Math.abs(d) < 1e-12) return null
+  const u = ((b[1] - c[1]) * (p[0] - c[0]) + (c[0] - b[0]) * (p[1] - c[1])) / d
+  const v = ((c[1] - a[1]) * (p[0] - c[0]) + (a[0] - c[0]) * (p[1] - c[1])) / d
+  const w = 1 - u - v
+  const eps = -1e-7
+  return u < eps || v < eps || w < eps ? null : [u, v, w]
+}
+
+/**
+ * The whole folding as ordinary scene rows: one per vertex, triangle, face and
+ * crease, every cell a number.
+ *
+ * The topology is the LAST fold's — the finest — and it is stated once, at the
+ * top of the loop, and never changes. Folding only ever subdivides, so every
+ * earlier state is exactly representable on it: the creases a later fold will
+ * add are simply flat until then. Each vertex's position through an earlier
+ * state comes from the drawn triangle its sheet point lands in, which is exact
+ * for what is rendered, since flat triangles are what the renderer draws.
+ *
+ * That fixed topology is what makes an element number mean the same piece of
+ * paper for the whole folding, and what lets .retime() run the fold backwards:
+ * every animated quantity is a plain value on a keyframe track, and values warp
+ * cleanly where lifetimes do not.
+ */
 export const foldElementRows = (
   program: FoldTableProgram, opts: ElementRowOpts,
 ): Row[] => {
   const of = opts.id
   const out: Row[] = []
-  const eid = (k: number, s: string): string => `${String(of)}:s${k}:${s}`
-  // Every element exists for the whole run and is switched on for its own
-  // fold by a stepped `on` keyframe, rather than created and destroyed around
-  // it. Lifetimes cannot be warped — .retime() reversing a run would land a
-  // destroy before its create — but a VALUE warps like any other, so pingpong
-  // folds the paper back down the way it came.
-  const gate = (id: string, beat: number, on: number): Row =>
-    ({ id, of, event: 'update', beat, on, ease: 'step' })
-  program.steps.forEach((s, k) => {
-    const ends = k + 1 < program.steps.length ? program.steps[k + 1].t0 : undefined
-    const nv = s.Vfrom.length
-    // Topology is stated once and never moves: a triangle names three vertices
-    // and the face it belongs to. Fanning the polygons here rather than in the
-    // renderer keeps every column a number — no lists in cells, and the rows
-    // ARE the draw order.
-    const tris: { tri: number; face: number; v0: number; v1: number; v2: number }[] = []
-    s.FV.forEach((F, f) => {
+  const steps = program.steps
+  if (!steps.length) return out
+  const last = steps[steps.length - 1]
+
+  // sheet coordinates per step, from the attribute rows the compiler already
+  // produced — the one frame that never moves
+  const sheetOf: Vec2[][] = steps.map(() => [])
+  for (const r of program.verts) {
+    sheetOf[r.step as number][r.vert as number] = [r.sheetX as number, r.sheetY as number]
+  }
+  const finalSheet = sheetOf[steps.length - 1]
+  const nv = finalSheet.length
+
+  // final faces, fanned to triangles once — this IS the draw order
+  const tris: { tri: number; face: number; v: [number, number, number] }[] = []
+  last.FV.forEach((F, f) => {
+    for (let j = 1; j + 1 < F.length; ++j) tris.push({ tri: tris.length, face: f, v: [F[0], F[j], F[j + 1]] })
+  })
+  const faceCentre: Vec2[] = last.FV.map((F) => [
+    F.reduce((s, i) => s + finalSheet[i][0], 0) / F.length,
+    F.reduce((s, i) => s + finalSheet[i][1], 0) / F.length,
+  ])
+
+  const eid = (s: string): string => `${String(of)}:${s}`
+  for (let v = 0; v < nv; ++v) {
+    out.push({ id: eid(`v${v}`), of, event: 'create', beat: 1, vert: v })
+  }
+  last.FV.forEach((_F, f) => out.push({ id: eid(`f${f}`), of, event: 'create', beat: 1, face: f }))
+  for (const t of tris) {
+    out.push({
+      id: eid(`t${t.tri}`), of, event: 'create', beat: 1,
+      tri: t.tri, face: t.face, v0: t.v[0], v1: t.v[1], v2: t.v[2],
+    })
+  }
+  for (const r of program.edges) {
+    if (r.step !== steps.length - 1) continue
+    out.push({
+      id: eid(`e${r.edge as number}`), of, event: 'create', beat: 1,
+      edge: r.edge, a: r.a, b: r.b,
+    })
+  }
+
+  // which cell each point landed in last time — see locate()
+  const vertCell: number[] = finalSheet.map(() => -1)
+  const faceCell: number[] = faceCentre.map(() => -1)
+  let cellStep = -1
+
+  // Resample one moment of the folding onto the final vertices.
+  const sampleAt = (k: number, fold: number): {
+    pos: [number, number, number][]; offs: [number, number, number][]
+  } => {
+    const st = steps[k]
+    const sheet = sheetOf[k]
+    if (k !== cellStep) { vertCell.fill(-1); faceCell.fill(-1); cellStep = k }
+    const { pos, zOff, zDir } = foldTablePositions(program, fold)
+    const off = (fi: number): [number, number, number] => (zDir
+      ? [zDir[fi][0] * zOff[fi], zDir[fi][1] * zOff[fi], zDir[fi][2] * zOff[fi]]
+      : [0, 0, zOff[fi]])
+    // the state's own triangles, in sheet space and in world space
+    const cells: { s: [Vec2, Vec2, Vec2]; w: [number, number, number][]; f: number }[] = []
+    st.FV.forEach((F, f) => {
       for (let j = 1; j + 1 < F.length; ++j) {
-        tris.push({ tri: tris.length, face: f, v0: F[0], v1: F[j], v2: F[j + 1] })
+        const idx = [F[0], F[j], F[j + 1]]
+        cells.push({
+          s: [sheet[idx[0]], sheet[idx[1]], sheet[idx[2]]],
+          w: [pos[idx[0]], pos[idx[1]], pos[idx[2]]],
+          f,
+        })
       }
     })
-    const ids: string[] = []
-    for (let v = 0; v < nv; ++v) ids.push(eid(k, `v${v}`))
-    s.FV.forEach((_F, f) => ids.push(eid(k, `f${f}`)))
-    for (const t of tris) ids.push(eid(k, `t${t.tri}`))
-    const edges = program.edges.filter((r) => r.step === k)
-    for (const r of edges) ids.push(eid(k, `e${r.edge as number}`))
+    const locate = (p: Vec2, hint: number): { c: typeof cells[0]; b: [number, number, number]; at: number } | null => {
+      // A point's cell only changes when a fold splits the one it was in, so
+      // checking last time's first turns the scan into a hit almost always.
+      if (hint >= 0 && hint < cells.length) {
+        const c = cells[hint]
+        const b = baryOf(p, c.s[0], c.s[1], c.s[2])
+        if (b) return { c, b, at: hint }
+      }
+      for (let i = 0; i < cells.length; ++i) {
+        const c = cells[i]
+        const b = baryOf(p, c.s[0], c.s[1], c.s[2])
+        if (b) return { c, b, at: i }
+      }
+      return null
+    }
+    const outPos: [number, number, number][] = finalSheet.map((sp, i) => {
+      const hit = locate(sp, vertCell[i])
+      if (!hit) return [0, 0, 0]
+      vertCell[i] = hit.at
+      const [u, v, w] = hit.b
+      return [0, 1, 2].map((c) =>
+        hit.c.w[0][c] * u + hit.c.w[1][c] * v + hit.c.w[2][c] * w) as [number, number, number]
+    })
+    // a final face rides the layer of whichever face of this state contains it
+    const outOffs: [number, number, number][] = faceCentre.map((cp, i) => {
+      const hit = locate(cp, faceCell[i])
+      if (!hit) return [0, 0, 0]
+      faceCell[i] = hit.at
+      return off(hit.c.f)
+    })
+    return { pos: outPos, offs: outOffs }
+  }
 
-    // everything appears at the top of the loop, dark, and lights up on its fold
+  // Only what MOVED is written: a vertex that holds still through a fold costs
+  // one keyframe, not one per sample.
+  const lastPos: (readonly [number, number, number])[] = finalSheet.map(() => [NaN, NaN, NaN])
+  const lastOff: (readonly [number, number, number])[] = faceCentre.map(() => [NaN, NaN, NaN])
+  const near3 = (a: readonly number[], b: readonly number[]): boolean =>
+    Math.abs(a[0] - b[0]) < 1e-7 && Math.abs(a[1] - b[1]) < 1e-7 && Math.abs(a[2] - b[2]) < 1e-7
+  const emit = (beat: number, k: number, fold: number): void => {
+    const { pos, offs } = sampleAt(k, fold)
     for (let v = 0; v < nv; ++v) {
-      out.push({ id: eid(k, `v${v}`), of, event: 'create', beat: 1, vert: v, on: 0 })
+      if (near3(pos[v], lastPos[v])) continue
+      lastPos[v] = pos[v]
+      out.push({ id: eid(`v${v}`), of, event: 'update', beat, px: pos[v][0], py: pos[v][1], pz: pos[v][2] })
     }
-    s.FV.forEach((_F, f) => out.push({ id: eid(k, `f${f}`), of, event: 'create', beat: 1, face: f, on: 0 }))
-    for (const t of tris) out.push({ id: eid(k, `t${t.tri}`), of, event: 'create', beat: 1, on: 0, ...t })
-    for (const r of edges) {
-      out.push({
-        id: eid(k, `e${r.edge as number}`), of, event: 'create', beat: 1,
-        edge: r.edge, a: r.a, b: r.b, on: 0,
-      })
+    for (let f = 0; f < offs.length; ++f) {
+      if (near3(offs[f], lastOff[f])) continue
+      lastOff[f] = offs[f]
+      out.push({ id: eid(`f${f}`), of, event: 'update', beat, ox: offs[f][0], oy: offs[f][1], oz: offs[f][2] })
     }
-    for (const id of ids) out.push(gate(id, s.t0, 1))
-    if (ends !== undefined) for (const id of ids) out.push(gate(id, ends, 0))
+  }
 
+  emit(1, 0, Number.EPSILON)
+  steps.forEach((s, k) => {
     for (let i = 0; i <= SWING_KEYS; ++i) {
       const fold = Math.min(
         Math.max(Number.EPSILON, k + (i / SWING_KEYS) * s.to),
         k + s.to - 1e-9)
-      const { pos, zOff, zDir } = foldTablePositions(program, fold)
-      const beat = s.t0 + (i / SWING_KEYS) * (s.t1 - s.t0)
-      // a vertex is shared by every face meeting there, so its position is
-      // stated once however many triangles use it
-      for (let v = 0; v < nv; ++v) {
-        out.push({
-          id: eid(k, `v${v}`), of, event: 'update', beat, vert: v,
-          px: pos[v][0], py: pos[v][1], pz: pos[v][2],
-        })
-      }
-      // the layer nudge each face rides on, easing with the swing
-      s.FV.forEach((_F, f) => {
-        out.push({
-          id: eid(k, `f${f}`), of, event: 'update', beat, face: f,
-          ox: zDir ? zDir[f][0] * zOff[f] : 0,
-          oy: zDir ? zDir[f][1] * zOff[f] : 0,
-          oz: zDir ? zDir[f][2] * zOff[f] : zOff[f],
-        })
-      })
+      emit(s.t0 + (i / SWING_KEYS) * (s.t1 - s.t0), k, fold)
     }
   })
   return out
 }
-

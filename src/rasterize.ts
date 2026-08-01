@@ -6,7 +6,7 @@
 // along the grid, and playback wraps the playhead into it in loop-length
 // passes (see the scene visualizer in visualizer.ts).
 
-import { withLineage, unionLineage, type Row } from './lineage.js'
+import { withLineage, unionLineage, getLineage, type Row } from './lineage.js'
 import { mixColor } from './color.js'
 import { beatToFrame, beatsToFrames } from './constants.js'
 // dsl.ts imports rasterizeRows back; the cycle is benign — each side only
@@ -259,7 +259,9 @@ interface ObjectTracks {
   born: number
   dies: number            // exclusive: the frame it stops being drawn
   cols: Record<string, Track>
-  sources: Row[]
+  // resolved once: the union is per object, and rebuilding it on every sampled
+  // frame dominated playback once a scene held hundreds of elements
+  lineage: ReturnType<typeof getLineage>
 }
 
 export interface FrameStore {
@@ -306,7 +308,7 @@ export function buildFrameStore(
   const objects: ObjectTracks[] = []
   for (const evs of buildTimelines(events).values()) {
     const o: ObjectTracks = {
-      id: evs[0].id, born: -1, dies: maxFrame + 1, cols: {}, sources: [],
+      id: evs[0].id, born: -1, dies: maxFrame + 1, cols: {}, lineage: [],
     }
     const seenSource = new Set<Row>()
     let parts: Record<PartKind, (number | null)[]> = { vert: [], face: [], edge: [] }
@@ -317,7 +319,7 @@ export function buildFrameStore(
         continue
       }
       if (o.born < 0) o.born = frame
-      for (const r of s.sources) if (!seenSource.has(r)) { seenSource.add(r); o.sources.push(r) }
+      for (const r of s.sources) seenSource.add(r)
       // `beat` is the sparse keyframe field and `loop` the retired pass column;
       // the store is keyed by frame.
       const { beat: _beat, loop: _loop, ...fields } = s.fields
@@ -333,6 +335,7 @@ export function buildFrameStore(
       }
       for (const k in fields) pushRun(o.cols, k, frame, fields[k])
     }
+    o.lineage = unionLineage([...seenSource])
     if (o.born >= 0) objects.push(o)
   }
   return { objects, maxFrame }
@@ -370,7 +373,7 @@ function rowAt(o: ObjectTracks, frameFloat: number): Row | null {
   }
   row.frame = frameFloat
   row.id = o.id
-  return withLineage(row, unionLineage(o.sources))
+  return withLineage(row, o.lineage)
 }
 
 export function rasterizeRows(eventRows: Row[] | null | undefined, maxBeats?: number): Row[] {
@@ -400,7 +403,7 @@ function storeFromRows(rows: Row[]): FrameStore {
     if (frame > maxFrame) maxFrame = frame
     let o = byId.get(r.id)
     if (!o) {
-      o = { id: r.id, born: frame, dies: Number.MAX_SAFE_INTEGER, cols: {}, sources: [] }
+      o = { id: r.id, born: frame, dies: Number.MAX_SAFE_INTEGER, cols: {}, lineage: [] }
       byId.set(r.id, o)
     }
     last.set(o, frame)

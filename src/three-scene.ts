@@ -330,13 +330,10 @@ function disposeLight(obj: LightObject): void {
 // draws. Faces render as a per-face triangle soup so each can carry its own
 // offset (origami nudges each face by its layer); edges are lines from the
 // same positions.
-// `on` gates an element to its own fold — a stepped keyframe rather than a
-// lifetime, so retiming can run the folding backwards.
-const isOn = (row: Record<string, unknown>): boolean => row.on !== 0
 interface MeshVert { x: number; y: number; z: number }
 interface MeshFace { ox: number; oy: number; oz: number }
-interface MeshTri { face: number; v0: number; v1: number; v2: number; on: boolean }
-interface MeshEdge { a: number; b: number; on: boolean }
+interface MeshTri { face: number; v0: number; v1: number; v2: number }
+interface MeshEdge { a: number; b: number }
 
 interface MeshObject {
   root: THREE.Group
@@ -429,7 +426,6 @@ function fillMesh(obj: MeshObject): void {
   // the order rows happened to arrive in
   for (const ti of [...tris.keys()].sort((x, y) => x - y)) {
     const t = tris.get(ti)!
-    if (!t.on) continue
     const f = faces.get(t.face)
     const ox = f?.ox ?? 0, oy = f?.oy ?? 0, oz = f?.oz ?? 0
     for (const vi of [t.v0, t.v1, t.v2]) {
@@ -453,15 +449,13 @@ function fillMesh(obj: MeshObject): void {
   // a crease is drawn on the layer of a face that owns it, as before
   const faceOfVert = new Map<number, MeshFace>()
   for (const t of tris.values()) {
-    if (!t.on) continue
     const f = faces.get(t.face)
     if (!f) continue
     for (const v of [t.v0, t.v1, t.v2]) if (!faceOfVert.has(v)) faceOfVert.set(v, f)
   }
   let m = 0, e = 0
   for (const ei of [...edges.keys()].sort((x, y) => x - y)) {
-    const { a, b, on } = edges.get(ei)!
-    if (!on) continue
+    const { a, b } = edges.get(ei)!
     const va = verts.get(a), vb = verts.get(b)
     if (!va || !vb) continue
     const f = faceOfVert.get(a) ?? faceOfVert.get(b)
@@ -553,7 +547,6 @@ function applyElementRow(obj: MeshObject, row: Record<string, unknown>): void {
     obj.tris.set(i, {
       face: num_(row.face, prevT?.face ?? 0),
       v0: num_(row.v0, prevT?.v0 ?? 0), v1: num_(row.v1, prevT?.v1 ?? 0), v2: num_(row.v2, prevT?.v2 ?? 0),
-      on: isOn(row),
     })
   } else if (typeof row.face === 'number') {
     const i = row.face
@@ -563,7 +556,7 @@ function applyElementRow(obj: MeshObject, row: Record<string, unknown>): void {
     const i = row.edge
     obj.owned.set(row.id, { kind: 'e', i })
     const prevE = obj.edges.get(i)
-    obj.edges.set(i, { a: num_(row.a, prevE?.a ?? 0), b: num_(row.b, prevE?.b ?? 0), on: isOn(row) })
+    obj.edges.set(i, { a: num_(row.a, prevE?.a ?? 0), b: num_(row.b, prevE?.b ?? 0) })
   } else return
   obj.dirty = true
 }
