@@ -319,6 +319,10 @@ function keyframeObject(evs: Row[], maxFrame: number): ObjectTracks | null {
   const key = (k: string, frame: number, v: unknown, ease: unknown): void => {
     let t = o.cols[k]
     if (!t) { t = { at: [], val: [], ease: [] }; o.cols[k] = t }
+    // Restating a NUMBER means "hold here", so it earns its keyframe. Restating
+    // anything else cannot: nothing interpolates through it. Every update row
+    // repeats its `of`, which is a quarter of the crane's store on its own.
+    if (t.at.length && t.val[t.val.length - 1] === v && typeof v !== 'number') return
     t.at.push(frame)
     t.val.push(v)
     t.ease!.push(ease)
