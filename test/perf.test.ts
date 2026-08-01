@@ -42,10 +42,10 @@ const reachable = (root: unknown): number => {
 
 test('a value the whole run shares is stored once, not per frame', () => {
   assert.ok(cooked.scene.maxFrame > 1000, 'the crane really does span ~1,500 frames')
-  const paper = cooked.scene.objects.find((o) => o.cols.program)!
+  const paper = cooked.scene.objects.find((o) => o.cols.mesh)!
   assert.ok(paper, 'the folded paper is in the store')
-  assert.equal(paper.cols.program.at.length, 1,
-    'the compiled fold program is one run, not one per frame')
+  assert.equal(paper.cols.mesh.at.length, 1,
+    'the baked geometry is one run, not one per frame')
   // and the columns that never move cost one run each
   const single = Object.values(paper.cols).filter((t) => t.at.length === 1).length
   assert.ok(single > 10, `${single} of the paper's columns are stored as a single run`)

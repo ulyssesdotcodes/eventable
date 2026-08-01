@@ -14,7 +14,7 @@ import { rasterizeRows } from './rasterize.js'
 import { timelineSegments, placeBeat } from './timeline.js'
 import { withLineage, carry, unionLineage, type Row } from './lineage.js'
 import { FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS } from './constants.js'
-import { compileFoldTable, foldPointsAt, foldValueAt, type FoldTableProgram } from './fold-engine.js'
+import { compileFoldTable, bakeMeshAnim, foldPointsAt, foldValueAt, type FoldTableProgram, type MeshAnim } from './fold-engine.js'
 import type { Schema } from './editable-tables.js'
 import { beatSecondsFromTaps } from './tap-log.js'
 import { primitiveGeometry, pointsFromGeometry, geometryFromPoints } from './three-points.js'
@@ -1043,6 +1043,7 @@ export class OrigamiBuilder {
   private _id: unknown = 'paper'
   private _rows: Row[] = []
   private _compiled: FoldTableProgram | null = null
+  private _mesh: MeshAnim | null = null
 
   constructor(size: number, ctx: DSLContext | null) {
     this._size = size
@@ -1166,18 +1167,27 @@ export class OrigamiBuilder {
       opts.at == null ? p.edges : foldPointsAt(p, p.edges, opts.at), this._ctx)
   }
 
-  /** The create row: compiled program + fold at 0 (flat sheet). Extra props (id, color, backColor, px/py/pz, …) merge over defaults. */
+  /**
+   * The create row. The paper arrives as a MESH — faces, creases and vertex
+   * positions sampled across the folding — not as a fold program the renderer
+   * has to know how to run, so the scene table speaks the same element
+   * vocabulary as verts()/faces()/edges(). `fold` says where to read it: k
+   * means the first k folds have landed, fractions swing the next flap.
+   * Extra props (id, color, backColor, px/py/pz, …) merge over defaults.
+   */
   spawn(props: Row = {}): Table {
     const program = this.program()
     this._id = props.id ?? this._id
     // Turn-overs rotate about the axis the VIEWER sees as vertical: the scene
-    // rotates the whole object by rz, so undo it here.
+    // rotates the whole object by rz, so undo it here — before baking, since
+    // the bake resolves the turn-over into the vertex positions.
     const rz = typeof props.rz === 'number' ? props.rz : 0
     program.flipAxis = [Math.sin(rz), Math.cos(rz)]
+    this._mesh = bakeMeshAnim(program)
     return new Table([{
-      id: this._id, event: 'create', beat: 1, shape: 'origami',
+      id: this._id, event: 'create', beat: 1, shape: 'mesh',
       px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0, color: 0xd94f2a,
-      fold: 0, program, ...props,
+      fold: 0, mesh: this._mesh, ...props,
     }], this._ctx)
   }
 
@@ -1397,7 +1407,7 @@ export const SCHEMAS = deepFreeze({
     beat: 'number',
     id: 'string',
     event: ['create', 'update', 'color', 'destroy'],
-    shape: { type: 'enum', options: ['box', 'sphere', 'cylinder', 'cone', 'torus', 'text', 'light', 'camera'], usedBy: ['create'] },
+    shape: { type: 'enum', options: ['box', 'sphere', 'cylinder', 'cone', 'torus', 'text', 'light', 'camera', 'mesh'], usedBy: ['create'] },
     px: { type: 'number', usedBy: ['create', 'update'] },
     py: { type: 'number', usedBy: ['create', 'update'] },
     pz: { type: 'number', usedBy: ['create', 'update'] },
