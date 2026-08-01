@@ -5,8 +5,7 @@
 // hydra.ts + hydra-scene.ts — keep that split), register it in main.ts.
 // Origami renders through the scene visualizer, not a separate one.
 
-import { buildFrameIndex, sampleFrame } from './rasterize.js'
-import { resolveAssets, type Assets } from './cook-transfer.js'
+import { buildFrameIndex, sampleFrame, type FrameStore } from './rasterize.js'
 import { buildHydraIndex, hydraFrameAt } from './hydra.js'
 import { buildBaubleIndex, baubleFrameAt } from './bauble.js'
 import { buildPostIndex, postFrameAt } from './post.js'
@@ -28,10 +27,7 @@ export type LoopEpochs = Partial<Record<(typeof LOOP_KINDS)[number], number>>
 // assignable subset of replay.ts's CookedResult, so the engine forwards the
 // whole object without knowing the names.
 export interface CookedVisualRows {
-  sceneRows: Row[]
-  // Values the scene cache would otherwise repeat on every frame, stored once
-  // (hoistAssets). Optional so existing callers and fixtures stay assignable.
-  assets?: Assets
+  scene: FrameStore
   hydraRows: Row[]
   // Optional so pre-bauble/pre-post callers (and their test fixtures) stay
   // assignable.
@@ -109,7 +105,6 @@ export interface Visualizer {
 // set of live objects so playback only creates/destroys what changed.
 export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
   let frameIndex = buildFrameIndex([])
-  let assets: Assets = {}
   let alive = new Set<unknown>()
   // 0 (the Unix epoch) until stamped — the same arbitrary-but-shared reference
   // the no-tap phase anchor uses.
@@ -124,11 +119,10 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
   return {
     kind: 'scene',
     load(cooked): void {
-      frameIndex = buildFrameIndex(cooked.sceneRows ?? [])
-      assets = cooked.assets ?? {}
+      frameIndex = cooked.scene ?? buildFrameIndex([])
       if (typeof cooked.loopEpochs?.scene === 'number') epoch = cooked.loopEpochs.scene
     },
-    hasContent: () => frameIndex.map.size > 0,
+    hasContent: () => frameIndex.objects.length > 0,
     applyFrame({ srcFrameF, loopFrames, ctx, passAt }): Row[] {
       // Frames land on the loop, so a last event on beat 21 of a 16-beat loop
       // makes a 32-beat sequence (beat 13, a plain 16-beat one). The clamp
@@ -137,10 +131,7 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
       const { offset, ...p } = passOffset(frameIndex.maxFrame, loopFrames, passAt, epoch)
       pass = p
       const frameF = Math.min(offset + srcFrameF, frameIndex.maxFrame)
-      // Rows carry handles for anything the cache repeats every frame (see
-      // hoistAssets); swap them back — by reference, so identity holds — before
-      // anything downstream reads the row.
-      const baked = sampleFrame(frameIndex, frameF).map((s) => resolveAssets(s, assets))
+      const baked = sampleFrame(frameIndex, frameF)
       const states = ctx ? baked.map((s) => resolveBindings(s, ctx)) : baked
       const present = new Set<unknown>()
       for (const s of states) {

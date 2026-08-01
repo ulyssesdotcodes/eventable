@@ -1,4 +1,5 @@
 import { test } from 'node:test'
+import { buildFrameIndex } from '../src/rasterize.js'
 import assert from 'node:assert/strict'
 import {
   isPostRow,
@@ -473,7 +474,7 @@ test('the post visualizer precompiles with the real loopFrames — no state comp
   }
 
   const viz = createPostVisualizer(fakePost)
-  viz.load({ sceneRows: [], hydraRows: [], postRows: rows })
+  viz.load({ scene: buildFrameIndex([]), hydraRows: [], postRows: rows })
   const idx = buildPostIndex(rows)
   const maxIndex = idx.reduce((m, r) => Math.max(m, r.index as number), 0)
   const loops = Math.floor(maxIndex / L) + 1

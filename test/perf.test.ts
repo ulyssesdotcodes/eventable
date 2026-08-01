@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import { createRuntime } from '../src/runtime.js'
 import { cookProgram } from '../src/replay.js'
 import { packCooked } from '../src/cook-transfer.js'
-import { buildFrameIndex, sampleFrame } from '../src/rasterize.js'
+import { sampleFrame } from '../src/rasterize.js'
 import { SAMPLES } from '../src/samples.js'
 import { conformRow, schemaColumns, type ColumnType } from '../src/editable-tables.js'
 
@@ -40,14 +40,15 @@ const reachable = (root: unknown): number => {
   return seen.size
 }
 
-test('nothing large is copied onto every frame of the cache', () => {
-  assert.ok(cooked.sceneRows.length > 1000, 'the crane really does bake ~1,500 frames')
-  const byValue = cooked.sceneRows.filter(
-    (r) => (r.program as { kind?: string } | undefined)?.kind === 'fold-table')
-  assert.equal(byValue.length, 0, 'no frame carries the fold program by value')
-  const byHandle = cooked.sceneRows.filter(
-    (r) => typeof (r.program as { $asset?: string } | undefined)?.$asset === 'string')
-  assert.equal(byHandle.length, cooked.sceneRows.length, 'every frame references it instead')
+test('a value the whole run shares is stored once, not per frame', () => {
+  assert.ok(cooked.scene.maxFrame > 1000, 'the crane really does span ~1,500 frames')
+  const paper = cooked.scene.objects.find((o) => o.cols.program)!
+  assert.ok(paper, 'the folded paper is in the store')
+  assert.equal(paper.cols.program.at.length, 1,
+    'the compiled fold program is one run, not one per frame')
+  // and the columns that never move cost one run each
+  const single = Object.values(paper.cols).filter((t) => t.at.length === 1).length
+  assert.ok(single > 10, `${single} of the paper's columns are stored as a single run`)
 })
 
 test('the packed payload does not grow with the frame count', () => {
@@ -59,8 +60,18 @@ test('the packed payload does not grow with the frame count', () => {
   assert.ok(n < 100_000, `packed payload reaches ${n} objects — a per-frame copy would reach millions`)
 })
 
+test('the store keeps only what changes', () => {
+  let runs = 0, cols = 0
+  for (const o of cooked.scene.objects) {
+    for (const t of Object.values(o.cols)) { runs += t.at.length; cols++ }
+  }
+  const dense = (cooked.scene.maxFrame + 1) * cols
+  assert.ok(runs < dense / 10,
+    `${runs} runs for what a per-frame bake would store as ${dense} cells`)
+})
+
 test('sampling the playhead stays far inside real time', () => {
-  const index = buildFrameIndex(cooked.sceneRows)
+  const index = cooked.scene
   const FRAMES = 600                     // 10 seconds of playback at 60fps
   const started = performance.now()
   let rows = 0

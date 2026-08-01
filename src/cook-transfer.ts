@@ -5,13 +5,11 @@
 // symbol-keyed row lineage — carried as a $lineage field; and Table instances
 // — sent as { name, rows }.
 //
-// Identity matters: rasterize stamps the SAME compiled program object (megabytes
-// of baked origami keyframes) onto every dense frame row. Structured clone
-// serializes a shared object once — but only if packing preserves the sharing,
-// so pack/unpack memoize per object. Naive per-row deep copies multiplied the
-// program by the frame count and blew postMessage out of memory.
+// Identity still matters: a value a scene column holds for the whole run —
+// the compiled origami program is megabytes — is one entry in the frame store,
+// and pack/unpack memoize per object so it stays one object on the wire.
 
-import { Table, isBinding } from './dsl.js'
+import { Table } from './dsl.js'
 import { getLineage, withLineage, type Row } from './lineage.js'
 import type { CookedResult, CookedSigs } from './replay.js'
 
@@ -91,81 +89,16 @@ export function unpackRows(rows: Row[], memo: Memo = new Map()): Row[] {
   })
 }
 
-const ASSET_KEY = '$asset'
-
-export type Assets = Record<string, unknown>
-
-/**
- * Move values that repeat across rows into a side table, leaving a handle.
- * The dense scene cache is a snapshot store — every frame's row must be able
- * to construct its object on its own, because the playhead can be scrubbed or
- * wrapped to any frame — so one compiled origami program (megabytes) sits on
- * all ~1,500 of them. Packing memoizes by identity, so the wire size is fine
- * TODAY, but only incidentally: any copy in between (a map, a JSON round-trip)
- * silently multiplies it back out. A handle makes single-storage a property of
- * the data rather than of the transfer.
- *
- * Resolution hands back the same object every time, so identity checks
- * downstream (the renderer skips work when a row's array is the one it already
- * has) keep working.
- */
-export function hoistAssets(rows: Row[]): { rows: Row[]; assets: Assets } {
-  const count = new Map<object, number>()
-  for (const row of rows) {
-    for (const k in row) {
-      const v = row[k]
-      if (v === null || typeof v !== 'object' || isBinding(v)) continue
-      count.set(v, (count.get(v) ?? 0) + 1)
-    }
-  }
-  const key = new Map<object, string>()
-  const assets: Assets = {}
-  for (const [v, n] of count) {
-    if (n < 2) continue
-    const k = `a${key.size}`
-    key.set(v, k)
-    assets[k] = v
-  }
-  if (key.size === 0) return { rows, assets }
-  const out = rows.map((row) => {
-    let next: Row | null = null
-    for (const k in row) {
-      const v = row[k]
-      const at = v !== null && typeof v === 'object' ? key.get(v) : undefined
-      if (at === undefined) continue
-      next ??= { ...row }
-      next[k] = { [ASSET_KEY]: at }
-    }
-    return next ? withLineage(next, getLineage(row)) : row
-  })
-  return { rows: out, assets }
-}
-
-/** Swap a row's asset handles back for the real values, by reference. */
-export function resolveAssets(row: Row, assets: Assets): Row {
-  let next: Row | null = null
-  for (const k in row) {
-    const v = row[k]
-    if (v === null || typeof v !== 'object') continue
-    const at = (v as Record<string, unknown>)[ASSET_KEY]
-    if (typeof at !== 'string' || !(at in assets)) continue
-    next ??= { ...row }
-    next[k] = assets[at]
-  }
-  return next ? withLineage(next, getLineage(row)) : row
-}
-
 export interface PackedCook {
   views: Array<{ name: string; rows: Row[] }>
   // rows: null points at a packed view by name; an anonymous .graph(table)
   // target carries its own rows.
   graphs: Array<{ viewName: string | null; columns: string[]; rows: Row[] | null }>
-  sceneRows: Row[]
+  scene: unknown
   timelineRows: Row[]
   hydraRows: Row[]
   baubleRows: Row[]
   postRows: Row[]
-  assets: Assets
   sigs: CookedSigs
 }
 
@@ -182,12 +115,11 @@ export function packCooked(cooked: CookedResult): PackedCook {
   return {
     views,
     graphs,
-    sceneRows: packRows(cooked.sceneRows, memo),
+    scene: packValue(cooked.scene, memo),
     timelineRows: packRows(cooked.timelineRows, memo),
     hydraRows: packRows(cooked.hydraRows, memo),
     baubleRows: packRows(cooked.baubleRows, memo),
     postRows: packRows(cooked.postRows, memo),
-    assets: packValue(cooked.assets, memo) as Assets,
     sigs: cooked.sigs,
   }
 }
@@ -207,13 +139,12 @@ export function unpackCooked(packed: PackedCook): CookedResult {
   return {
     views,
     graphs,
-    sceneRows: unpackRows(packed.sceneRows, memo),
+    scene: unpackValue(packed.scene, memo) as CookedResult['scene'],
     timelineRows: unpackRows(packed.timelineRows, memo),
     hydraRows: unpackRows(packed.hydraRows, memo),
     // ?? tolerates a stale worker bundle from before bauble/post/sigs existed.
     baubleRows: unpackRows(packed.baubleRows ?? [], memo),
     postRows: unpackRows(packed.postRows ?? [], memo),
-    assets: unpackValue(packed.assets ?? {}, memo) as Assets,
     sigs: packed.sigs ?? { scene: '', timeline: '', hydra: '', bauble: '', post: '' },
   }
 }

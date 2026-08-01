@@ -3,7 +3,7 @@
 // behavior, driven directly — cook-worker.ts is only a postMessage shell).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { packRows, unpackRows, unpackCooked, hoistAssets, resolveAssets } from '../src/cook-transfer.js'
+import { packRows, unpackRows, unpackCooked } from '../src/cook-transfer.js'
 import { createCookService, type CookResponse } from '../src/cook-service.js'
 import { createCookClient, type WorkerLike } from '../src/cook-client.js'
 import { getLineage, withLineage, type Row } from '../src/lineage.js'
@@ -77,7 +77,7 @@ define("scene", () => table("three").rasterize(4/30))
   if (!resp.ok) return
   const cooked = unpackCooked(structuredCloneLike(resp.cooked) as typeof resp.cooked)
   assert.equal(cooked.views.get('base')!.length, 4)
-  assert.ok(cooked.sceneRows.length > 0, 'rasterized scene rows came through')
+  assert.ok(cooked.scene.objects.length > 0, 'the scene store came through')
   assert.ok(getLineage(cooked.views.get('scene')!.rows[0]).length > 0, 'lineage survives the boundary')
   assert.ok(cooked.sigs.scene.length > 0, 'the change-detection signature rides along')
 })
@@ -195,42 +195,6 @@ test('expr.slider in a hydra code cell declares through the cook', () => {
   }))
   assert.ok(resp.ok)
   assert.ok(resp.sliders.some((s) => s.id === 'h' && s.min === 0 && s.max === 2))
-})
-
-// The dense scene cache is a snapshot store — every frame's row must be able
-// to build its object alone, so one compiled program sits on all ~1,500 of
-// them. Packing memoizes by identity, but nothing downstream is obliged to
-// preserve it: this test's clone is a JSON round-trip, exactly the kind of
-// copy that silently multiplies a megabyte blob by the frame count. Hoisting
-// it to a side table makes single storage a property of the data instead.
-test('a value repeated across rows is stored once and survives an identity-destroying clone', () => {
-  const program = { blob: Array.from({ length: 500 }, (_, i) => i) }
-  const rows: Row[] = Array.from({ length: 200 }, (_, frame) => ({ id: 'p', frame, program }))
-
-  const { rows: light, assets } = hoistAssets(rows)
-  assert.equal(Object.keys(assets).length, 1, 'one shared value, one asset')
-  assert.equal(light.length, rows.length)
-  assert.notEqual(light[0].program, program, 'rows carry a handle, not the value')
-
-  // the payload holds the blob ONCE, not once per row
-  const wire = JSON.stringify({ rows: light, assets })
-  const blob = JSON.stringify(program.blob)
-  assert.equal(wire.split(blob).length - 1, 1, 'the repeated value is serialized once')
-  assert.equal(JSON.stringify(rows).split(blob).length - 1, rows.length, '…where before it was per row')
-
-  // and after a clone that destroys every shared reference, resolution still
-  // yields ONE object for every row
-  const back = JSON.parse(wire) as { rows: Row[]; assets: Record<string, unknown> }
-  const resolved = back.rows.map((r) => resolveAssets(r, back.assets))
-  assert.deepEqual(resolved[0].program, program)
-  assert.equal(new Set(resolved.map((r) => r.program)).size, 1, 'all rows share one object again')
-})
-
-test('hoistAssets leaves rows alone when nothing repeats', () => {
-  const rows: Row[] = [{ id: 'a', v: { x: 1 } }, { id: 'b', v: { x: 2 } }]
-  const { rows: out, assets } = hoistAssets(rows)
-  assert.equal(out, rows, 'same array back — no copying when there is nothing to hoist')
-  assert.deepEqual(assets, {})
 })
 
 // Typed arrays are what per-frame geometry and run-length tracks will be made
