@@ -1164,3 +1164,141 @@ export const foldPointsAt = (
     }
   })
 }
+
+// ── Baked mesh ──────────────────────────────────────────────────────────────
+// The folding, evaluated ahead of time into plain element data: topology per
+// step, vertex positions and per-face layer offsets sampled across each swing.
+// Keyed by FOLD VALUE rather than by frame, so retiming still works — a
+// timeline warps `fold`, and the reader lerps between the samples either side.
+
+export interface MeshStep {
+  faces: number[][]     // face → vertex loop, for this step's numbering
+  // creases in the engine's canonical order, so an `edge` handle from
+  // origami().edges() finds the right line without the fold program
+  edges: [number, number][]
+  from: number          // fold value of sample 0
+  span: number          // fold value covered (the step's `to`)
+  samples: number
+  verts: Float32Array   // samples × nv × 3, display frame
+  offs: Float32Array    // samples × nf × 3, the layer nudge each face carries
+}
+
+export interface MeshAnim {
+  kind: 'mesh-anim'
+  initial: { faces: number[][]; edges: [number, number][]; verts: Float32Array; offs: Float32Array }
+  steps: MeshStep[]
+  end: number           // fold value where the last swing lands
+}
+
+// Samples per swing. The motion is already smooth at this density — a rigid
+// hinge is a circular arc and the chord error at 1/32 of a half-turn is under
+// a thousandth of the paper — and the exact flat states land on the endpoints,
+// which is what the clearance and integration tests pin.
+const MESH_SAMPLES = 32
+
+const flatten3 = (v: [number, number, number][]): Float32Array => {
+  const out = new Float32Array(v.length * 3)
+  for (let i = 0; i < v.length; ++i) {
+    out[i * 3] = v[i][0]; out[i * 3 + 1] = v[i][1]; out[i * 3 + 2] = v[i][2]
+  }
+  return out
+}
+
+const offsetsOf = (
+  nf: number, zOff: number[], zDir: [number, number, number][] | undefined,
+): Float32Array => {
+  const out = new Float32Array(nf * 3)
+  for (let fi = 0; fi < nf; ++fi) {
+    if (zDir) {
+      out[fi * 3] = zDir[fi][0] * zOff[fi]
+      out[fi * 3 + 1] = zDir[fi][1] * zOff[fi]
+      out[fi * 3 + 2] = zDir[fi][2] * zOff[fi]
+    } else {
+      out[fi * 3 + 2] = zOff[fi]
+    }
+  }
+  return out
+}
+
+export const bakeMeshAnim = (program: FoldTableProgram): MeshAnim => {
+  const at0 = foldTablePositions(program, 0)
+  const steps: MeshStep[] = program.steps.map((s, k) => {
+    const nv = s.Vfrom.length
+    const nf = s.FV.length
+    const samples = MESH_SAMPLES + 1
+    const verts = new Float32Array(samples * nv * 3)
+    const offs = new Float32Array(samples * nf * 3)
+    for (let i = 0; i < samples; ++i) {
+      // Stay strictly inside this step's fold range. Both ends are shared
+      // with a neighbour and belong to the neighbour's numbering: fold 0 is
+      // the bare single-face sheet, and fold k+1 is step k+1 about to start,
+      // already re-split. The geometry is continuous across both, so sampling
+      // a hair inside gives the same paper in the numbering these faces use.
+      const f = Math.min(
+        Math.max(Number.EPSILON, k + (i / MESH_SAMPLES) * s.to),
+        k + s.to - 1e-9)
+      const { pos, zOff, zDir } = foldTablePositions(program, f)
+      verts.set(flatten3(pos), i * nv * 3)
+      offs.set(offsetsOf(nf, zOff, zDir), i * nf * 3)
+    }
+    const edges = program.edges
+      .filter((r) => r.step === k)
+      .map((r): [number, number] => [r.a as number, r.b as number])
+    return { faces: s.FV.map((F) => [...F]), edges, from: k, span: s.to, samples, verts, offs }
+  })
+  return {
+    kind: 'mesh-anim',
+    initial: {
+      faces: program.initial.FV.map((F) => [...F]),
+      edges: [] as [number, number][],
+      verts: flatten3(at0.pos),
+      offs: offsetsOf(program.initial.FV.length, at0.zOff, at0.zDir),
+    },
+    steps,
+    end: program.steps.length ? program.steps.length - 1 + program.steps[program.steps.length - 1].to : 0,
+  }
+}
+
+/**
+ * The mesh at a fold value: this step's face list, and the vertex positions and
+ * per-face offsets lerped between the two samples either side. Whole fold
+ * values land exactly on a sample, so the flat states stay exact.
+ */
+export const meshAt = (
+  m: MeshAnim, fold: number,
+): { faces: number[][]; edges: [number, number][]; verts: Float32Array; offs: Float32Array; step: number } => {
+  const N = m.steps.length
+  if (N === 0 || fold <= 0) {
+    const { faces, edges, verts, offs } = m.initial
+    return { faces, edges, verts, offs, step: -1 }
+  }
+  const k = Math.min(Math.floor(fold), N - 1)
+  const s = m.steps[k]
+  const u = s.span > 0 ? Math.min(1, Math.max(0, (fold - k) / s.span)) : 0
+  const x = u * (s.samples - 1)
+  const i0 = Math.min(s.samples - 1, Math.floor(x))
+  const i1 = Math.min(s.samples - 1, i0 + 1)
+  const t = x - i0
+  const nv = s.verts.length / s.samples
+  const nf = s.offs.length / s.samples
+  if (t === 0 || i0 === i1) {
+    return {
+      faces: s.faces,
+      edges: s.edges,
+      verts: s.verts.subarray(i0 * nv, i0 * nv + nv),
+      offs: s.offs.subarray(i0 * nf, i0 * nf + nf),
+      step: k,
+    }
+  }
+  const verts = new Float32Array(nv)
+  const offs = new Float32Array(nf)
+  for (let j = 0; j < nv; ++j) {
+    const a = s.verts[i0 * nv + j], b = s.verts[i1 * nv + j]
+    verts[j] = a + (b - a) * t
+  }
+  for (let j = 0; j < nf; ++j) {
+    const a = s.offs[i0 * nf + j], b = s.offs[i1 * nf + j]
+    offs[j] = a + (b - a) * t
+  }
+  return { faces: s.faces, edges: s.edges, verts, offs, step: k }
+}

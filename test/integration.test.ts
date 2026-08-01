@@ -2,7 +2,23 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRuntime } from '../src/runtime.js'
 import { getLineage } from '../src/lineage.js'
-import { foldTablePositions, type FoldTableProgram } from '../src/fold-engine.js'
+import { compileFoldTable, meshAt, type MeshAnim } from '../src/fold-engine.js'
+
+// The scene row carries the paper as a baked MESH, so geometry assertions read
+// what is actually drawn. Positions come back flat, and Float32 storage means
+// "flat" is a small tolerance rather than an exact zero.
+const meshOf = (rows: { event?: unknown; mesh?: unknown }[]): MeshAnim =>
+  rows.find((r) => r.event === 'create')!.mesh as MeshAnim
+const posAt = (m: MeshAnim, fold: number): [number, number, number][] => {
+  const { verts } = meshAt(m, fold)
+  const out: [number, number, number][] = []
+  for (let i = 0; i < verts.length; i += 3) out.push([verts[i], verts[i + 1], verts[i + 2]])
+  return out
+}
+// Fold-level facts (names, kinds, how far each swings) are the compiler's, not
+// the scene row's — compile the sample's own fold table for those.
+const programOf = (sample: { tables?: Record<string, Record<string, unknown>[]> }, table: string) =>
+  compileFoldTable(sample.tables![table], { size: 1 })
 import { conformRow, schemaColumns, invalidColumns, type ColumnType } from '../src/editable-tables.js'
 import { SAMPLES } from '../src/samples.js'
 import { buildHydraIndex, hydraFrameAt } from '../src/hydra.js'
@@ -75,13 +91,14 @@ test('Origami Crane sample: 17 exact fold steps, wings held half-raised', () => 
   }).run(sample.code, { seed: 1 })
 
   const events = views.get(outViewName('three'))!
-  const create = events.rows.find((r) => r.event === 'create')!
-  const program = create.program as FoldTableProgram
-  assert.equal(program.kind, 'fold-table')
+  const mesh = meshOf(events.rows)
+  const program = programOf(sample, 'origami')
+  assert.equal(mesh.kind, 'mesh-anim')
+  assert.equal(mesh.steps.length, 17)
   assert.equal(program.steps.length, 17)
   assert.equal(program.steps[16].name, 'wings')
   assert.equal(program.steps[16].to, 0.5)
-  assert.equal(program.steps[16].FV.length, 74)
+  assert.equal(mesh.steps[16].faces.length, 74)
   // solved fold kinds: the collapse and the point folds are reverse folds
   const kinds = program.steps.map((s) => s.type)
   assert.equal(kinds.filter((k) => k === 'Inside Reverse').length, 9)
@@ -97,11 +114,9 @@ test('Origami Crane sample: 17 exact fold steps, wings held half-raised', () => 
   // exact states at every landed fold: all flat (|z| only layer nudges = 0
   // here, raw positions), and the finished pose has the wings up
   for (let k = 0; k <= 16; ++k) {
-    const { pos } = foldTablePositions(program, k)
-    for (const p of pos) assert.equal(Math.abs(p[2]), 0, `state ${k} is flat`)
+    for (const p of posAt(mesh, k)) assert.ok(Math.abs(p[2]) < 1e-6, `state ${k} is flat`)
   }
-  const held = foldTablePositions(program, 16.5)
-  const zMax = Math.max(...held.pos.map((p) => p[2]))
+  const zMax = Math.max(...posAt(mesh, 16.5).map((p) => p[2]))
   assert.ok(zMax > 0.5, `wings rise out of plane (z ${zMax.toFixed(2)})`)
 
   // Playback rasterizes the routed events into the scene cache automatically —
@@ -127,14 +142,13 @@ for (const { name, steps } of [
         (seed ?? sample.tables?.[n] ?? []).map((r) => conformRow(r, schemaColumns(schema))),
     }).run(sample.code, { seed: 1 })
 
-    const program = views.get(outViewName('three'))!.rows
-      .find((r) => r.event === 'create')!.program as FoldTableProgram
-    assert.equal(program.kind, 'fold-table')
-    assert.equal(program.steps.length, steps)
+    const mesh = meshOf(views.get(outViewName('three'))!.rows)
+    assert.equal(mesh.kind, 'mesh-anim')
+    assert.equal(mesh.steps.length, steps)
 
     // the finished flower lies flat
-    const { pos } = foldTablePositions(program, steps)
-    for (const p of pos) assert.ok(Math.abs(p[2]) < 1e-9, 'landed flower is flat')
+    const pos = posAt(mesh, steps)
+    for (const p of pos) assert.ok(Math.abs(p[2]) < 1e-6, 'landed flower is flat')
 
     // and it reads as a bloom: paper reaches out to a comparable radius in
     // every quarter turn, so petals radiate all the way around rather than
@@ -234,15 +248,14 @@ test('Origami Cicada sample: nine simple folds, all exact', () => {
       (seed ?? sample.tables?.[name] ?? []).map((r) => conformRow(r, schemaColumns(schema))),
   }).run(sample.code, { seed: 1 })
   const events = views.get(outViewName('three'))!
-  const program = events.rows.find((r) => r.event === 'create')!.program as FoldTableProgram
-  assert.equal(program.steps.length, 9)
+  const mesh = meshOf(events.rows)
+  const program = programOf(sample, 'origami')
+  assert.equal(mesh.steps.length, 9)
   for (const step of program.steps) assert.equal(step.type, 'Pureland')
   for (let k = 0; k <= 9; ++k) {
-    const { pos } = foldTablePositions(program, k)
-    for (const p of pos) assert.ok(Math.abs(p[2]) < 1e-12, `state ${k} flat`)
+    for (const p of posAt(mesh, k)) assert.ok(Math.abs(p[2]) < 1e-6, `state ${k} flat`)
   }
-  const done = foldTablePositions(program, 9)
-  const xs = done.pos.map((p) => p[0])
+  const xs = posAt(mesh, 9).map((p) => p[0])
   assert.ok(Math.max(...xs) - Math.min(...xs) > 0.8, 'wings splay wide')
 })
 

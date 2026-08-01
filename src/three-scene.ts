@@ -5,7 +5,7 @@ import { FontLoader, type Font } from 'three/addons/loaders/FontLoader.js'
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import helvetiker from 'three/examples/fonts/helvetiker_regular.typeface.json'
-import { foldTablePositions, type FoldTableProgram } from './fold-engine.js'
+import { meshAt, type MeshAnim } from './fold-engine.js'
 import { geometryDims, primitiveGeometry, type GeometryDims } from './three-points.js'
 import type { PostAPI } from './post-scene.js'
 
@@ -324,12 +324,14 @@ function disposeLight(obj: LightObject): void {
   obj.light.dispose()
 }
 
-// Folding paper. `fold` drives playback: how many folds have landed, fractional
-// = the next flap mid-swing. Faces render as a per-face triangle soup so each
-// face can be nudged by its layer index; edges are lines from the same positions.
-interface OrigamiObject {
+// A mesh whose geometry is element DATA rather than anything this file knows
+// how to compute: `mesh` carries faces, creases, and vertex positions sampled
+// across the animation, `fold` says where in it to read. Faces render as a
+// per-face triangle soup so each can carry its own offset (origami nudges each
+// face by its layer); edges are lines from the same positions.
+interface MeshObject {
   root: THREE.Group
-  program: FoldTableProgram
+  mesh: MeshAnim
   fold: number
   shown: number
   vertColor: PartColors
@@ -372,14 +374,11 @@ function writeTint(
   K[at] = 1
 }
 
-function fillOrigami(obj: OrigamiObject): void {
-  const { program } = obj
-  const { FV, pos, zOff, zDir, step } = foldTablePositions(program, obj.fold)
-  // Layer offsets ride the paper: along the face's carried direction when the
-  // motion provides one, else world z (the flat-state stacking axis).
-  const offX = (fi: number): number => (zDir ? zDir[fi][0] * zOff[fi] : 0)
-  const offY = (fi: number): number => (zDir ? zDir[fi][1] * zOff[fi] : 0)
-  const offZ = (fi: number): number => (zDir ? zDir[fi][2] * zOff[fi] : zOff[fi])
+function fillMesh(obj: MeshObject): void {
+  const { faces: FV, verts, offs, step } = meshAt(obj.mesh, obj.fold)
+  const offX = (fi: number): number => offs[fi * 3]
+  const offY = (fi: number): number => offs[fi * 3 + 1]
+  const offZ = (fi: number): number => offs[fi * 3 + 2]
   const vertColor = obj.vertColor
   const faceColor = obj.faceColor
   const edgeColor = obj.edgeColor
@@ -392,8 +391,7 @@ function fillOrigami(obj: OrigamiObject): void {
     const ox = offX(fi), oy = offY(fi), oz = offZ(fi)
     for (let j = 1; j + 1 < F.length; ++j) {
       for (const vi of [F[0], F[j], F[j + 1]]) {
-        const v = pos[vi]
-        P[n++] = v[0] + ox; P[n++] = v[1] + oy; P[n++] = v[2] + oz
+        P[n++] = verts[vi * 3] + ox; P[n++] = verts[vi * 3 + 1] + oy; P[n++] = verts[vi * 3 + 2] + oz
         // a corner's own colour is the more specific one, so it wins there —
         // which is what lets a few painted vertices shade across a face
         writeTint(T, K, k++, vertColor?.[vi] ?? faceColor?.[fi])
@@ -419,8 +417,8 @@ function fillOrigami(obj: OrigamiObject): void {
       const key = a < b ? `${a},${b}` : `${b},${a}`
       if (seen.has(key)) continue
       seen.add(key)
-      L[m++] = pos[a][0] + ox; L[m++] = pos[a][1] + oy; L[m++] = pos[a][2] + oz
-      L[m++] = pos[b][0] + ox; L[m++] = pos[b][1] + oy; L[m++] = pos[b][2] + oz
+      L[m++] = verts[a * 3] + ox; L[m++] = verts[a * 3 + 1] + oy; L[m++] = verts[a * 3 + 2] + oz
+      L[m++] = verts[b * 3] + ox; L[m++] = verts[b * 3 + 1] + oy; L[m++] = verts[b * 3 + 2] + oz
       // the line list is built in face-traversal order; edge NUMBERS are the
       // engine's canonical order, so a row's `edge` resolves through the map
       const ei = obj.edgeIndex.get(step)?.get(key)
@@ -436,13 +434,13 @@ function fillOrigami(obj: OrigamiObject): void {
   obj.shown = obj.fold
 }
 
-function makeOrigami(row: Record<string, unknown>): OrigamiObject {
-  const program = row.program as FoldTableProgram
-  let maxTris = Math.max(1, program.initial.FV.reduce((s, F) => s + F.length - 2, 0))
-  let maxEdges = Math.max(1, program.initial.FV.reduce((s, F) => s + F.length, 0))
-  for (const step of program.steps) {
-    maxTris = Math.max(maxTris, step.FV.reduce((s, F) => s + F.length - 2, 0))
-    maxEdges = Math.max(maxEdges, step.FV.reduce((s, F) => s + F.length, 0))
+function makeMesh(row: Record<string, unknown>): MeshObject {
+  const mesh = row.mesh as MeshAnim
+  let maxTris = Math.max(1, mesh.initial.faces.reduce((s, F) => s + F.length - 2, 0))
+  let maxEdges = Math.max(1, mesh.initial.faces.reduce((s, F) => s + F.length, 0))
+  for (const step of mesh.steps) {
+    maxTris = Math.max(maxTris, step.faces.reduce((s, F) => s + F.length - 2, 0))
+    maxEdges = Math.max(maxEdges, step.faces.reduce((s, F) => s + F.length, 0))
   }
 
   const dyn = (n: number, size: number): THREE.BufferAttribute => {
@@ -499,24 +497,24 @@ function makeOrigami(row: Record<string, unknown>): OrigamiObject {
   root.add(new THREE.LineSegments(lineGeometry, line))
 
   const edgeIndex = new Map<number, Map<string, number>>()
-  for (const r of program.edges) {
-    const at = edgeIndex.get(r.step as number) ?? new Map<string, number>()
-    at.set(`${r.a},${r.b}`, r.edge as number)
-    edgeIndex.set(r.step as number, at)
-  }
+  mesh.steps.forEach((step, k) => {
+    const at = new Map<string, number>()
+    step.edges.forEach(([a, b], i) => at.set(`${a},${b}`, i))
+    edgeIndex.set(k, at)
+  })
 
-  const obj: OrigamiObject = {
-    root, program, fold: 0, shown: -1,
+  const obj: MeshObject = {
+    root, mesh, fold: 0, shown: -1,
     vertColor: undefined, faceColor: undefined, edgeColor: undefined, edgeIndex,
     posAttr, linePosAttr, tintAttr, maskAttr, lineTintAttr, lineMaskAttr,
     front, back, line, geometry, lineGeometry,
   }
-  applyOrigamiRow(obj, row)
-  fillOrigami(obj)
+  applyMeshRow(obj, row)
+  fillMesh(obj)
   return obj
 }
 
-function applyOrigamiRow(obj: OrigamiObject, row: Record<string, unknown>): void {
+function applyMeshRow(obj: MeshObject, row: Record<string, unknown>): void {
   applyTransform(obj.root, row)
   if (row.color != null) obj.front.color.set(row.color as number)
   if (row.backColor != null) obj.back.color.set(row.backColor as number)
@@ -534,7 +532,7 @@ function applyOrigamiRow(obj: OrigamiObject, row: Record<string, unknown>): void
   }
 }
 
-function disposeOrigami(obj: OrigamiObject): void {
+function disposeMesh(obj: MeshObject): void {
   obj.geometry.dispose()
   obj.lineGeometry.dispose()
   obj.front.dispose()
@@ -584,7 +582,7 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
   new ResizeObserver(resize).observe(sizeFrom)
 
   const objects = new Map<unknown, THREE.Mesh>()
-  const origamis = new Map<unknown, OrigamiObject>()
+  const meshes = new Map<unknown, MeshObject>()
   const texts = new Map<unknown, TextObject>()
   const lights = new Map<unknown, LightObject>()
   const cameras = new Set<unknown>()
@@ -667,8 +665,8 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
   let post: PostAPI | null = null
 
   function animate(): void {
-    for (const o of origamis.values()) {
-      if (o.shown !== o.fold) fillOrigami(o)
+    for (const o of meshes.values()) {
+      if (o.shown !== o.fold) fillMesh(o)
     }
     if (particles?.sprite.visible) particles.tick(particleTime)
     if (!post?.render()) renderer.render(scene, camera)
@@ -706,7 +704,7 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
     },
     createObject(row: Record<string, unknown>): void {
       const { id, shape, color } = row
-      if (objects.has(id) || origamis.has(id) || texts.has(id) || lights.has(id) || cameras.has(id)) return
+      if (objects.has(id) || meshes.has(id) || texts.has(id) || lights.has(id) || cameras.has(id)) return
       if (shape === 'camera') {
         applyCamera(row)
         cameras.add(id)
@@ -716,10 +714,10 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
         addLight(id, buildLight(lightParams(row)))
         return
       }
-      if (shape === 'origami' && row.program) {
-        const obj = makeOrigami(row)
+      if (shape === 'mesh' && row.mesh) {
+        const obj = makeMesh(row)
         scene.add(obj.root)
-        origamis.set(id, obj)
+        meshes.set(id, obj)
         return
       }
       if (shape === 'text') {
@@ -750,22 +748,22 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
         applyCamera(row)
         return
       }
-      const origami = origamis.get(id)
-      if (origami) {
-        // An edited fold table re-cooks the program, but a re-run always
-        // arrives here rather than as a create — so a changed program has to
-        // rebuild the object. Its buffers are sized for the old topology and
-        // its paint is keyed by the old face numbering; keeping it would draw
-        // the wrong paper in the wrong colours.
-        if (row.program && row.program !== origami.program) {
-          scene.remove(origami.root)
-          disposeOrigami(origami)
-          const rebuilt = makeOrigami(row)
+      const meshObj = meshes.get(id)
+      if (meshObj) {
+        // Re-cooking gives a NEW mesh, and a re-run always arrives here rather
+        // than as a create — so a changed mesh has to rebuild the object. Its
+        // buffers are sized for the old topology and its paint is keyed by the
+        // old element numbering; keeping it would draw the wrong thing in the
+        // wrong colours.
+        if (row.mesh && row.mesh !== meshObj.mesh) {
+          scene.remove(meshObj.root)
+          disposeMesh(meshObj)
+          const rebuilt = makeMesh(row)
           scene.add(rebuilt.root)
-          origamis.set(id, rebuilt)
+          meshes.set(id, rebuilt)
           return
         }
-        applyOrigamiRow(origami, row)
+        applyMeshRow(meshObj, row)
         return
       }
       const text = texts.get(id)
@@ -808,11 +806,11 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
         if (cameras.size === 0) resetCamera()
         return
       }
-      const origami = origamis.get(id)
-      if (origami) {
-        scene.remove(origami.root)
-        disposeOrigami(origami)
-        origamis.delete(id)
+      const meshObj = meshes.get(id)
+      if (meshObj) {
+        scene.remove(meshObj.root)
+        disposeMesh(meshObj)
+        meshes.delete(id)
         return
       }
       const text = texts.get(id)
@@ -843,11 +841,11 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
         ;(mesh.material as THREE.MeshStandardMaterial).dispose()
       }
       objects.clear()
-      for (const origami of origamis.values()) {
-        scene.remove(origami.root)
-        disposeOrigami(origami)
+      for (const m of meshes.values()) {
+        scene.remove(m.root)
+        disposeMesh(m)
       }
-      origamis.clear()
+      meshes.clear()
       for (const text of texts.values()) {
         scene.remove(text.mesh)
         disposeText(text)
