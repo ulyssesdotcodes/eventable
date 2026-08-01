@@ -8,11 +8,13 @@
 const VERSION = '__BUILD_VERSION__'
 const CACHE = `eventable-${VERSION}`
 
-// The minimum needed to boot offline. lang-worker.js (~3.5 MB) and the data
-// files are left to runtime caching so a flaky install can't abort on them; the
-// editor loads its language service lazily and still runs without it.
+// The minimum needed to boot offline. The shell is keyed on '/', not
+// '/index.html', because that is the URL both backends serve without a redirect
+// (Cloudflare's asset server sends /index.html to /). lang-worker.js (~3.5 MB)
+// and the data files are left to runtime caching so a flaky install can't abort
+// on them; the editor loads its language service lazily and still runs without.
 const SHELL = [
-  '/index.html',
+  '/',
   '/assets/index.js',
   '/assets/index.css',
   '/assets/cook-worker.js',
@@ -36,7 +38,7 @@ self.addEventListener('install', (event) => {
     await Promise.all(SHELL.map(async (url) => {
       try {
         const res = await fetch(url, { cache: 'reload' })
-        if (res.ok) await cache.put(url, res)
+        if (res.ok) await put(cache, url, res)
       } catch { /* runtime caching picks it up on first real request */ }
     }))
   })())
@@ -59,9 +61,9 @@ self.addEventListener('fetch', (event) => {
   // GET fetch, so multiplayer is unaffected.
   if (new URL(req.url).origin !== self.location.origin) return
 
-  // Every navigation resolves to the one cached shell: index.html covers any
+  // Every navigation resolves to the one cached shell, which covers any
   // ?room=/?example= route.
-  event.respondWith(cacheFirst(req.mode === 'navigate' ? '/index.html' : req))
+  event.respondWith(cacheFirst(req.mode === 'navigate' ? '/' : req))
 })
 
 // A hit is never stale: CACHE is version-keyed, so a changed file arrives as a
@@ -71,6 +73,14 @@ async function cacheFirst(req) {
   const cached = await cache.match(req)
   if (cached) return cached
   const res = await fetch(req)
-  if (res.ok) await cache.put(req, res.clone())
+  if (res.ok) await put(cache, req, res.clone())
   return res
+}
+
+// The redirected flag survives caching, and a redirected response fails a
+// navigation outright (the browser rejects it as a network error), so rebuild
+// the response rather than let one redirecting URL take the whole site down.
+function put(cache, key, res) {
+  if (!res.redirected) return cache.put(key, res)
+  return cache.put(key, new Response(res.body, { status: res.status, statusText: res.statusText, headers: res.headers }))
 }
