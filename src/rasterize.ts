@@ -252,9 +252,13 @@ function sampleObject(events: Row[], i: number, extent: number): SampledState | 
 interface Track {
   at: number[]
   val: unknown[]
-  // Easing INTO val[i], present when the entries are KEYFRAMES the reader
-  // interpolates between. Absent when they are RUNS of an already-resolved
-  // per-frame bake, which hold their value until the next one.
+  // Set when the entries are KEYFRAMES the reader interpolates between; absent
+  // when they are RUNS of an already-resolved per-frame bake, which hold their
+  // value until the next one.
+  keyed?: true
+  // Easing INTO val[i], allocated only once a keyframe actually carries one.
+  // On a real model none of them do, and a parallel array of 133,000
+  // `undefined` was an eighth of the whole store.
   ease?: unknown[]
 }
 
@@ -318,14 +322,15 @@ function keyframeObject(evs: Row[], maxFrame: number): ObjectTracks | null {
   }
   const key = (k: string, frame: number, v: unknown, ease: unknown): void => {
     let t = o.cols[k]
-    if (!t) { t = { at: [], val: [], ease: [] }; o.cols[k] = t }
+    if (!t) { t = { at: [], val: [], keyed: true }; o.cols[k] = t }
     // Restating a NUMBER means "hold here", so it earns its keyframe. Restating
     // anything else cannot: nothing interpolates through it. Every update row
     // repeats its `of`, which is a quarter of the crane's store on its own.
     if (t.at.length && t.val[t.val.length - 1] === v && typeof v !== 'number') return
+    if (ease !== undefined && !t.ease) t.ease = new Array(t.at.length).fill(undefined)
+    if (t.ease) t.ease[t.at.length] = ease
     t.at.push(frame)
     t.val.push(v)
-    t.ease!.push(ease)
   }
   // A create row's fields hold from its frame on, even where a later keyframe
   // never mentions them again; `color` is one of them, since with no colour
@@ -429,15 +434,16 @@ function rowAt(o: ObjectTracks, frameFloat: number): Row | null {
     const hit = runAt(t, f0)
     if (!hit) continue
     let v = hit.v
-    if (t.ease) {
+    if (t.keyed) {
       // keyframes: interpolate across the whole segment to the next one
       const j = hit.i + 1
       const nx = t.val[j]
       if (typeof v === 'number' && typeof nx === 'number' && !NO_TRACK.has(k)) {
         const span = t.at[j] - t.at[hit.i]
-        if (span > 0 && t.ease[j] !== 'step') {
+        const ease = t.ease?.[j]
+        if (span > 0 && ease !== 'step') {
           const raw = Math.min(1, Math.max(0, (frameFloat - t.at[hit.i]) / span))
-          const fn = easeFnOf(t.ease[j])
+          const fn = easeFnOf(ease)
           v = v + (nx - v) * (fn ? fn(raw) : raw)
         }
       }
