@@ -843,14 +843,6 @@ html, body {
 .code-facade[data-lang='post'] { border-left-color: #b78ce0; }
 .code-facade[data-lang='expr'] { border-left-color: #5bb6e0; }
 
-.facade-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  overflow: hidden;
-}
-
 .editor-surface-label {
   color: #8ca0b8;
   font-family: monospace;
@@ -881,11 +873,6 @@ html, body {
 
 .facade-context:last-of-type {
   margin-right: auto;
-}
-
-.facade-run {
-  padding: 1px 10px;
-  font-size: 11px;
 }
 
 .facade-code {
@@ -1110,7 +1097,9 @@ html, body {
   flex-shrink: 0;
 }
 
-.table-pane-chrome.collapsed {
+/* Collapsing hides the session/room authoring row; the run scrubber stays —
+   scrubbing runs is a performance control, not authoring chrome. */
+.table-pane-chrome.collapsed .session-selector {
   display: none;
 }
 
@@ -1195,6 +1184,13 @@ html, body {
   font-size: 11px;
   font-family: monospace;
   margin-left: 8px;
+}
+
+.table-run {
+  padding: 1px 12px;
+  font-size: 11px;
+  margin-left: 8px;
+  flex-shrink: 0;
 }
 
 
@@ -1304,7 +1300,7 @@ html, body {
 
 .events-table {
   width: 100%;
-  min-width: 560px;
+  min-width: 420px;
   border-collapse: collapse;
   font-size: 11px;
 }
@@ -1355,7 +1351,7 @@ html, body {
 }
 
 .events-table td {
-  padding: 3px 6px;
+  padding: 3px 4px;
 }
 
 /* ── Editable tables ── */
@@ -1570,7 +1566,7 @@ html, body {
 .editable-col-head {
   display: table-cell;
   vertical-align: top;
-  max-width: 160px;
+  max-width: 110px;
 }
 
 .col-head-row {
@@ -1582,8 +1578,9 @@ html, body {
 .col-name-label {
   flex: 1;
   min-width: 0;
-  white-space: normal;
-  overflow-wrap: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: text;
   font-size: 10px;
   font-weight: 600;
@@ -1656,8 +1653,17 @@ html, body {
 .editable-cell {
   position: relative;
   cursor: pointer;
-  min-width: 60px;
-  max-width: 220px;
+  min-width: 44px;
+  max-width: 160px;
+}
+
+.editable-cell[data-type='number'] {
+  max-width: 90px;
+}
+
+.editable-cell[data-type='boolean'] {
+  min-width: 0;
+  width: 34px;
 }
 
 /* Multiplayer presence: who last edited this cell, comma-separated and named
@@ -1753,8 +1759,18 @@ html, body {
 /* Relevance: a cell whose column the row's event/type doesn't use (see
    isCellInert) — dimmed, but stays fully editable, clickable, and navigable. */
 .editable-cell.cell-inert .cell-value,
+.editable-cell.cell-inert .cell-bool,
 .editable-cell.cell-inert .cell-enum {
   opacity: 0.4;
+}
+
+/* A boolean is its checkbox — no word of text, so the column is a checkbox
+   wide (see colTrack). */
+.cell-bool {
+  display: block;
+  margin: 0 auto;
+  cursor: pointer;
+  accent-color: #2a70c0;
 }
 
 /* ── Editor list ── */
@@ -1868,21 +1884,8 @@ html, body {
 }
 
 .card-fields .row-actions {
-  justify-content: flex-end;
-}
-
-/* Apply only when there is something to apply: a disabled button per card is
-   chrome, and the head collapses to nothing without it. */
-.row-card .facade-head {
-  padding: 0 8px;
-}
-
-.row-card .facade-run {
-  margin-left: auto;
-}
-
-.row-card .facade-run:disabled {
-  display: none;
+  justify-content: flex-start;
+  padding-left: 2px;
 }
 
 /* The card is sized by its field grid (see the min-width above); containment
