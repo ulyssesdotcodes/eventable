@@ -138,11 +138,9 @@ export function TimelinePane(props: {
         s.drag === 'lineage' ? props.resolveSource : undefined,
       )
     })
-    // A band whose spans overlap packs them into sub-lanes. Collapsed (the
-    // default) they all draw on one row: the pane is a fixed four bands tall,
-    // so a band that grew with its own crowding would push the others out of
-    // it. Expanding is per band and survives re-cooks (`<Index>` keeps the
-    // component), which is what makes it usable while editing that band.
+    // Overlapping spans pack into sub-lanes, collapsed onto one row unless
+    // this band is expanded: the pane is a fixed four bands tall, so a band
+    // that grew with its own crowding would push the others out of it.
     const [expanded, setExpanded] = createSignal(false)
     const laneCount = createMemo(() => (expanded() ? layout().laneCount : 1))
     const handles = createMemo(() => (

@@ -50,8 +50,8 @@ function PresenceNames(nameProps: { peers: PeerPresence[] }) {
   )
 }
 
-// Columns whose control is always live in the cell (no inline editor to open):
-// keyboard "edit" on one just focuses that control.
+// Columns whose control is live in the cell itself — there is no inline editor
+// to open, so "edit this cell" just focuses the control.
 const isLiveCol = (c: EditableColumn): boolean => c.type === 'enum' || c.type === 'boolean'
 
 // A field column's grid track in the editor list. Booleans are a checkbox wide
@@ -276,7 +276,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
 
   // Tab/Shift+Tab out of a cell editor (the caller commits first): move to
   // the adjacent column, wrapping to the next/previous display row. "="
-  // expression cells open in the main editor; every other type edits inline.
+  // expression cells open in the main editor, live columns just take focus,
+  // every other type edits inline.
   function advanceEdit(rowIndex: number, colName: string, dir: 1 | -1): void {
     const ed = editableData()
     if (!ed) return
@@ -366,7 +367,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   })
 
   // Enter on the focused cell: "=" expression cells open in the main editor,
-  // enums focus their live dropdown, everything else opens its inline editor.
+  // live columns focus their own control, everything else opens its inline
+  // editor.
   function beginEditFocused(): void {
     const fc = focusedCell()
     const ed = editableData()
@@ -860,8 +862,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             checked={!!raw()}
             onChange={(e) => store.setCell(table, rowIndex, col.name, e.currentTarget.checked)}
             onKeyDown={(e) => {
-              // Space toggles (the browser's own); Tab walks on, Escape/Enter
-              // drop back to arrow-key navigation.
+              // No Space case: the browser toggles a checkbox itself.
               if (e.key === 'Tab') {
                 e.preventDefault()
                 advanceEdit(rowIndex, col.name, e.shiftKey ? -1 : 1)
