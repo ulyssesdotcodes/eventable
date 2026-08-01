@@ -332,6 +332,7 @@ interface OrigamiObject {
   program: FoldTableProgram
   fold: number
   shown: number
+  vertColor: PartColors
   faceColor: PartColors
   edgeColor: PartColors
   // step → "a,b" → that crease's engine-canonical number, so a paint row's
@@ -379,6 +380,7 @@ function fillOrigami(obj: OrigamiObject): void {
   const offX = (fi: number): number => (zDir ? zDir[fi][0] * zOff[fi] : 0)
   const offY = (fi: number): number => (zDir ? zDir[fi][1] * zOff[fi] : 0)
   const offZ = (fi: number): number => (zDir ? zDir[fi][2] * zOff[fi] : zOff[fi])
+  const vertColor = obj.vertColor
   const faceColor = obj.faceColor
   const edgeColor = obj.edgeColor
   const P = obj.posAttr.array as Float32Array
@@ -392,7 +394,9 @@ function fillOrigami(obj: OrigamiObject): void {
       for (const vi of [F[0], F[j], F[j + 1]]) {
         const v = pos[vi]
         P[n++] = v[0] + ox; P[n++] = v[1] + oy; P[n++] = v[2] + oz
-        writeTint(T, K, k++, faceColor?.[fi])
+        // a corner's own colour is the more specific one, so it wins there —
+        // which is what lets a few painted vertices shade across a face
+        writeTint(T, K, k++, vertColor?.[vi] ?? faceColor?.[fi])
       }
     }
   }
@@ -421,8 +425,8 @@ function fillOrigami(obj: OrigamiObject): void {
       // engine's canonical order, so a row's `edge` resolves through the map
       const ei = obj.edgeIndex.get(step)?.get(key)
       const packed = ei === undefined ? null : edgeColor?.[ei]
-      writeTint(LT, LK, e++, packed)
-      writeTint(LT, LK, e++, packed)
+      writeTint(LT, LK, e++, vertColor?.[a] ?? packed)
+      writeTint(LT, LK, e++, vertColor?.[b] ?? packed)
     }
   }
   obj.lineGeometry.setDrawRange(0, m / 3)
@@ -503,7 +507,7 @@ function makeOrigami(row: Record<string, unknown>): OrigamiObject {
 
   const obj: OrigamiObject = {
     root, program, fold: 0, shown: -1,
-    faceColor: undefined, edgeColor: undefined, edgeIndex,
+    vertColor: undefined, faceColor: undefined, edgeColor: undefined, edgeIndex,
     posAttr, linePosAttr, tintAttr, maskAttr, lineTintAttr, lineMaskAttr,
     front, back, line, geometry, lineGeometry,
   }
@@ -519,9 +523,11 @@ function applyOrigamiRow(obj: OrigamiObject, row: Record<string, unknown>): void
   if (typeof row.fold === 'number' && Number.isFinite(row.fold)) obj.fold = row.fold
   // rasterize hands the same array back on frames where no element's colour
   // changed, so identity alone decides whether the buffers need refilling.
+  const vertColor = row.vertColor as PartColors
   const faceColor = row.faceColor as PartColors
   const edgeColor = row.edgeColor as PartColors
-  if (faceColor !== obj.faceColor || edgeColor !== obj.edgeColor) {
+  if (vertColor !== obj.vertColor || faceColor !== obj.faceColor || edgeColor !== obj.edgeColor) {
+    obj.vertColor = vertColor
     obj.faceColor = faceColor
     obj.edgeColor = edgeColor
     obj.shown = NaN   // force a refill: the fold value alone hasn't changed

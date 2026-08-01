@@ -5,7 +5,7 @@
 // hydra.ts + hydra-scene.ts — keep that split), register it in main.ts.
 // Origami renders through the scene visualizer, not a separate one.
 
-import { buildFrameIndex, sampleFrame } from './rasterize.js'
+import { buildFrameIndex, sampleFrame, type FrameStore } from './rasterize.js'
 import { buildHydraIndex, hydraFrameAt } from './hydra.js'
 import { buildBaubleIndex, baubleFrameAt } from './bauble.js'
 import { buildPostIndex, postFrameAt } from './post.js'
@@ -27,7 +27,7 @@ export type LoopEpochs = Partial<Record<(typeof LOOP_KINDS)[number], number>>
 // assignable subset of replay.ts's CookedResult, so the engine forwards the
 // whole object without knowing the names.
 export interface CookedVisualRows {
-  sceneRows: Row[]
+  scene: FrameStore
   hydraRows: Row[]
   // Optional so pre-bauble/pre-post callers (and their test fixtures) stay
   // assignable.
@@ -119,10 +119,10 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
   return {
     kind: 'scene',
     load(cooked): void {
-      frameIndex = buildFrameIndex(cooked.sceneRows ?? [])
+      frameIndex = cooked.scene ?? buildFrameIndex([])
       if (typeof cooked.loopEpochs?.scene === 'number') epoch = cooked.loopEpochs.scene
     },
-    hasContent: () => frameIndex.map.size > 0,
+    hasContent: () => frameIndex.objects.length > 0,
     applyFrame({ srcFrameF, loopFrames, ctx, passAt }): Row[] {
       // Frames land on the loop, so a last event on beat 21 of a 16-beat loop
       // makes a 32-beat sequence (beat 13, a plain 16-beat one). The clamp

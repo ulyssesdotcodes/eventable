@@ -451,6 +451,7 @@ export interface FoldTableProgram {
   // id+event. Face and edge numbers mean nothing across steps: every fold
   // re-splits the paper.
   folds: Row[]
+  verts: Row[]
   faces: Row[]
   edges: Row[]
   end: number        // beat when the last swing lands
@@ -555,9 +556,9 @@ export const parseFoldRows = (rows: Record<string, unknown>[]): FoldTableRowSpec
 // within its own step, since the next fold re-splits the paper.
 const stepAttrs = (
   k: number, spec: FoldTableRowSpec, out: FoldOutcome, Vdisp: Vec2[],
-): { faces: Row[]; edges: Row[] } => {
+): { verts: Row[]; faces: Row[]; edges: Row[] } => {
   const { FV, Ff, sheet, layers } = out.state
-  const { moving, dirs, flap, layersFrom, EV, angleFrom, angleTo } = out.anim
+  const { moving, dirs, flap, layersFrom, EV, angleFrom, angleTo, Vfrom } = out.anim
   const name = spec.name
   // `beat`/`dur` place the row on the loop where its fold plays, so an
   // attribute row is already a scene or post event: add id/event/color and
@@ -586,6 +587,23 @@ const stepAttrs = (
       else inc.set(key, [fi])
     }
   })
+  // vertex → the faces meeting there, and whether any of them swings
+  const vFaces: number[][] = sheet.map(() => [])
+  FV.forEach((F, fi) => { for (const vi of F) vFaces[vi].push(fi) })
+  const [u, d] = out.anim.line
+  const verts: Row[] = sheet.map((sp, vert) => {
+    const fs = vFaces[vert]
+    return {
+      step: k, name, beat, dur, vert,
+      // a hinge vertex lies ON the fold line, which is exactly why the paper
+      // can turn there without tearing
+      hinge: Math.abs(Vfrom[vert][0] * u[0] + Vfrom[vert][1] * u[1] - d) < 1e-6,
+      moving: fs.some((fi) => moving[fi]),
+      faces: fs.length,
+      cx: Vdisp[vert][0], cy: Vdisp[vert][1],
+      sheetX: sp[0], sheetY: sp[1],
+    }
+  })
   const edges: Row[] = EV.map(([v0, v1], edge) => {
     const a = Math.min(v0, v1), b = Math.max(v0, v1)
     const fs = inc.get(`${a},${b}`) ?? []
@@ -600,7 +618,7 @@ const stepAttrs = (
       border: fs.length === 1,
     }
   })
-  return { faces, edges }
+  return { verts, faces, edges }
 }
 
 export const compileFoldTable = (
@@ -615,6 +633,7 @@ export const compileFoldTable = (
   const initial = { FV: st.FV.map((F) => [...F]), V: st.V.map(toDisplay) }
   const steps: FoldProgramStep[] = []
   const folds: Row[] = []
+  const verts: Row[] = []
   const faces: Row[] = []
   const edges: Row[] = []
   const reverses: ReverseRecord[] = []
@@ -673,6 +692,7 @@ export const compileFoldTable = (
     })
     const k = steps.length - 1
     const attrs = stepAttrs(k, spec, out, stepMotion.Vfrom)
+    verts.push(...attrs.verts)
     faces.push(...attrs.faces)
     edges.push(...attrs.edges)
     folds.push({
@@ -707,7 +727,7 @@ export const compileFoldTable = (
     for (const l of step.layers) maxLayer = Math.max(maxLayer, l)
   }
   return {
-    kind: 'fold-table', size, initial, steps, folds, faces, edges,
+    kind: 'fold-table', size, initial, steps, folds, verts, faces, edges,
     end: steps.length > 0 ? steps[steps.length - 1].t1 : 1,
     gap: (STACK_DEPTH * size) / maxLayer,
     maxLayer,
@@ -1122,14 +1142,15 @@ export const foldPointsAt = (
     if (typeof k !== 'number' || !program.steps[k]) return r
     const { FV, pos, zOff, zDir } = sampled(k)
     // the element's vertices: a face's loop, or a crease's two ends
-    const vs = typeof r.face === 'number' ? FV[r.face]
-      : typeof r.a === 'number' && typeof r.b === 'number' ? [r.a, r.b]
-        : undefined
+    const vs = typeof r.vert === 'number' ? [r.vert]
+      : typeof r.face === 'number' ? FV[r.face]
+        : typeof r.a === 'number' && typeof r.b === 'number' ? [r.a, r.b]
+          : undefined
     if (!vs) return r
     // an edge takes the layer offset of a face that owns it, as the line
     // renderer does; a face takes its own
     const fi = typeof r.face === 'number' ? r.face
-      : FV.findIndex((F) => F.includes(vs[0]) && F.includes(vs[1]))
+      : FV.findIndex((F) => vs.every((v) => F.includes(v)))
     const off = fi >= 0 ? zOff[fi] : 0
     const d = fi >= 0 && zDir ? zDir[fi] : undefined
     const o: [number, number, number] = d

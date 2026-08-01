@@ -20,7 +20,7 @@ import {
   type PlaybackEngine, type TapControl,
 } from '../src/playback.js'
 import { createSceneVisualizer, createHydraVisualizer, type Visualizer } from '../src/visualizer.js'
-import { rasterizeRows } from '../src/rasterize.js'
+import { rasterizeRows, buildFrameIndex } from '../src/rasterize.js'
 import { DEFAULT_BEAT_SECONDS, DEFAULT_LOOP_BEATS } from '../src/constants.js'
 import { Table, time as timeExpr, type EvalCtx } from '../src/dsl.js'
 import type { Row } from '../src/lineage.js'
@@ -96,7 +96,7 @@ function makeEngine(
     [createSceneVisualizer(fakeScene()), createHydraVisualizer(fakeHydra())],
     { clock: time.clock, ...extra },
   )
-  engine.load({ sceneRows: [], timelineRows: [], hydraRows: HYDRA_ROWS })
+  engine.load({ scene: buildFrameIndex([]), timelineRows: [], hydraRows: HYDRA_ROWS })
   return engine
 }
 
@@ -199,7 +199,7 @@ test('the loop is the GUI beat count regardless of how much scene content is bak
   const engine = makeEngine(time)
   // 4 beats of baked scene content in the default 16-beat loop: content never
   // stretches (or shrinks) the loop, it just plays inside it.
-  engine.load({ sceneRows: rasterizeRows([sceneCreate()], 4), timelineRows: [], hydraRows: [] })
+  engine.load({ scene: buildFrameIndex(rasterizeRows([sceneCreate()], 4)), timelineRows: [], hydraRows: [] })
   assert.equal(engine.viewState().maxBeats, DEFAULT_LOOP_BEATS)
   engine.setLoopBeats(3)
   assert.equal(engine.viewState().maxBeats, 3)
@@ -367,7 +367,7 @@ test('passesSince (multi-pass content) is unaffected by a pause spanning the loo
     pausedMsBefore: (wallMs) => pausedMsBefore(transportEvents, wallMs),
   })
   engine.setLoopBeats(2)
-  engine.load({ sceneRows: [], timelineRows: [], hydraRows: [
+  engine.load({ scene: buildFrameIndex([]), timelineRows: [], hydraRows: [
     { event: 'setCode', code: 'a', beat: 1 },
     { event: 'setCode', code: 'b', beat: 3 },
   ] })
@@ -398,7 +398,7 @@ test('the engine feeds ctx.loop() — whole loops since the origin (activity-log
     // here the origin (earliest session-start) is epoch 1000.
     tapControl: { tap(): void {}, clear(): void {}, rows: () => [], anchor: () => 1000 },
   })
-  engine.load({ sceneRows: [], timelineRows: [], hydraRows: HYDRA_ROWS })
+  engine.load({ scene: buildFrameIndex([]), timelineRows: [], hydraRows: HYDRA_ROWS })
   engine.toggle() // play from the origin
   assert.equal(seen!.loop!(), 0, 'the first pass is loop 0')
   // The default 16-beat loop at 0.5 s/beat spans 8s of wall time per pass.
@@ -460,7 +460,7 @@ test('the pending-edit preview runs the editor buffer against the applied frame,
   hydra.setSketch = (s?: { code: string } | null) => { applied.push(s?.code ?? null) }
   let pending: string | null = null
   const engine = createPlaybackEngine([createHydraVisualizer(hydra, () => pending)], { clock: time.clock })
-  engine.load({ sceneRows: [], timelineRows: [], hydraRows: [
+  engine.load({ scene: buildFrameIndex([]), timelineRows: [], hydraRows: [
     { event: 'setCode', code: 'osc(1)', beat: 1 },
     { event: 'setVariable', name: 'freq', value: 7, beat: 1 },
   ] })
@@ -484,7 +484,7 @@ test('a hydra event past the loop plays once the wall-aligned pass reaches it', 
   const engine = createPlaybackEngine([createHydraVisualizer(hydra)], { clock: time.clock })
   engine.setLoopBeats(2)
   // Beat 3 is past the 2-beat loop → the second pass's first beat.
-  engine.load({ sceneRows: [], timelineRows: [], hydraRows: [
+  engine.load({ scene: buildFrameIndex([]), timelineRows: [], hydraRows: [
     { event: 'setCode', code: 'a', beat: 1 },
     { event: 'setCode', code: 'b', beat: 3 },
   ] })
@@ -510,7 +510,7 @@ test("viewState surfaces each kind's own content pass, distinct from the engine'
   // from content moving. The lone hydra event (beat 1) fits inside a single
   // 2-beat content pass and stays there regardless.
   engine.load({
-    sceneRows: [],
+    scene: buildFrameIndex([]),
     hydraRows: [{ event: 'setCode', code: 'a', beat: 1 }],
     timelineRows: [
       { event: 'hold', beat: 1, from: 1, loop: 0 },
@@ -546,7 +546,7 @@ test('the engine supplies ctx.time: a time() binding resolves to source seconds'
   }
   const engine = createPlaybackEngine([createSceneVisualizer(scene)], { clock: time.clock })
   const rows = new Table([sceneCreate()]).derive({ ry: timeExpr() }).rows
-  engine.load({ sceneRows: rasterizeRows(rows, 4), timelineRows: [], hydraRows: [] })
+  engine.load({ scene: buildFrameIndex(rasterizeRows(rows, 4)), timelineRows: [], hydraRows: [] })
   engine.toggle() // epoch 0 → phase 0
   assert.equal(states.at(-1)!.ry, 0)
   time.advance(1000) // 2 beats at 0.5 s/beat → 1 s of source time
@@ -561,10 +561,10 @@ test('scene: content past the loop plays in later passes; short content resets e
 
   // px glides 0 → 20 across beats 1..21 (600 frames): a 16-beat loop
   // (480 frames) makes a two-loop, 32-beat sequence.
-  viz.load({ sceneRows: rasterizeRows([
+  viz.load({ scene: buildFrameIndex(rasterizeRows([
     sceneCreate(),
     { id: 's', event: 'update', beat: 21, px: 20 },
-  ], 16), hydraRows: [] })
+  ], 16)), hydraRows: [] })
   assert.equal(at(240, 480, 0).px, 8, 'pass 0, beat 9')
   assert.equal(at(60, 480, 1).px, 18, 'pass 1 continues the glide (beat 19)')
   assert.equal(at(300, 480, 1).px, 20, 'past the last event the pose holds to the sequence end')
@@ -572,9 +572,9 @@ test('scene: content past the loop plays in later passes; short content resets e
 
   // A last event on beat 13 fits the loop — it resets every 16 beats,
   // whatever the wall-aligned pass count says.
-  viz.load({ sceneRows: rasterizeRows([
+  viz.load({ scene: buildFrameIndex(rasterizeRows([
     sceneCreate(),
     { id: 's', event: 'update', beat: 13, px: 12 },
-  ], 16), hydraRows: [] })
+  ], 16)), hydraRows: [] })
   assert.equal(at(300, 480, 7).px, 10, 'beat 11 of any loop')
 })

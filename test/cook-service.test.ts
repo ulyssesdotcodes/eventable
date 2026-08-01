@@ -77,7 +77,7 @@ define("scene", () => table("three").rasterize(4/30))
   if (!resp.ok) return
   const cooked = unpackCooked(structuredCloneLike(resp.cooked) as typeof resp.cooked)
   assert.equal(cooked.views.get('base')!.length, 4)
-  assert.ok(cooked.sceneRows.length > 0, 'rasterized scene rows came through')
+  assert.ok(cooked.scene.objects.length > 0, 'the scene store came through')
   assert.ok(getLineage(cooked.views.get('scene')!.rows[0]).length > 0, 'lineage survives the boundary')
   assert.ok(cooked.sigs.scene.length > 0, 'the change-detection signature rides along')
 })
@@ -195,4 +195,18 @@ test('expr.slider in a hydra code cell declares through the cook', () => {
   }))
   assert.ok(resp.ok)
   assert.ok(resp.sliders.some((s) => s.id === 'h' && s.min === 0 && s.max === 2))
+})
+
+// Typed arrays are what per-frame geometry and run-length tracks will be made
+// of; structured clone handles them natively, so packing must leave them
+// alone rather than walking them into { 0: …, 1: … }.
+test('typed arrays cross the boundary as typed arrays, still shared', () => {
+  const verts = new Float32Array([0, 1, 2, 3])
+  const rows: Row[] = [{ id: 'p', frame: 0, verts }, { id: 'p', frame: 1, verts }]
+  const packed = packRows(rows)
+  assert.ok(packed[0].verts instanceof Float32Array, 'not rebuilt as a plain object')
+  assert.equal(packed[0].verts, packed[1].verts, 'and still one object')
+  const out = unpackRows(packed)
+  assert.ok(out[0].verts instanceof Float32Array)
+  assert.deepEqual([...(out[0].verts as Float32Array)], [0, 1, 2, 3])
 })

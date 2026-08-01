@@ -313,3 +313,23 @@ test('an element pulse releases its element when the decay lands', () => {
   assert.equal(faceAt(60), null, 'and lets go once the decay completes')
   assert.equal(faceAt(120), null, 'staying released')
 })
+
+// An element row speaks for one element, not for the object. Origami's
+// faces()/verts()/edges() rows carry a whole vocabulary (plies, layer, sheetX,
+// …); painting with them must not stamp that onto the paper's own state.
+test('an element row does not donate its columns to the object', () => {
+  const baked = rasterizeRows([
+    { id: 'p', event: 'create', beat: 1, shape: 'origami', color: 0x111111 },
+    { id: 'p', event: 'color', beat: 1, face: 2, color: 0x00ff00, plies: 7, layer: 3, step: 1 },
+  ])
+  const at = baked.find((r) => r.frame === 0)!
+  assert.equal(at.plies, undefined)
+  assert.equal(at.layer, undefined)
+  assert.equal(at.step, undefined)
+  assert.equal((at.faceColor as (number | null)[])[2], 0x00ff00, 'but the paint lands')
+  // a plain (non-element) row still carries its extras through
+  const plain = rasterizeRows([
+    { id: 'p', event: 'create', beat: 1, shape: 'origami', mine: 5 },
+  ]).find((r) => r.frame === 0)!
+  assert.equal(plain.mine, 5)
+})

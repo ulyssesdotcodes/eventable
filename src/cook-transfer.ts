@@ -5,11 +5,9 @@
 // symbol-keyed row lineage — carried as a $lineage field; and Table instances
 // — sent as { name, rows }.
 //
-// Identity matters: rasterize stamps the SAME compiled program object (megabytes
-// of baked origami keyframes) onto every dense frame row. Structured clone
-// serializes a shared object once — but only if packing preserves the sharing,
-// so pack/unpack memoize per object. Naive per-row deep copies multiplied the
-// program by the frame count and blew postMessage out of memory.
+// Identity still matters: a value a scene column holds for the whole run —
+// the compiled origami program is megabytes — is one entry in the frame store,
+// and pack/unpack memoize per object so it stays one object on the wire.
 
 import { Table } from './dsl.js'
 import { getLineage, withLineage, type Row } from './lineage.js'
@@ -20,11 +18,17 @@ const LINEAGE_KEY = '$lineage'
 
 type Memo = Map<object, unknown>
 
+// Typed arrays are structured-clone natives: walking them like a plain object
+// would rebuild each one as { 0: …, 1: … }, which is both far larger on the
+// wire and no longer a typed array on the other side.
+const isTypedArray = (v: object): boolean => ArrayBuffer.isView(v) && !(v instanceof DataView)
+
 function packValue(v: unknown, memo: Memo): unknown {
   if (typeof v === 'function') return { [FN_KEY]: String(v) }
   if (v === null || typeof v !== 'object') return v
   const hit = memo.get(v)
   if (hit !== undefined) return hit
+  if (isTypedArray(v)) { memo.set(v, v); return v }
   if (Array.isArray(v)) {
     const out: unknown[] = []
     memo.set(v, out)
@@ -43,6 +47,7 @@ function unpackValue(v: unknown, memo: Memo): unknown {
   if (v === null || typeof v !== 'object') return v
   const hit = memo.get(v)
   if (hit !== undefined) return hit
+  if (isTypedArray(v)) { memo.set(v, v); return v }
   if (Array.isArray(v)) {
     const out: unknown[] = []
     memo.set(v, out)
@@ -89,7 +94,7 @@ export interface PackedCook {
   // rows: null points at a packed view by name; an anonymous .graph(table)
   // target carries its own rows.
   graphs: Array<{ viewName: string | null; columns: string[]; rows: Row[] | null }>
-  sceneRows: Row[]
+  scene: unknown
   timelineRows: Row[]
   hydraRows: Row[]
   baubleRows: Row[]
@@ -110,7 +115,7 @@ export function packCooked(cooked: CookedResult): PackedCook {
   return {
     views,
     graphs,
-    sceneRows: packRows(cooked.sceneRows, memo),
+    scene: packValue(cooked.scene, memo),
     timelineRows: packRows(cooked.timelineRows, memo),
     hydraRows: packRows(cooked.hydraRows, memo),
     baubleRows: packRows(cooked.baubleRows, memo),
@@ -134,7 +139,7 @@ export function unpackCooked(packed: PackedCook): CookedResult {
   return {
     views,
     graphs,
-    sceneRows: unpackRows(packed.sceneRows, memo),
+    scene: unpackValue(packed.scene, memo) as CookedResult['scene'],
     timelineRows: unpackRows(packed.timelineRows, memo),
     hydraRows: unpackRows(packed.hydraRows, memo),
     // ?? tolerates a stale worker bundle from before bauble/post/sigs existed.

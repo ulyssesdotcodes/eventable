@@ -1,4 +1,5 @@
 import { test } from 'node:test'
+import { storeRows } from '../src/rasterize.js'
 import assert from 'node:assert/strict'
 import { createRuntime } from '../src/runtime.js'
 import { cookProgram } from '../src/replay.js'
@@ -15,8 +16,8 @@ test('cookProgram resolves the scene cache and is deterministic per seed', () =>
   const rt = createRuntime()
   const a = cookProgram(rt, PROG(8), 123)
   const b = cookProgram(rt, PROG(8), 123)
-  assert.ok(a.sceneRows.length > 0)
-  assert.deepEqual(a.sceneRows, b.sceneRows)
+  assert.ok(a.scene.objects.length > 0)
+  assert.deepEqual(storeRows(a.scene), storeRows(b.scene))
   assert.deepEqual(
     a.views.get('noise')!.rows.map((r) => r.value),
     b.views.get('noise')!.rows.map((r) => r.value),
@@ -44,8 +45,8 @@ test('cookProgram falls back to rasterizing the three table when there is no sce
       color: 1, px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 }]))
   `
   const cooked = cookProgram(rt, code, 1)
-  assert.ok(cooked.sceneRows.length > 0, 'three table rasterized into a cache')
-  assert.equal(cooked.sceneRows[0].shape, 'box')
+  assert.ok(cooked.scene.objects.length > 0, 'the three table became a scene store')
+  assert.equal(storeRows(cooked.scene)[0].shape, 'box')
 })
 
 test('the legacy "events" table name still cooks into the scene cache', () => {
@@ -55,7 +56,7 @@ test('the legacy "events" table name still cooks into the scene cache', () => {
       color: 1, px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 }]))
   `
   const cooked = cookProgram(rt, code, 1)
-  assert.ok(cooked.sceneRows.length > 0, 'saved sessions using "events" still render')
+  assert.ok(cooked.scene.objects.length > 0, 'saved sessions using "events" still render')
 })
 
 test('outX() routing feeds the consumers with no define() and no names', () => {
@@ -65,8 +66,8 @@ test('outX() routing feeds the consumers with no define() and no names', () => {
     table([{ beat: 1, event: "setCode", code: "osc().out()" }]).outHydra()
   `
   const cooked = cookProgram(rt, code, 1)
-  assert.ok(cooked.sceneRows.length > 0, 'routed three table rasterized into the scene cache')
-  assert.equal(cooked.sceneRows[0].shape, 'box')
+  assert.ok(cooked.scene.objects.length > 0, 'a routed three table becomes the scene store')
+  assert.equal(storeRows(cooked.scene)[0].shape, 'box')
   assert.equal(cooked.hydraRows.length, 1)
   assert.equal(cooked.hydraRows[0].code, 'osc().out()')
 })
@@ -105,7 +106,7 @@ test('cookProgram surfaces the hydra setCode/setVariable rows from the "hydra" v
   assert.equal(cooked.hydraRows.length, 2)
   assert.equal(cooked.hydraRows[0].code, 'src(s0).modulate(noise(amount)).out()')
   assert.equal(cooked.hydraRows[1].value, 3)
-  assert.ok(cooked.sceneRows.every((r) => r.id === 's'))
+  assert.ok(cooked.scene.objects.every((o) => o.id === 's'))
 })
 
 test('hydra variables can be data-driven from another view without cycling', () => {

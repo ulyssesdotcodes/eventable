@@ -443,3 +443,25 @@ test('face rows carry ply depth, distinct from the stacking rank', () => {
   assert.ok(faces.some((r) => r.moving), 'the fold moves something')
   assert.ok(faces.some((r) => !r.moving), 'and leaves something still')
 })
+
+// The paper is addressable as corners, creases and faces — one numbering,
+// shared by the rows and the renderer, meaningful only inside its own fold.
+test('every fold reports its corners, creases and faces in one numbering', () => {
+  const program = compileFoldTable([
+    { step: 'diag', p1: '0,0', p2: '1,1', move: '0.667,0.333' },
+    { step: 'rev', p1: '0,0.5', p2: '1,0.5', move: '0.333,0.167', kind: 'reverse' },
+  ])
+  for (let k = 0; k < program.steps.length; k++) {
+    const verts = program.verts.filter((r) => r.step === k)
+    const faces = program.faces.filter((r) => r.step === k)
+    assert.equal(faces.length, program.steps[k].FV.length, 'one row per face')
+    assert.equal(verts.length, program.steps[k].Vfrom.length, 'one row per corner')
+    // every corner a face names has a row, and the numbering is the same one
+    for (const F of program.steps[k].FV) {
+      for (const vi of F) assert.ok(verts.some((r) => r.vert === vi), `corner ${vi} has a row`)
+    }
+    // the fold turns the paper about its hinge corners, so a fold has some
+    assert.ok(verts.some((r) => r.hinge), 'the fold line runs through corners')
+    assert.ok(verts.some((r) => r.moving), 'and some corners belong to moving paper')
+  }
+})

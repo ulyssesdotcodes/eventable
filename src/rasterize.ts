@@ -26,7 +26,7 @@ function easeFnOf(e: unknown): ((t: number) => number) | null {
 interface SampledState {
   fields: Row
   sources: Row[]
-  parts: { face: (number | null)[]; edge: (number | null)[] } | null
+  parts: Record<PartKind, (number | null)[]> | null
 }
 
 // Fields rasterize interprets itself. Anything else — a custom field, or a
@@ -36,15 +36,25 @@ interface SampledState {
 const RESERVED = new Set([
   'id', 'event', 'beat', 'loop', 'dur', 'ease', 'to', 'shape', 'color',
   'px', 'py', 'pz', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz', 'frame',
-  // sub-object handles: interpreted into faceColor/edgeColor, never carried
-  'face', 'edge',
+  // element handles: interpreted into vertColor/faceColor/edgeColor
+  'vert', 'face', 'edge',
 ])
 
+type PartKind = 'vert' | 'face' | 'edge'
+const partKey = (e: Row): PartKind | null =>
+  typeof e.vert === 'number' ? 'vert'
+    : typeof e.face === 'number' ? 'face'
+      : typeof e.edge === 'number' ? 'edge' : null
+
 // Non-reserved fields visible at frame `i`: events at-or-before, last write wins.
+// An event addressing ONE element speaks only for that element, so its columns
+// stay out of the object's own state — otherwise painting a face by
+// origami().faces() would stamp that table's whole vocabulary (plies, layer,
+// sheetX, …) onto the paper itself.
 function gatherExtra(events: Row[], i: number): Row {
   const extra: Row = {}
   for (const e of events) {
-    if ((e.frame as number) > i) continue
+    if ((e.frame as number) > i || partKey(e)) continue
     for (const k in e) {
       if (!RESERVED.has(k)) extra[k] = e[k]
     }
@@ -78,9 +88,6 @@ function buildTimelines(events: Row[]): Map<unknown, Row[]> {
 
 // A `color` row carrying `face`/`edge` paints one element of the object, not
 // the object — it must not reach the whole-object color, and vice versa.
-const partKey = (e: Row): 'face' | 'edge' | null =>
-  typeof e.face === 'number' ? 'face' : typeof e.edge === 'number' ? 'edge' : null
-
 // One element's pulse at frame i. With `dur` it fades toward `to` — or, unset,
 // toward the object's own color — and RELEASES the element when it lands, so
 // the paint hands back to whatever the shape would have drawn. Without `dur`
@@ -103,8 +110,8 @@ function partPulseAt(colorEv: Row, objColor: number | null, i: number): number |
 // Per-element colors at frame i, indexed by element number (null = unpainted).
 function samplePartColors(
   events: Row[], createEv: Row, i: number,
-): { face: (number | null)[]; edge: (number | null)[] } {
-  const out = { face: [] as (number | null)[], edge: [] as (number | null)[] }
+): Record<PartKind, (number | null)[]> {
+  const out: Record<PartKind, (number | null)[]> = { vert: [], face: [], edge: [] }
   const objColor = (createEv.color as number | null | undefined) ?? null
   for (const e of events) {
     if (e.event !== 'color' || (e.frame as number) > i) continue
@@ -236,90 +243,184 @@ function sampleObject(events: Row[], i: number, extent: number): SampledState | 
   return { fields, sources: [...sources], parts }
 }
 
-export function rasterizeRows(eventRows: Row[] | null | undefined, maxBeats?: number): Row[] {
+// ── The frame store ─────────────────────────────────────────────────────────
+// A column of one object, run-length encoded: `at[i]` is the frame its value
+// starts on, `val[i]` the value it holds until the next run. Most columns of
+// most objects never change at all — a static prop is one run per column, and
+// even the crane holds 15 of its 35 columns constant for the whole folding —
+// so the dense bake was storing the same value ~1,500 times over.
+interface Track {
+  at: number[]
+  val: unknown[]
+}
+
+interface ObjectTracks {
+  id: unknown
+  born: number
+  dies: number            // exclusive: the frame it stops being drawn
+  cols: Record<string, Track>
+  sources: Row[]
+}
+
+export interface FrameStore {
+  objects: ObjectTracks[]
+  maxFrame: number
+}
+
+// Fields eased between whole frames; everything else steps. The runs hold the
+// exact per-frame values either way — this only decides what a FRACTIONAL
+// frame does, so playback stays smooth when the playhead crosses frames slower
+// than one per render.
+const INTERP_FIELDS = new Set(['px', 'py', 'pz', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'])
+
+const pushRun = (cols: Record<string, Track>, key: string, frame: number, value: unknown): void => {
+  let t = cols[key]
+  if (!t) { t = { at: [], val: [] }; cols[key] = t }
+  if (t.at.length && t.val[t.val.length - 1] === value) return
+  t.at.push(frame)
+  t.val.push(value)
+}
+
+// Value of a track at a whole frame: the last run starting at or before it.
+const runAt = (t: Track, frame: number): { i: number; v: unknown } | null => {
+  let lo = 0, hi = t.at.length - 1, found = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (t.at[mid] <= frame) { found = mid; lo = mid + 1 } else hi = mid - 1
+  }
+  return found < 0 ? null : { i: found, v: t.val[found] }
+}
+
+export function buildFrameStore(
+  eventRows: Row[] | null | undefined, maxBeats?: number,
+): FrameStore {
   const events = (eventRows ?? []).map(toFrameEvent)
   // Bake out to the largest event frame, or at least the last frame a
   // `maxBeats` loop samples (its span EXCLUSIVE — frame span belongs to the
   // next pass, and pad frames reaching it would spuriously add one). How the
   // extent chops into passes is playback's concern.
-  const max = Math.max(
+  const maxFrame = Math.max(
     maxBeats != null ? Math.max(0, beatsToFrames(maxBeats) - 1) : 0,
     events.reduce((m, e) => Math.max(m, (e.frame as number) ?? 0), 0),
   )
-  const timelines = buildTimelines(events)
-
-  const out: Row[] = []
-  const lastParts = new Map<unknown, { face: (number | null)[]; edge: (number | null)[] }>()
-  for (let frame = 0; frame <= max; frame++) {
-    for (const evs of timelines.values()) {
-      const s = sampleObject(evs, frame, max)
-      if (!s) continue
-      // Drop the sparse `beat` keyframe field (and any legacy `loop`); the
-      // dense cache is keyed by `frame`.
+  const objects: ObjectTracks[] = []
+  for (const evs of buildTimelines(events).values()) {
+    const o: ObjectTracks = {
+      id: evs[0].id, born: -1, dies: maxFrame + 1, cols: {}, sources: [],
+    }
+    const seenSource = new Set<Row>()
+    let parts: Record<PartKind, (number | null)[]> = { vert: [], face: [], edge: [] }
+    for (let frame = 0; frame <= maxFrame; frame++) {
+      const s = sampleObject(evs, frame, maxFrame)
+      if (!s) {
+        if (o.born >= 0 && o.dies > maxFrame) o.dies = frame
+        continue
+      }
+      if (o.born < 0) o.born = frame
+      for (const r of s.sources) if (!seenSource.has(r)) { seenSource.add(r); o.sources.push(r) }
+      // `beat` is the sparse keyframe field and `loop` the retired pass column;
+      // the store is keyed by frame.
       const { beat: _beat, loop: _loop, ...fields } = s.fields
       if (s.parts) {
-        const prev = lastParts.get(evs[0].id)
-        const shared = {
-          face: sharedIfSame(prev?.face, s.parts.face),
-          edge: sharedIfSame(prev?.edge, s.parts.edge),
+        parts = {
+          vert: sharedIfSame(parts.vert, s.parts.vert),
+          face: sharedIfSame(parts.face, s.parts.face),
+          edge: sharedIfSame(parts.edge, s.parts.edge),
         }
-        lastParts.set(evs[0].id, shared)
-        if (shared.face.length) fields.faceColor = shared.face
-        if (shared.edge.length) fields.edgeColor = shared.edge
+        if (parts.vert.length) fields.vertColor = parts.vert
+        if (parts.face.length) fields.faceColor = parts.face
+        if (parts.edge.length) fields.edgeColor = parts.edge
       }
-      out.push(withLineage({ ...fields, frame, id: evs[0].id }, unionLineage(s.sources)))
+      for (const k in fields) pushRun(o.cols, k, frame, fields[k])
+    }
+    if (o.born >= 0) objects.push(o)
+  }
+  return { objects, maxFrame }
+}
+
+// Rebuild a dense row per object per frame — what `.rasterize()` hands a user
+// program, and the shape every consumer outside playback still expects.
+export function storeRows(store: FrameStore): Row[] {
+  const out: Row[] = []
+  for (let frame = 0; frame <= store.maxFrame; frame++) {
+    for (const o of store.objects) {
+      const row = rowAt(o, frame)
+      if (row) out.push(row)
     }
   }
   return out
 }
 
-export interface FrameIndex {
-  map: Map<number, Row[]>
-  // Total extent of the baked cache in frames.
-  maxFrame: number
-}
-
-export function buildFrameIndex(sceneRows: Row[]): FrameIndex {
-  const map = new Map<number, Row[]>()
-  let maxFrame = 0
-  for (const r of sceneRows ?? []) {
-    const f = (r.frame as number | undefined) ?? 0
-    if (!map.has(f)) map.set(f, [])
-    map.get(f)!.push(r)
-    if (f > maxFrame) maxFrame = f
-  }
-  return { map, maxFrame }
-}
-
-// Fields interpolated between adjacent cache frames; everything else is
-// discrete (takes the earlier frame's value, never a blend).
-const INTERP_FIELDS = ['px', 'py', 'pz', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'] as const
-
-// State at a *fractional* frame: the floored frame's rows with transforms
-// eased toward the next frame — keeps motion smooth when the playhead crosses
-// cache frames slower than one-per-render. An object absent at the next frame
-// (about to be destroyed) is left un-eased.
-export function sampleFrame(frameIndex: FrameIndex, frameFloat: number): Row[] {
+function rowAt(o: ObjectTracks, frameFloat: number): Row | null {
   const f0 = Math.floor(frameFloat)
-  if (f0 < 0) return []
-  const a = frameIndex.map.get(f0) ?? []
+  if (f0 < o.born || f0 >= o.dies) return null
   const frac = frameFloat - f0
-  if (frac <= 0 || f0 >= frameIndex.maxFrame) return a
-
-  const b = frameIndex.map.get(f0 + 1)
-  if (!b) return a
-  const bById = new Map(b.map((r) => [r.id, r]))
-  return a.map((row) => {
-    const next = bById.get(row.id)
-    if (!next) return row
-    let out: Row | null = null
-    for (const k of INTERP_FIELDS) {
-      const va = row[k], vb = next[k]
-      if (typeof va === 'number' && typeof vb === 'number' && va !== vb) {
-        out ??= { ...row }
-        out[k] = va + (vb - va) * frac
-      }
+  const row: Row = {}
+  for (const k in o.cols) {
+    const t = o.cols[k]
+    const hit = runAt(t, f0)
+    if (!hit) continue
+    let v = hit.v
+    if (frac > 0 && INTERP_FIELDS.has(k) && typeof v === 'number') {
+      // the next whole frame's value, which is this run's unless one starts on it
+      const nx = t.at[hit.i + 1] === f0 + 1 ? t.val[hit.i + 1] : v
+      if (typeof nx === 'number' && nx !== v) v = v + (nx - v) * frac
     }
-    return out ?? row
-  })
+    row[k] = v
+  }
+  row.frame = frameFloat
+  row.id = o.id
+  return withLineage(row, unionLineage(o.sources))
+}
+
+export function rasterizeRows(eventRows: Row[] | null | undefined, maxBeats?: number): Row[] {
+  return storeRows(buildFrameStore(eventRows, maxBeats))
+}
+
+export type FrameIndex = FrameStore
+
+/**
+ * Index a scene table for the playhead. Takes either the SPARSE event rows
+ * (schemas.scene) or a table already densified by `.rasterize()` — a program
+ * may name its own "scene" view — and stores both as runs.
+ */
+export function buildFrameIndex(rows: Row[] | null | undefined, maxBeats?: number): FrameStore {
+  const dense = (rows ?? []).some((r) => r.frame != null && r.beat == null)
+  return dense ? storeFromRows(rows ?? []) : buildFrameStore(rows, maxBeats)
+}
+
+// Densified rows are already one sample per frame; run-length them directly
+// rather than re-deriving anything.
+function storeFromRows(rows: Row[]): FrameStore {
+  const byId = new Map<unknown, ObjectTracks>()
+  const last = new Map<ObjectTracks, number>()
+  let maxFrame = 0
+  for (const r of rows) {
+    const frame = (r.frame as number | undefined) ?? 0
+    if (frame > maxFrame) maxFrame = frame
+    let o = byId.get(r.id)
+    if (!o) {
+      o = { id: r.id, born: frame, dies: Number.MAX_SAFE_INTEGER, cols: {}, sources: [] }
+      byId.set(r.id, o)
+    }
+    last.set(o, frame)
+    for (const k in r) {
+      if (k === 'frame' || k === 'id') continue
+      pushRun(o.cols, k, frame, r[k])
+    }
+  }
+  // a densified object that stops appearing has been destroyed there
+  for (const [o, lastFrame] of last) o.dies = lastFrame < maxFrame ? lastFrame + 1 : maxFrame + 1
+  return { objects: [...byId.values()], maxFrame }
+}
+
+/** State at a (possibly fractional) frame: one row per object alive there. */
+export function sampleFrame(store: FrameStore, frameFloat: number): Row[] {
+  if (frameFloat < 0 || Math.floor(frameFloat) > store.maxFrame) return []
+  const out: Row[] = []
+  for (const o of store.objects) {
+    const row = rowAt(o, frameFloat)
+    if (row) out.push(row)
+  }
+  return out
 }
