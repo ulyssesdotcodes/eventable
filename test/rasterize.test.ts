@@ -264,3 +264,52 @@ test('a maxBeats arg extends a shorter bake so the final pose holds to the loop\
   assert.equal(rows.at(-1)!.frame, 5)
   assert.equal(rows.find((r) => r.frame === 5)!.px, 2, 'held, not extrapolated')
 })
+
+// A `color` row carrying `face`/`edge` paints one element of the object, not
+// the object — this is what lets colouring be a table pipeline separate from
+// the one that spawns the shape.
+test('element color rows paint one element and leave the object alone', () => {
+  const baked = rasterizeRows([
+    { id: 'p', event: 'create', beat: 1, shape: 'origami', color: 0x111111 },
+    { id: 'p', event: 'color', beat: 1, face: 2, color: 0x00ff00 },
+    { id: 'p', event: 'color', beat: 1, edge: 5, color: 0x0000ff },
+  ])
+  const at = baked.find((r) => r.frame === 0)!
+  assert.equal(at.color, 0x111111, 'the object keeps its own colour')
+  assert.equal((at.faceColor as (number | null)[])[2], 0x00ff00)
+  assert.equal((at.edgeColor as (number | null)[])[5], 0x0000ff)
+  // the handles themselves never leak onto the baked row
+  assert.equal(at.face, undefined)
+  assert.equal(at.edge, undefined)
+})
+
+// The dense cache carries one element-colour list per frame; sharing the same
+// array across frames that did not change is what stops a per-face cache from
+// multiplying over the worker boundary (see cook-transfer's identity memo).
+test('element colors share one array across frames that do not change', () => {
+  const baked = rasterizeRows([
+    { id: 'p', event: 'create', beat: 1, shape: 'origami', color: 0x111111 },
+    { id: 'p', event: 'color', beat: 2, face: 0, color: 0xff0000, dur: 1, ease: 'linear' },
+  ], 4)
+  const rows = baked.filter((r) => r.id === 'p')
+  const arrays = new Set(rows.map((r) => r.faceColor))
+  assert.ok(arrays.size > 1, 'the pulse does change the colour')
+  assert.ok(arrays.size < rows.length / 2, `held frames reuse one array (${arrays.size} of ${rows.length})`)
+})
+
+// An element handle is not an identity — for a folding paper, face 3 is a
+// different piece of paper after the next fold. So a `dur` pulse must RELEASE
+// the element when it lands, or every fold's paint accumulates onto the next
+// fold's paper and the model ends up entirely painted.
+test('an element pulse releases its element when the decay lands', () => {
+  const baked = rasterizeRows([
+    { id: 'p', event: 'create', beat: 1, shape: 'origami', color: 0x111111 },
+    { id: 'p', event: 'color', beat: 1, face: 0, color: 0xff0000, dur: 2, ease: 'linear' },
+  ], 6)
+  const faceAt = (frame: number): number | null =>
+    ((baked.find((r) => r.frame === frame)!.faceColor as (number | null)[])?.[0]) ?? null
+  assert.equal(faceAt(0), 0xff0000, 'lands on its beat')
+  assert.ok(faceAt(30) !== 0xff0000 && faceAt(30) !== null, 'fades through')
+  assert.equal(faceAt(60), null, 'and lets go once the decay completes')
+  assert.equal(faceAt(120), null, 'staying released')
+})

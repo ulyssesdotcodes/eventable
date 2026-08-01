@@ -444,10 +444,13 @@ export interface FoldTableProgram {
   size: number
   initial: { FV: number[][]; V: Vec2[] }
   steps: FoldProgramStep[]
-  // Derived per-element attributes, one row per (step, face) and per
-  // (step, edge) — the same numbering the renderer draws with, so a row
-  // addresses exactly one face or crease of one fold. Face and edge indices
-  // mean nothing across steps: every fold re-splits the paper.
+  // What the folding knows about itself, as rows: one per fold, one per
+  // (fold, face), one per (fold, crease) — the same numbering the renderer
+  // draws with, so a row addresses exactly one element. All carry the fold's
+  // `beat`/`dur`, so they are already scene/post events once given an
+  // id+event. Face and edge numbers mean nothing across steps: every fold
+  // re-splits the paper.
+  folds: Row[]
   faces: Row[]
   edges: Row[]
   end: number        // beat when the last swing lands
@@ -551,15 +554,21 @@ export const parseFoldRows = (rows: Record<string, unknown>[]): FoldTableRowSpec
 // the renderer draws with, so a row addresses exactly one element — but only
 // within its own step, since the next fold re-splits the paper.
 const stepAttrs = (
-  k: number, name: string, out: FoldOutcome, Vdisp: Vec2[],
+  k: number, spec: FoldTableRowSpec, out: FoldOutcome, Vdisp: Vec2[],
 ): { faces: Row[]; edges: Row[] } => {
   const { FV, Ff, sheet, layers } = out.state
   const { moving, dirs, flap, layersFrom, EV, angleFrom, angleTo } = out.anim
+  const name = spec.name
+  // `beat`/`dur` place the row on the loop where its fold plays, so an
+  // attribute row is already a scene or post event: add id/event/color and
+  // route it. Every table the folding produces is timed the same way.
+  const beat = spec.beat
+  const dur = spec.dur
   const faces: Row[] = FV.map((F, face) => {
     const c = (V: Vec2[], axis: 0 | 1): number =>
       F.reduce((s, vi) => s + V[vi][axis], 0) / F.length
     return {
-      step: k, name, face,
+      step: k, name, beat, dur, face,
       moving: moving[face], flap: flap[face], dir: dirs[face],
       layer: layers[face], layerFrom: layersFrom[face],
       plies: out.plies[face], back: Ff[face],
@@ -581,7 +590,7 @@ const stepAttrs = (
     const a = Math.min(v0, v1), b = Math.max(v0, v1)
     const fs = inc.get(`${a},${b}`) ?? []
     return {
-      step: k, name, edge, a, b,
+      step: k, name, beat, dur, edge, a, b,
       // the creases this fold actually turns. Being ON the fold line is not
       // the same test: the line also cuts creases it merely passes through,
       // and a reverse fold opens a spine crease that is nowhere near it
@@ -605,6 +614,7 @@ export const compileFoldTable = (
   let st = initialState()
   const initial = { FV: st.FV.map((F) => [...F]), V: st.V.map(toDisplay) }
   const steps: FoldProgramStep[] = []
+  const folds: Row[] = []
   const faces: Row[] = []
   const edges: Row[] = []
   const reverses: ReverseRecord[] = []
@@ -661,9 +671,21 @@ export const compileFoldTable = (
       flipFrom: parity,
       flipTo,
     })
-    const attrs = stepAttrs(steps.length - 1, spec.name, out, stepMotion.Vfrom)
+    const k = steps.length - 1
+    const attrs = stepAttrs(k, spec, out, stepMotion.Vfrom)
     faces.push(...attrs.faces)
     edges.push(...attrs.edges)
+    folds.push({
+      step: k, name: spec.name, beat: spec.beat, dur: spec.dur, to: spec.to,
+      kind: out.type, states: out.nStates,
+      faces: out.state.FV.length,
+      moving: out.anim.moving.filter(Boolean).length,
+      flaps: new Set(out.anim.flap.filter((f) => f >= 0)).size,
+      layers: Math.max(...out.state.layers) + 1,
+      plies: Math.max(...out.plies),
+      flip: flipTo !== parity,
+      motion: soft ? (soft.zDirs ? 'mechanism' : 'relaxed') : 'rigid',
+    })
     parity = steps[steps.length - 1].flipTo
     const rec = reverseRecordOf(out)
     if (rec) reverses.push(rec)
@@ -685,7 +707,7 @@ export const compileFoldTable = (
     for (const l of step.layers) maxLayer = Math.max(maxLayer, l)
   }
   return {
-    kind: 'fold-table', size, initial, steps, faces, edges,
+    kind: 'fold-table', size, initial, steps, folds, faces, edges,
     end: steps.length > 0 ? steps[steps.length - 1].t1 : 1,
     gap: (STACK_DEPTH * size) / maxLayer,
     maxLayer,
@@ -991,15 +1013,11 @@ export const foldTablePositions = (
   // layer-offset direction per face when the motion carries one (mechanism
   // bakes); undefined = world z, as in flat states
   zDir?: [number, number, number][]
-  // which step's face numbering `FV` is; -1 for the unfolded sheet. The same
-  // arrays come back for every fold value inside a step, so a face index
-  // names one piece of paper for the whole swing and renumbers only when a
-  // fold lands.
+  // which step's face and edge numbering `FV` is; -1 for the unfolded sheet.
+  // The same arrays come back for every fold value inside a step, so an
+  // element number names one piece of paper for the whole swing and renumbers
+  // only when a fold lands.
   step: number
-  // fraction of THIS fold that has happened, 0 → 1. Normalized past both the
-  // turn-over window and a step that stops short of flat (`to`), so it always
-  // reaches 1 when the paper comes to rest — which raw `t` does not.
-  swing: number
 } => {
   const N = program.steps.length
   const mid = program.maxLayer / 2
@@ -1009,7 +1027,6 @@ export const foldTablePositions = (
       pos: program.initial.V.map((p) => [p[0], p[1], 0]),
       zOff: program.initial.FV.map(() => program.gap * (0 - mid)),
       step: -1,
-      swing: 0,
     }
   }
   const k = Math.min(Math.floor(fold), N - 1)
@@ -1061,15 +1078,7 @@ export const foldTablePositions = (
     pos = pos.map(rot)
     zDir = (zDir ?? step.FV.map((): [number, number, number] => [0, 0, 1])).map(rot)
   }
-  // `t` runs to the step's own end, which is `to` shrunk by the turn-over
-  // window — not to 1. Dividing by that end is what makes a step held at 90°
-  // (`to: 0.5`) still read as a finished fold once it comes to rest.
-  const tEnd = flipping ? Math.max(0, (step.to - FLIP_WINDOW) / (1 - FLIP_WINDOW)) : step.to
-  return {
-    FV: step.FV, pos, zOff, zDir,
-    step: k,
-    swing: tEnd > 0 ? Math.min(1, t / tEnd) : 1,
-  }
+  return { FV: step.FV, pos, zOff, zDir, step: k }
 }
 
 // The fold value a beat-timed schedule reaches at a given beat — steps swing
@@ -1082,4 +1091,55 @@ export const foldValueAt = (program: FoldTableProgram, beat: number): number => 
     v = i + to * Math.min(1, (beat - t0) / (t1 - t0))
   }
   return v
+}
+
+/**
+ * Attach each element's position to its own rows: `at` is a fraction of that
+ * row's OWN fold (0 the moment it starts, 1 where it lands), so one call
+ * samples every step at the same point in its swing. px/py/pz are where the
+ * renderer actually draws the element — layer offset and turn-over included —
+ * in the paper's own frame, before the object's px/py/pz and rotation.
+ */
+export const foldPointsAt = (
+  program: FoldTableProgram, rows: Row[], at: number,
+): Row[] => {
+  const u = Math.min(1, Math.max(0, at))
+  const cache = new Map<number, ReturnType<typeof foldTablePositions>>()
+  const sampled = (k: number): ReturnType<typeof foldTablePositions> => {
+    let s = cache.get(k)
+    if (!s) {
+      // fold 0 is the bare sheet, one face — geometrically the same paper as
+      // step 0 about to start, but numbered differently. Stay just inside the
+      // step so element numbers are the ones the rows were built from.
+      const f = k + u * program.steps[k].to
+      s = foldTablePositions(program, f > 0 ? f : Number.EPSILON)
+      cache.set(k, s)
+    }
+    return s
+  }
+  return rows.map((r) => {
+    const k = r.step as number
+    if (typeof k !== 'number' || !program.steps[k]) return r
+    const { FV, pos, zOff, zDir } = sampled(k)
+    // the element's vertices: a face's loop, or a crease's two ends
+    const vs = typeof r.face === 'number' ? FV[r.face]
+      : typeof r.a === 'number' && typeof r.b === 'number' ? [r.a, r.b]
+        : undefined
+    if (!vs) return r
+    // an edge takes the layer offset of a face that owns it, as the line
+    // renderer does; a face takes its own
+    const fi = typeof r.face === 'number' ? r.face
+      : FV.findIndex((F) => F.includes(vs[0]) && F.includes(vs[1]))
+    const off = fi >= 0 ? zOff[fi] : 0
+    const d = fi >= 0 && zDir ? zDir[fi] : undefined
+    const o: [number, number, number] = d
+      ? [d[0] * off, d[1] * off, d[2] * off]
+      : [0, 0, off]
+    let x = 0, y = 0, z = 0
+    for (const vi of vs) { x += pos[vi][0]; y += pos[vi][1]; z += pos[vi][2] }
+    return {
+      ...r,
+      px: x / vs.length + o[0], py: y / vs.length + o[1], pz: z / vs.length + o[2],
+    }
+  })
 }

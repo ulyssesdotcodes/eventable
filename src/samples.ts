@@ -477,34 +477,44 @@ editable("origami", schemas.origami)
 // holds the finished crane, then opens flat and folds itself all over
 // again.
 const paper = origami().steps(table("origami"))
+paper.spawn({ id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.356 })
+  .concat(paper.sequence())
+  .outThree()
 
-// The folding also KNOWS things about itself, and they come out as ordinary
-// tables. paper.faces() is one row per (fold, face): which faces swing on
-// that fold, how many sheets are stacked under each, which side shows.
-// Filter it, give the rows a \`color\`, and hand them back to spawn() — those
-// faces are painted while their fold is the one on screen. \`fade: 1\` swells
-// the paint in as the flap starts moving and out again as it lands, so the
-// paper tells you what is moving right now. Face numbers only mean something
-// inside their own step: every fold cuts the paper and renumbers it.
-const swinging = paper.faces()
+// The folding also KNOWS things about itself, and it comes out as ordinary
+// tables — paper.folds() one row per fold, paper.faces() one per (fold, face),
+// paper.edges() one per (fold, crease). Each row already carries its fold's
+// \`beat\` and \`dur\`, so adding an \`id\` and an \`event\` makes it a scene event
+// like any other. A "color" row carrying \`face\` recolours just that ONE face,
+// so painting the paper is its own pipeline — nothing above changes:
+//
+//     faces -> pick the ones that move -> give them a colour -> three
+//
+// \`dur\`/\`ease\` are the ordinary colour-pulse columns: the blue lands as the
+// flap starts moving and decays back over the swing. Face numbers only mean
+// something inside their own fold — every fold cuts the paper and renumbers it,
+// which is exactly why the rows carry the fold's beat with them.
+paper.faces()
   .filter({ moving: true })
-  .derive({ color: 0x2f6fff, fade: 1 })
+  .derive({ id: "crane", event: "color", color: 0x2f6fff, ease: "easeIn" })
   .save("swinging")
+  .outThree()
 
-// paper.edges() is the same for creases. \`folds\` is the honest "edges the
+// The same for creases, addressed by \`edge\`. \`folds\` is the honest "edges the
 // fold is on": the creases this fold actually TURNS, which is not the same as
 // the ones lying on the fold line — that line also cuts creases it merely
 // crosses, and a reverse fold opens a spine crease nowhere near it.
-const creasing = paper.edges()
+paper.edges()
   .filter({ folds: true })
-  .derive({ color: 0x2f6fff, fade: 1 })
-
-paper.spawn({
-  id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.356,
-  faces: swinging, edges: creasing,
-})
-  .concat(paper.sequence())
+  .derive({ id: "crane", event: "color", color: 0x2f6fff, ease: "easeIn" })
   .outThree()
+
+// One row per fold drives the post chain the same way: a glow that pulses
+// while each fold is in progress. paper.folds() -> post, no scene involved.
+rows([{ beat: 1, event: "setCode", code: "bloom((p) => p.glow, 0.5, 0.7)" },
+      { beat: 1, event: "setVariable", name: "glow", value: 0 }])
+  .concat(paper.folds().derive({ event: "pulse", name: "glow", value: 0.9, ease: "easeOut" }))
+  .outPost()
 
 // A whisper of video feedback (the rendered scene is hydra's s0) so the
 // paper leaves faint trails as it moves — routed with .outHydra(); delete
@@ -527,10 +537,9 @@ rows([
 //   - Slow a step down: give "neck" dur: 6 and watch the reverse fold
 //     swing through.
 //
-// Things to try with the paint, live in the code (the "swinging" tab shows
-// the rows you are painting with):
-//   - Change 0x2f6fff, or set \`fade: 0\` to hold the colour for the whole
-//     fold instead of pulsing it.
+// Things to try with what the folding knows (the "swinging" tab shows the
+// rows being painted with):
+//   - Change 0x2f6fff, or drop \`ease\` for a hard switch that stays put.
 //   - Colour by thickness instead of motion — the deep stacks glow:
 //       paper.faces().derive({ color: field("plies").gt(20)
 //         .cond(0xff8800, 0x223344) })
@@ -538,10 +547,15 @@ rows([
 //       paper.edges().filter({ folds: true })
 //         .derive({ color: field("mv").eq("M").cond(0xff3b30, 0x2f6fff) })
 //   - Paint one flap: .filter(field("flap").eq(0)) instead of { moving: true }.
+//   - Where a face IS, not just what it is: \`at\` samples each face partway
+//     through its OWN fold and adds px/py/pz, so the camera can chase the
+//     flap that is moving (paper frame, before the crane's own placement):
+//       paper.faces({ at: 0.5 }).filter({ moving: true })
+//         .derive({ id: "cam", event: "update", shape: "camera",
+//                   tx: field("px"), ty: field("py"), tz: field("pz") })
+//         .outThree()
 //   - It's a table, so graph it — watch the stack deepen fold by fold:
-//       paper.faces().groupBy("step")
-//         .agg({ deepest: rs => Math.max(...rs.map(r => r.plies)) })
-//         .graph("deepest")
+//       paper.folds().graph("plies")
 `,
     tables: {
       origami: [
