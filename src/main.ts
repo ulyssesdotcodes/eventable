@@ -301,10 +301,12 @@ const tablePanel = createTablePanel(editableStore, {
   host,
   targetFor: cellTarget,
   loopBeats: () => loopBeatsFromEvents(editableStore.get(ACTIVITY_TABLE)?.events ?? []) ?? DEFAULT_LOOP_BEATS,
-  onCtrlEnter: () => {
-    // Ctrl-Enter from the grid runs whatever is promoted; with nothing
-    // promoted it is still "Run the program".
-    if (host.promoted()) host.commit()
+  onApply: () => {
+    // A dirty editor applies its buffer (whose commit re-runs anyway); anything
+    // else — nothing promoted, or a promoted cell with no un-applied text — is
+    // still "Run the program", which is what lands pending store edits.
+    const label = host.promoted()
+    if (label != null && host.dirty(label)) host.commit()
     else void evaluate(currentProgram(), { setError, seed: liveSeed })
   },
   onSelectTable: (name) => {

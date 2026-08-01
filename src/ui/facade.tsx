@@ -147,10 +147,10 @@ function PromotedSurface(props: { host: EditorHost; target: EditTarget; onClose:
 }
 
 // One row's code, statically highlighted and capped in height, inside that
-// row's card — so the row's own cells above it already say which row this is
-// and the facade shows only the code and its Apply. Clicking it hands the live
-// view to that row; `onPromote` overrides that (mobile opens the popover
-// instead).
+// row's card — the row's own cells above it already say which row this is, so
+// the facade is only the code. Applying is the table header's one button, not
+// a per-row one. Clicking hands the live view to that row; `onPromote`
+// overrides that (mobile opens the popover instead).
 export function CodeFacade(props: {
   host: EditorHost
   target: EditTarget
@@ -186,15 +186,6 @@ export function CodeFacade(props: {
 
   return (
     <div class="code-facade" classList={{ 'facade-live': live(), previewing: !!preview() }} data-lang={props.target.lang} ref={facade}>
-      <div class="facade-head">
-        <button
-          class="run-btn facade-run"
-          disabled={!props.host.dirty(props.target.label)}
-          onClick={() => props.host.commit()}
-        >
-          Apply
-        </button>
-      </div>
       <pre class="facade-code" ref={pre} tabindex="0" onClick={open} onFocus={open} />
       <div class="editor-mount" ref={mount} />
       <Show when={props.host.error(props.target.label)}>

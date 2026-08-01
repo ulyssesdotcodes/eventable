@@ -843,14 +843,6 @@ html, body {
 .code-facade[data-lang='post'] { border-left-color: #b78ce0; }
 .code-facade[data-lang='expr'] { border-left-color: #5bb6e0; }
 
-.facade-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
-  overflow: hidden;
-}
-
 .editor-surface-label {
   color: #8ca0b8;
   font-family: monospace;
@@ -881,11 +873,6 @@ html, body {
 
 .facade-context:last-of-type {
   margin-right: auto;
-}
-
-.facade-run {
-  padding: 1px 10px;
-  font-size: 11px;
 }
 
 .facade-code {
@@ -1110,7 +1097,9 @@ html, body {
   flex-shrink: 0;
 }
 
-.table-pane-chrome.collapsed {
+/* Collapsing hides the session/room authoring row; the run scrubber stays —
+   scrubbing runs is a performance control, not authoring chrome. */
+.table-pane-chrome.collapsed .session-selector {
   display: none;
 }
 
@@ -1195,6 +1184,13 @@ html, body {
   font-size: 11px;
   font-family: monospace;
   margin-left: 8px;
+}
+
+.table-run {
+  padding: 1px 12px;
+  font-size: 11px;
+  margin-left: 8px;
+  flex-shrink: 0;
 }
 
 
@@ -1304,7 +1300,7 @@ html, body {
 
 .events-table {
   width: 100%;
-  min-width: 560px;
+  min-width: 420px;
   border-collapse: collapse;
   font-size: 11px;
 }
@@ -1355,7 +1351,7 @@ html, body {
 }
 
 .events-table td {
-  padding: 3px 6px;
+  padding: 3px 4px;
 }
 
 /* ── Editable tables ── */
@@ -1570,7 +1566,7 @@ html, body {
 .editable-col-head {
   display: table-cell;
   vertical-align: top;
-  max-width: 160px;
+  max-width: 110px;
 }
 
 .col-head-row {
@@ -1582,8 +1578,9 @@ html, body {
 .col-name-label {
   flex: 1;
   min-width: 0;
-  white-space: normal;
-  overflow-wrap: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: text;
   font-size: 10px;
   font-weight: 600;
@@ -1656,8 +1653,17 @@ html, body {
 .editable-cell {
   position: relative;
   cursor: pointer;
-  min-width: 60px;
-  max-width: 220px;
+  min-width: 44px;
+  max-width: 160px;
+}
+
+.editable-cell[data-type='number'] {
+  max-width: 90px;
+}
+
+.editable-cell[data-type='boolean'] {
+  min-width: 0;
+  width: 34px;
 }
 
 /* Multiplayer presence: who last edited this cell, comma-separated and named
@@ -1753,8 +1759,18 @@ html, body {
 /* Relevance: a cell whose column the row's event/type doesn't use (see
    isCellInert) — dimmed, but stays fully editable, clickable, and navigable. */
 .editable-cell.cell-inert .cell-value,
+.editable-cell.cell-inert .cell-bool,
 .editable-cell.cell-inert .cell-enum {
   opacity: 0.4;
+}
+
+/* A boolean is its checkbox — no word of text, so the column is a checkbox
+   wide (see colTrack). */
+.cell-bool {
+  display: block;
+  margin: 0 auto;
+  cursor: pointer;
+  accent-color: #2a70c0;
 }
 
 /* ── Editor list ── */
@@ -1896,21 +1912,8 @@ html, body {
 }
 
 .card-fields .row-actions {
-  justify-content: flex-end;
-}
-
-/* Apply only when there is something to apply: a disabled button per card is
-   chrome, and the head collapses to nothing without it. */
-.row-card .facade-head {
-  padding: 0 8px;
-}
-
-.row-card .facade-run {
-  margin-left: auto;
-}
-
-.row-card .facade-run:disabled {
-  display: none;
+  justify-content: flex-start;
+  padding-left: 2px;
 }
 
 /* The card is sized by its field grid (see the min-width above); containment
@@ -2189,15 +2192,25 @@ html, body {
 
 /* The bands' shared positioning context: its content box IS the beat axis
    every band and the ruler measure against (see beatToX), so it carries no
-   horizontal padding of its own. The pane gives up all the height the divider
-   asks for, and a program can stack ~9 bands, so the stack scrolls rather than
-   clipping its lower bands away with no affordance. */
+   horizontal padding of its own.
+
+   Its height is fixed at the ruler plus four bands whatever the program holds:
+   sizing to content meant every cook — and every band that stacked itself into
+   sub-lanes — moved the table pane below, under a pointer that was aiming at a
+   row. A taller stack scrolls; a shorter one leaves the space empty. */
 .timeline-sections {
+  --band-h: 32px;
+  --band-gap: 3px;
   position: relative;
   margin: 0 8px 6px;
+  /* Shrinkable, so dragging the divider for more table still scrolls this
+     stack rather than clipping it against the pane's overflow. */
+  flex: 0 1 auto;
+  min-height: 0;
+  height: calc(12px + 4 * (var(--band-h) + var(--band-gap)));
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--band-gap);
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -2239,6 +2252,12 @@ html, body {
   pointer-events: none;
 }
 
+/* An expanded band is many lanes tall; centring its overlay would park the
+   label and the collapse toggle on top of the middle lanes. */
+.timeline-strip-multilane .timeline-section-header {
+  align-items: flex-start;
+}
+
 .timeline-section-name {
   background: rgba(22, 33, 62, 0.72);
   border: none;
@@ -2270,6 +2289,33 @@ html, body {
   white-space: nowrap;
 }
 
+/* Expand/collapse a band's overlapping rows (see the lane note in
+   ui/timeline-pane.tsx); the number is how many lanes are stacked. */
+.timeline-section-lanes {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: rgba(22, 33, 62, 0.72);
+  border: none;
+  padding: 0 3px;
+  border-radius: 2px;
+  color: #8fa9c4;
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 14px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.timeline-section-lanes:hover {
+  color: #cfe0f0;
+}
+
+.timeline-section-lanes svg {
+  width: 9px;
+  height: 9px;
+}
+
 .timeline-section-canvas {
   position: absolute;
   inset: 0;
@@ -2296,7 +2342,7 @@ html, body {
 .timeline-strip {
   position: relative;
   width: 100%;
-  height: 32px;
+  height: var(--band-h);
   background: #1a3a5e;
   border-radius: 3px;
   outline: none;
@@ -2350,14 +2396,14 @@ html, body {
 }
 
 @media (min-width: 768px) {
-  .timeline-strip {
-    height: 22px;
+  .timeline-sections {
+    --band-h: 22px;
   }
 }
 
-/* A band whose own spans overlap stacks them into sub-lanes (packLanes) and
-   grows to fit, driven by --lane-rows. A single-lane band never sets this
-   class, so its height is exactly the rule above. */
+/* An *expanded* band's sub-lanes (packLanes), driven by --lane-rows — a
+   collapsed band never sets this class, so it stays exactly one band tall
+   however much it overlaps itself. */
 .timeline-strip-multilane {
   height: calc(var(--lane-rows, 1) * 24px);
 }

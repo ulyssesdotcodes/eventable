@@ -30,7 +30,10 @@ export interface TablePanelOptions {
   host: EditorHost
   // Loop length in beats, for the warp map's segment compile.
   loopBeats: () => number
-  onCtrlEnter?: () => void
+  // Apply: commit the promoted editor's buffer if it's dirty, otherwise re-run
+  // the program so un-applied store edits (a deleted row, a scrubbed number)
+  // land. The header's Apply button and Ctrl-Enter both go here.
+  onApply?: () => void
   // Fired when the shown tab changes (including the initial render), so this
   // replica can announce which table it has open.
   onSelectTable?: (name: string | null) => void

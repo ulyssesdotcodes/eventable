@@ -50,6 +50,16 @@ function PresenceNames(nameProps: { peers: PeerPresence[] }) {
   )
 }
 
+// Columns whose control is live in the cell itself — there is no inline editor
+// to open, so "edit this cell" just focuses the control.
+const isLiveCol = (c: EditableColumn): boolean => c.type === 'enum' || c.type === 'boolean'
+
+// A field column's grid track in the editor list. Booleans are a checkbox wide
+// and numbers rarely need more than a few digits — the side pane is narrow, so
+// the text columns get what those don't take.
+const colTrack = (c: EditableColumn): string =>
+  c.type === 'boolean' ? '34px' : c.type === 'number' ? 'minmax(44px, 0.5fr)' : 'minmax(64px, 1fr)'
+
 // Settings and scene import/export, rendered in the table pane's header.
 export interface PanelChrome {
   vimMode: boolean
@@ -134,9 +144,10 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   mobileQuery.addEventListener('change', onMobileChange)
   onCleanup(() => mobileQuery.removeEventListener('change', onMobileChange))
   const [graphCollapsed, setGraphCollapsed] = createSignal(mobileQuery.matches)
-  // Sessions + run history: authoring chrome, and on a phone it costs more
-  // rows than it is worth mid-performance (it lived in the editor pane, which
-  // was collapsed by default on mobile, before it moved here).
+  // The session row: authoring chrome, and on a phone it costs more rows than
+  // it is worth mid-performance (it lived in the editor pane, which was
+  // collapsed by default on mobile, before it moved here). The run scrubber
+  // below it stays either way.
   const [chromeCollapsed, setChromeCollapsed] = createSignal(mobileQuery.matches)
   // Mobile soft keyboards have no Tab key; on a coarse pointer a cell editor's
   // "next" action walks to the next cell in the row instead of closing to
@@ -234,11 +245,13 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     return editorList() ? cols.filter((c) => c.type !== 'code') : cols
   })
   // Separate grids don't share sizing, so every card's field line reads one
-  // track list off the container — that, plus the fixed row-tools track, is
-  // what keeps the columns aligned down the list under a single header.
+  // track list off the container — that, plus the leading row-tools track, is
+  // what keeps the columns aligned down the list under a single header. The
+  // trailing track is the header's "+ column"; cards leave it empty.
   const tracks = createMemo(() => [
-    ...fieldCols().map((c) => (c.type === 'number' || c.type === 'boolean' ? 'minmax(52px, 0.6fr)' : 'minmax(78px, 1fr)')),
-    '76px',
+    '54px',
+    ...fieldCols().map(colTrack),
+    'auto',
   ].join(' '))
 
   // Keep a just-opened editor focused across the async panel refresh a store
@@ -263,7 +276,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
 
   // Tab/Shift+Tab out of a cell editor (the caller commits first): move to
   // the adjacent column, wrapping to the next/previous display row. "="
-  // expression cells open in the main editor; every other type edits inline.
+  // expression cells open in the main editor, live columns just take focus,
+  // every other type edits inline.
   function advanceEdit(rowIndex: number, colName: string, dir: 1 | -1): void {
     const ed = editableData()
     if (!ed) return
@@ -282,6 +296,12 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
       nextIdx = dir > 0 ? 0 : cols.length - 1
     }
     const target = cols[nextIdx]
+    setFocusedCell({ row: nextRow, col: target.name })
+    if (isLiveCol(target)) {
+      setEditingCell(null)
+      focusLiveCell(nextRow, target.name)
+      return
+    }
     if (isExprCellText(data.rows[nextRow]?.[target.name])) {
       openCell(table, nextRow, target)
       return
@@ -295,6 +315,10 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
 
   const cellEl = (row: number, col: string): HTMLElement | null =>
     scrollEl?.querySelector<HTMLElement>(`.editable-cell[data-row="${row}"][data-col="${CSS.escape(col)}"]`) ?? null
+
+  const focusLiveCell = (row: number, col: string): void => {
+    cellEl(row, col)?.querySelector<HTMLElement>('select, input')?.focus()
+  }
 
   const scrollCellIntoView = (fc: CellFocus): void => {
     requestAnimationFrame(() => cellEl(fc.row, fc.col)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }))
@@ -343,7 +367,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   })
 
   // Enter on the focused cell: "=" expression cells open in the main editor,
-  // enums focus their live dropdown, everything else opens its inline editor.
+  // live columns focus their own control, everything else opens its inline
+  // editor.
   function beginEditFocused(): void {
     const fc = focusedCell()
     const ed = editableData()
@@ -355,8 +380,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
       openCell(ed.name, fc.row, col)
       return
     }
-    if (col.type === 'enum') {
-      cellEl(fc.row, col.name)?.querySelector('select')?.focus()
+    if (isLiveCol(col)) {
+      focusLiveCell(fc.row, col.name)
       return
     }
     const key = `${fc.row}::${col.name}`
@@ -369,9 +394,11 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
 
   function onGridKeyDown(e: KeyboardEvent): void {
     if (pickerOpen() || editingCell() != null) return
-    // A cell's own editor (or the enum dropdown) owns the keys while focused.
+    // A cell's own editor (or the enum dropdown) owns the keys while focused —
+    // including a promoted CodeMirror, whose editable surface is a
+    // contenteditable div living inside this scroller, not an <input>.
     const t = e.target as HTMLElement | null
-    if (t && t !== scrollEl && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return
+    if (t && t !== scrollEl && (/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) || t.isContentEditable)) return
     // "/" opens the table switcher from any table, editable or not.
     if (e.key === '/' && current()) { e.preventDefault(); setPickerOpen(true); return }
     // Cell navigation is an editable-table feature; read-only views just scroll.
@@ -519,6 +546,15 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
       : `${shown.length} row${shown.length === 1 ? '' : 's'}`
   })
 
+  // The header's Apply lights for un-applied text in the open editor *or*
+  // un-applied store edits — a deleted row, a timeline drag, a scrubbed number
+  // never touch an editor buffer, and Apply is the only way to land them.
+  const canApply = () => {
+    tick()
+    const label = props.host.promoted()
+    return (label != null && props.host.dirty(label)) || store.hasPendingEdits()
+  }
+
   // --- scroll/autoscroll -----------------------------------------------------
   let scrollEl: HTMLDivElement | undefined
   let suppressScrollEvent = false
@@ -635,11 +671,13 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
 
     return (
       <Dynamic component={colProps.tag} class="editable-col-head">
+        {/* The label is one ellipsised line — the pane is too narrow to spend
+            two rows of header on a long name, so the tooltip carries it. */}
         <div class="col-head-row">
           <Show
             when={renaming()}
             fallback={
-              <span class="col-name-label" title="Click to rename" onClick={() => setRenaming(true)}>
+              <span class="col-name-label" title={`${col.name} — click to rename`} onClick={() => setRenaming(true)}>
                 {col.name}
               </span>
             }
@@ -731,8 +769,9 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     )
   }
 
-  // One editable cell: click opens a typed editor in place; enums instead
-  // show an always-live dropdown so a value is one pick away mid-performance.
+  // One editable cell: click opens a typed editor in place; enums and booleans
+  // instead show an always-live dropdown/checkbox, so a value is one pick away
+  // mid-performance and a flag costs a checkbox of width instead of a word.
   // Committing appends a set-cell event to the store — the edit *is* the
   // event. Values that don't fit the column type get a `cell-invalid` marker.
   // A cell whose column the row's event/type ignores gets `cell-inert`
@@ -786,7 +825,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
         if (coarsePointer) advanceEdit(rowIndex, col.name, 1)
         else queueMicrotask(refocusGrid)
       }
-      if (e.key === 'Enter' && e.ctrlKey && props.onCtrlEnter) props.onCtrlEnter()
+      if (e.key === 'Enter' && e.ctrlKey && props.onApply) props.onApply()
     }
 
     // Collaborators whose last edit landed on this cell.
@@ -801,10 +840,11 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
         classList={{ editing: editing(), 'cell-invalid': invalid(), 'cell-focused': focused(), 'cell-inert': inert() }}
         data-row={rowIndex}
         data-col={col.name}
+        data-type={col.type}
         style={editors().length ? { outline: `2px solid ${editors()[0].color}`, 'outline-offset': '-2px' } : undefined}
         onClick={() => {
           setFocusedCell({ row: rowIndex, col: col.name })
-          if (editing() || col.type === 'enum') return
+          if (editing() || isLiveCol(col)) return
           // "=" expression cells edit in the roving editor, never the coercing
           // primitive editors.
           if (isExprCellText(raw())) openCell(table, rowIndex, col)
@@ -831,35 +871,32 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             </For>
           </select>
         </Show>
+        <Show when={col.type === 'boolean'}>
+          <input
+            type="checkbox"
+            class="cell-bool"
+            checked={!!raw()}
+            onChange={(e) => store.setCell(table, rowIndex, col.name, e.currentTarget.checked)}
+            onKeyDown={(e) => {
+              // No Space case: the browser toggles a checkbox itself.
+              if (e.key === 'Tab') {
+                e.preventDefault()
+                advanceEdit(rowIndex, col.name, e.shiftKey ? -1 : 1)
+              } else if (e.key === 'Enter' || e.key === 'Escape') {
+                e.preventDefault()
+                queueMicrotask(refocusGrid)
+              }
+            }}
+          />
+        </Show>
         <Show
-          when={col.type !== 'enum' && editing()}
+          when={!isLiveCol(col) && editing()}
           fallback={
-            <Show when={col.type !== 'enum'}>
+            <Show when={!isLiveCol(col)}>
               <span class="cell-value">{formatEditableCell(col.type, raw())}</span>
             </Show>
           }
         >
-          <Show when={col.type === 'boolean'}>
-            <input
-              type="checkbox"
-              checked={!!raw()}
-              ref={(el) => queueMicrotask(() => el.focus())}
-              onChange={(e) => commit(e.currentTarget.checked)}
-              onKeyDown={(e) => {
-                // A checkbox commits on toggle — Tab advances, Enter/Escape
-                // just close back to arrow-key navigation.
-                if (e.key === 'Tab') {
-                  e.preventDefault()
-                  setEditingCell(null)
-                  advanceEdit(rowIndex, col.name, e.shiftKey ? -1 : 1)
-                } else if (e.key === 'Enter' || e.key === 'Escape') {
-                  e.preventDefault()
-                  setEditingCell(null)
-                  queueMicrotask(refocusGrid)
-                }
-              }}
-            />
-          </Show>
           <Show when={col.type === 'number'}>
             {(() => {
               const cur = Number(raw()) || 0
@@ -1181,9 +1218,17 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
           />
           <span class="table-count">{countText()}</span>
           <button
+            class="run-btn table-run"
+            title="Apply the open editor and any un-applied table edits (Ctrl-Enter)"
+            disabled={!canApply()}
+            onClick={() => props.onApply?.()}
+          >
+            Apply
+          </button>
+          <button
             class="collapse-btn chrome-toggle"
-            title={chromeCollapsed() ? 'Show sessions and run history' : 'Hide sessions and run history'}
-            aria-label={chromeCollapsed() ? 'Show sessions and run history' : 'Hide sessions and run history'}
+            title={chromeCollapsed() ? 'Show the session row' : 'Hide the session row'}
+            aria-label={chromeCollapsed() ? 'Show the session row' : 'Hide the session row'}
             aria-expanded={!chromeCollapsed()}
             onClick={() => setChromeCollapsed((c) => !c)}
           >
@@ -1256,7 +1301,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
       </div>
       {/* Hidden with CSS rather than unmounted: the session selector, room chip
           and run bar are mounted once for the app's lifetime, same as this
-          panel. */}
+          panel. Collapsing drops the session row only — see the CSS. */}
       <div class="table-pane-chrome" classList={{ collapsed: chromeCollapsed() }}>{props.children}</div>
       <div class="tab-content">
         <Show when={pickerOpen()}>
@@ -1391,6 +1436,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
             {(ed) => (
               <div class="editor-list-wrap" style={{ '--tracks': tracks() }}>
                 <div class="editor-list-head">
+                  <div class="row-actions-head" />
                   <For each={fieldCols()}>
                     {(col) => <ColHeader tag="div" table={ed().name} col={col} />}
                   </For>
@@ -1401,12 +1447,12 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
                     {(i) => (
                       <div class="row-card" hidden={!edRowVisible(i)} classList={rowClasses(ed(), i)}>
                         <div class="card-fields">
-                          <For each={fieldCols()}>
-                            {(col) => <EditableCell tag="div" table={ed().name} rowIndex={i} col={col} />}
-                          </For>
                           <div class="row-actions">
                             <RowTools table={ed().name} rowIndex={i} />
                           </div>
+                          <For each={fieldCols()}>
+                            {(col) => <EditableCell tag="div" table={ed().name} rowIndex={i} col={col} />}
+                          </For>
                         </div>
                         <Index each={rowCodeTargets(i)}>
                           {(target) => (
@@ -1488,7 +1534,7 @@ export interface TablePanelController extends TablePanel, PanelProps {
 
 export function createTablePanel(
   editableStore: EditableTableStore,
-  { targetFor, host, loopBeats, onCtrlEnter, onSelectTable }: TablePanelOptions,
+  { targetFor, host, loopBeats, onApply, onSelectTable }: TablePanelOptions,
 ): TablePanelController {
   const [views, setViews] = createSignal<Map<string, Table>>(new Map())
   const [graphs, setGraphs] = createSignal<Map<string, GraphSpec>>(new Map())
@@ -1521,7 +1567,7 @@ export function createTablePanel(
     targetFor,
     host,
     loopBeats,
-    onCtrlEnter,
+    onApply,
     onSelectTable,
     registerGridFocus(fn: () => void): void {
       gridFocus = fn
