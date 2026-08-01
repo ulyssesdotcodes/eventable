@@ -469,6 +469,22 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     if (!after || foreign) props.host.demote()
   }, { defer: true }))
 
+  // Opening a one-editor table (the `code` table is the case that matters: its
+  // single row *is* the program) is opening its editor, so promote it rather
+  // than leaving a four-line preview to click. Only when the tab has exactly
+  // one — with several, which one to open would be a guess. Keyed on the tab
+  // alone, so an Escape stays escaped until the performer comes back. Not on a
+  // phone, where promoting means a full-screen popover over the table.
+  createEffect(on(current, () => {
+    if (isMobile()) return
+    requestAnimationFrame(() => {
+      const targets = codeTargets()
+      if (targets.length !== 1 || props.host.promoted()) return
+      const mount = scrollEl?.querySelector<HTMLElement>('.row-card:not([hidden]) .editor-mount')
+      if (mount) props.host.promote(targets[0], mount)
+    })
+  }))
+
   const roRowText = (i: number) =>
     roCols().map((c) => formatCell(c, shownRows()[i]?.[c])).join(' ').toLowerCase()
   const edRowText = (i: number) => {

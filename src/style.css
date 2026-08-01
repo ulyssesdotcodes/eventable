@@ -1848,6 +1848,34 @@ html, body {
   gap: 4px;
 }
 
+/* The `code` table's shape — one card, nothing below it. A fixed-height editor
+   there leaves the bottom half of the pane empty, so the lone card's live
+   editor takes that space instead (see the auto-promote in ui/table-panel.tsx:
+   this is the editor a performer lands in, not a preview). */
+.editor-list-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.editor-list:has(> .row-card:only-child),
+.editor-list > .row-card:only-child,
+.editor-list > .row-card:only-child > .code-facade {
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-list > .row-card:only-child {
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-list > .row-card:only-child > .facade-live .editor-mount {
+  flex: 1;
+  height: auto;
+  min-height: 180px;
+}
+
 .row-card {
   background: #13294b;
   border: 1px solid #1a3f6b;
