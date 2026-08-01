@@ -1165,140 +1165,107 @@ export const foldPointsAt = (
   })
 }
 
-// ── Baked mesh ──────────────────────────────────────────────────────────────
-// The folding, evaluated ahead of time into plain element data: topology per
-// step, vertex positions and per-face layer offsets sampled across each swing.
-// Keyed by FOLD VALUE rather than by frame, so retiming still works — a
-// timeline warps `fold`, and the reader lerps between the samples either side.
+// ── The folding as element rows ─────────────────────────────────────────────
+// The paper described the way everything else in a scene table is described:
+// one row per element, scalar columns, no nested geometry. A vertex is an
+// object with px/py/pz keyframes — which rasterize already interpolates and
+// the frame store already run-length encodes — and a face is a row naming the
+// vertices around it. The renderer groups by `of` and assembles; it needs to
+// know nothing about folding.
+//
+// Elements are numbered per FOLD, because every fold re-splits the paper, so
+// an element's id carries its step: "crane:s2:v12" is a different piece of
+// paper from "crane:s3:v12". Each lives only for its own fold.
 
-export interface MeshStep {
-  faces: number[][]     // face → vertex loop, for this step's numbering
-  // creases in the engine's canonical order, so an `edge` handle from
-  // origami().edges() finds the right line without the fold program
-  edges: [number, number][]
-  from: number          // fold value of sample 0
-  span: number          // fold value covered (the step's `to`)
-  samples: number
-  verts: Float32Array   // samples × nv × 3, display frame
-  offs: Float32Array    // samples × nf × 3, the layer nudge each face carries
-}
+// Positions are keyframed at this many points across a swing. px/py/pz are
+// interpolated fields, so playback eases between them; 32 puts the chord error
+// of a half-turn under a thousandth of the paper.
+const SWING_KEYS = 32
 
-export interface MeshAnim {
-  kind: 'mesh-anim'
-  initial: { faces: number[][]; edges: [number, number][]; verts: Float32Array; offs: Float32Array }
-  steps: MeshStep[]
-  end: number           // fold value where the last swing lands
-}
-
-// Samples per swing. The motion is already smooth at this density — a rigid
-// hinge is a circular arc and the chord error at 1/32 of a half-turn is under
-// a thousandth of the paper — and the exact flat states land on the endpoints,
-// which is what the clearance and integration tests pin.
-const MESH_SAMPLES = 32
-
-const flatten3 = (v: [number, number, number][]): Float32Array => {
-  const out = new Float32Array(v.length * 3)
-  for (let i = 0; i < v.length; ++i) {
-    out[i * 3] = v[i][0]; out[i * 3 + 1] = v[i][1]; out[i * 3 + 2] = v[i][2]
-  }
-  return out
-}
-
-const offsetsOf = (
-  nf: number, zOff: number[], zDir: [number, number, number][] | undefined,
-): Float32Array => {
-  const out = new Float32Array(nf * 3)
-  for (let fi = 0; fi < nf; ++fi) {
-    if (zDir) {
-      out[fi * 3] = zDir[fi][0] * zOff[fi]
-      out[fi * 3 + 1] = zDir[fi][1] * zOff[fi]
-      out[fi * 3 + 2] = zDir[fi][2] * zOff[fi]
-    } else {
-      out[fi * 3 + 2] = zOff[fi]
-    }
-  }
-  return out
-}
-
-export const bakeMeshAnim = (program: FoldTableProgram): MeshAnim => {
-  const at0 = foldTablePositions(program, 0)
-  const steps: MeshStep[] = program.steps.map((s, k) => {
-    const nv = s.Vfrom.length
-    const nf = s.FV.length
-    const samples = MESH_SAMPLES + 1
-    const verts = new Float32Array(samples * nv * 3)
-    const offs = new Float32Array(samples * nf * 3)
-    for (let i = 0; i < samples; ++i) {
-      // Stay strictly inside this step's fold range. Both ends are shared
-      // with a neighbour and belong to the neighbour's numbering: fold 0 is
-      // the bare single-face sheet, and fold k+1 is step k+1 about to start,
-      // already re-split. The geometry is continuous across both, so sampling
-      // a hair inside gives the same paper in the numbering these faces use.
-      const f = Math.min(
-        Math.max(Number.EPSILON, k + (i / MESH_SAMPLES) * s.to),
-        k + s.to - 1e-9)
-      const { pos, zOff, zDir } = foldTablePositions(program, f)
-      verts.set(flatten3(pos), i * nv * 3)
-      offs.set(offsetsOf(nf, zOff, zDir), i * nf * 3)
-    }
-    const edges = program.edges
-      .filter((r) => r.step === k)
-      .map((r): [number, number] => [r.a as number, r.b as number])
-    return { faces: s.FV.map((F) => [...F]), edges, from: k, span: s.to, samples, verts, offs }
-  })
-  return {
-    kind: 'mesh-anim',
-    initial: {
-      faces: program.initial.FV.map((F) => [...F]),
-      edges: [] as [number, number][],
-      verts: flatten3(at0.pos),
-      offs: offsetsOf(program.initial.FV.length, at0.zOff, at0.zDir),
-    },
-    steps,
-    end: program.steps.length ? program.steps.length - 1 + program.steps[program.steps.length - 1].to : 0,
-  }
+export interface ElementRowOpts {
+  id: unknown           // the owning object
+  size?: number
 }
 
 /**
- * The mesh at a fold value: this step's face list, and the vertex positions and
- * per-face offsets lerped between the two samples either side. Whole fold
- * values land exactly on a sample, so the flat states stay exact.
+ * Every vertex, face and crease of every fold, as ordinary scene event rows.
+ * Vertices carry beat-timed positions; faces and creases carry the topology
+ * that holds them together. Together with a `shape: "mesh"` object of the same
+ * `of` id, this is the whole paper — there is nothing else to send.
  */
-export const meshAt = (
-  m: MeshAnim, fold: number,
-): { faces: number[][]; edges: [number, number][]; verts: Float32Array; offs: Float32Array; step: number } => {
-  const N = m.steps.length
-  if (N === 0 || fold <= 0) {
-    const { faces, edges, verts, offs } = m.initial
-    return { faces, edges, verts, offs, step: -1 }
-  }
-  const k = Math.min(Math.floor(fold), N - 1)
-  const s = m.steps[k]
-  const u = s.span > 0 ? Math.min(1, Math.max(0, (fold - k) / s.span)) : 0
-  const x = u * (s.samples - 1)
-  const i0 = Math.min(s.samples - 1, Math.floor(x))
-  const i1 = Math.min(s.samples - 1, i0 + 1)
-  const t = x - i0
-  const nv = s.verts.length / s.samples
-  const nf = s.offs.length / s.samples
-  if (t === 0 || i0 === i1) {
-    return {
-      faces: s.faces,
-      edges: s.edges,
-      verts: s.verts.subarray(i0 * nv, i0 * nv + nv),
-      offs: s.offs.subarray(i0 * nf, i0 * nf + nf),
-      step: k,
+export const foldElementRows = (
+  program: FoldTableProgram, opts: ElementRowOpts,
+): Row[] => {
+  const of = opts.id
+  const out: Row[] = []
+  const eid = (k: number, s: string): string => `${String(of)}:s${k}:${s}`
+  // Every element exists for the whole run and is switched on for its own
+  // fold by a stepped `on` keyframe, rather than created and destroyed around
+  // it. Lifetimes cannot be warped — .retime() reversing a run would land a
+  // destroy before its create — but a VALUE warps like any other, so pingpong
+  // folds the paper back down the way it came.
+  const gate = (id: string, beat: number, on: number): Row =>
+    ({ id, of, event: 'update', beat, on, ease: 'step' })
+  program.steps.forEach((s, k) => {
+    const ends = k + 1 < program.steps.length ? program.steps[k + 1].t0 : undefined
+    const nv = s.Vfrom.length
+    // Topology is stated once and never moves: a triangle names three vertices
+    // and the face it belongs to. Fanning the polygons here rather than in the
+    // renderer keeps every column a number — no lists in cells, and the rows
+    // ARE the draw order.
+    const tris: { tri: number; face: number; v0: number; v1: number; v2: number }[] = []
+    s.FV.forEach((F, f) => {
+      for (let j = 1; j + 1 < F.length; ++j) {
+        tris.push({ tri: tris.length, face: f, v0: F[0], v1: F[j], v2: F[j + 1] })
+      }
+    })
+    const ids: string[] = []
+    for (let v = 0; v < nv; ++v) ids.push(eid(k, `v${v}`))
+    s.FV.forEach((_F, f) => ids.push(eid(k, `f${f}`)))
+    for (const t of tris) ids.push(eid(k, `t${t.tri}`))
+    const edges = program.edges.filter((r) => r.step === k)
+    for (const r of edges) ids.push(eid(k, `e${r.edge as number}`))
+
+    // everything appears at the top of the loop, dark, and lights up on its fold
+    for (let v = 0; v < nv; ++v) {
+      out.push({ id: eid(k, `v${v}`), of, event: 'create', beat: 1, vert: v, on: 0 })
     }
-  }
-  const verts = new Float32Array(nv)
-  const offs = new Float32Array(nf)
-  for (let j = 0; j < nv; ++j) {
-    const a = s.verts[i0 * nv + j], b = s.verts[i1 * nv + j]
-    verts[j] = a + (b - a) * t
-  }
-  for (let j = 0; j < nf; ++j) {
-    const a = s.offs[i0 * nf + j], b = s.offs[i1 * nf + j]
-    offs[j] = a + (b - a) * t
-  }
-  return { faces: s.faces, edges: s.edges, verts, offs, step: k }
+    s.FV.forEach((_F, f) => out.push({ id: eid(k, `f${f}`), of, event: 'create', beat: 1, face: f, on: 0 }))
+    for (const t of tris) out.push({ id: eid(k, `t${t.tri}`), of, event: 'create', beat: 1, on: 0, ...t })
+    for (const r of edges) {
+      out.push({
+        id: eid(k, `e${r.edge as number}`), of, event: 'create', beat: 1,
+        edge: r.edge, a: r.a, b: r.b, on: 0,
+      })
+    }
+    for (const id of ids) out.push(gate(id, s.t0, 1))
+    if (ends !== undefined) for (const id of ids) out.push(gate(id, ends, 0))
+
+    for (let i = 0; i <= SWING_KEYS; ++i) {
+      const fold = Math.min(
+        Math.max(Number.EPSILON, k + (i / SWING_KEYS) * s.to),
+        k + s.to - 1e-9)
+      const { pos, zOff, zDir } = foldTablePositions(program, fold)
+      const beat = s.t0 + (i / SWING_KEYS) * (s.t1 - s.t0)
+      // a vertex is shared by every face meeting there, so its position is
+      // stated once however many triangles use it
+      for (let v = 0; v < nv; ++v) {
+        out.push({
+          id: eid(k, `v${v}`), of, event: 'update', beat, vert: v,
+          px: pos[v][0], py: pos[v][1], pz: pos[v][2],
+        })
+      }
+      // the layer nudge each face rides on, easing with the swing
+      s.FV.forEach((_F, f) => {
+        out.push({
+          id: eid(k, `f${f}`), of, event: 'update', beat, face: f,
+          ox: zDir ? zDir[f][0] * zOff[f] : 0,
+          oy: zDir ? zDir[f][1] * zOff[f] : 0,
+          oz: zDir ? zDir[f][2] * zOff[f] : zOff[f],
+        })
+      })
+    }
+  })
+  return out
 }
+
