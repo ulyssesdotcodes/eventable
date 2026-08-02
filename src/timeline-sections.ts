@@ -59,6 +59,15 @@ export function sectionBeat(
 // playback, not against a content loop.
 const FLAT: PassState = { pass: 0, loops: 1 }
 
+// A mesh's geometry — its vertices, faces, triangles and creases, each linked
+// to the mesh by `of`, which is what makes `of` the whole test (only a create
+// row names which element it is; the position updates just carry `of`).
+// Thousands of them, nearly all on one beat, none of them something a person
+// places: the band was a wall of handles, and laying it out is what makes the
+// strip stall. The mesh keeps its own handle, and so does every colour pulse
+// painted onto it — a paint row addresses the mesh, so it names no `of`.
+const sceneEvents = (rows: Row[]): Row[] => rows.filter((r) => r.of == null)
+
 // The cooked outputs a section list reads — a structurally assignable subset of replay.ts's CookedResult.
 export interface CookedSectionData {
   views: ReadonlyMap<string, { rows: Row[] }>
@@ -78,6 +87,9 @@ export function sectionsFor(input: {
   // Apply. (The APPLIED rows the out bands place through are sectionLayout's
   // own argument, not a section's.)
   timelineRows: Row[]
+  // Live store rows of every fold table, by tab name — the same deal as
+  // `timelineRows`: they report the instructions, not a cooked output.
+  foldTables: { name: string; rows: Row[] }[]
   sliderRows: Row[]
   midiRows: Row[]
   passes: Partial<Record<VisualizerKind, PassState>>
@@ -99,8 +111,16 @@ export function sectionsFor(input: {
   if (placeable(input.timelineRows)) {
     sections.push({ name: 'timeline', kind: 'timeline', view: 'timeline', rows: input.timelineRows, pass: FLAT, drag: 'rows' })
   }
+  // The instructions a paper is folded by: one handle per fold, where the
+  // scene table has thousands per fold. This is the band worth reading for a
+  // folding — it is what a person wrote, and what they would move.
+  for (const t of input.foldTables) {
+    if (placeable(t.rows)) {
+      sections.push({ name: t.name, kind: 'events', view: t.name, rows: t.rows, pass: FLAT, drag: 'lineage' })
+    }
+  }
   for (const t of [
-    { name: 'three', view: viewOf('three', ['events']), rows: three?.rows ?? [], pass: passes.scene },
+    { name: 'three', view: viewOf('three', ['events']), rows: sceneEvents(three?.rows ?? []), pass: passes.scene },
     { name: 'hydra', view: viewOf('hydra'), rows: hydraRows, pass: passes.hydra },
     { name: 'bauble', view: viewOf('bauble'), rows: cooked.baubleRows, pass: passes.bauble },
     { name: 'post', view: viewOf('post'), rows: cooked.postRows, pass: passes.post },

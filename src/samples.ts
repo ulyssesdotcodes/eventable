@@ -514,14 +514,6 @@ rows([{ beat: 1, event: "setCode", code: "bloom((p) => p.glow, 0.5, 0.7)" },
   .concat(paper.folds().derive({ event: "pulse", name: "glow", value: 0.9, ease: "easeOut" }))
   .outPost()
 
-// A whisper of video feedback (the rendered scene is hydra's s0) so the
-// paper leaves faint trails as it moves — routed with .outHydra(); delete
-// these two lines for a clean look.
-rows([
-  { beat: 1, event: "setCode",
-    code: "src(s0).blend(src(o0).scale(1.003), 0.18).out(o0)" },
-]).outHydra()
-
 // Things to try, live in the "origami" tab:
 //   - Set the wings row's \`to\` to 1: the wings press flat, the classic
 //     pressed crane; 0.35 barely lifts them.
