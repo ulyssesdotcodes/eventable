@@ -696,6 +696,12 @@ const restateOnFinal = (
   return { faces: outFaces, edges: outEdges }
 }
 
+// A table of folds, by the columns that make a row one: a line to fold about
+// and a mark on the flap that moves. Everything else in schemas.origami is
+// optional or shared with other tables.
+export const isFoldTable = (columns: { name: string }[] | undefined): boolean =>
+  !!columns && ['p1', 'p2', 'move'].every((c) => columns.some((col) => col.name === c))
+
 export const compileFoldTable = (
   rows: Record<string, unknown>[], opts: { size?: number } = {},
 ): FoldTableProgram => {

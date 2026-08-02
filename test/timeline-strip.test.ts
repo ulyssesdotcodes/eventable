@@ -285,6 +285,7 @@ test('sectionsFor: the warp leads, then one band per out view with placeable row
     },
     particleRows: [],
     timelineRows: [{ event: 'retime', beat: 1 }],
+    foldTables: [],
     sliderRows: [{ id: 'a', value: 0.5, beat: 1 }],
     midiRows: [],
     passes: { hydra: { pass: 1, loops: 2 } },
@@ -303,6 +304,35 @@ test('sectionsFor: the warp leads, then one band per out view with placeable row
   assert.deepEqual(sections.find((s) => s.name === 'hydra')!.pass, { pass: 1, loops: 2 }, 'each out band carries its own content pass')
   assert.deepEqual(sections.find((s) => s.name === 'slider')!.channel, { idCol: 'id', valueCol: 'value' })
   assert.deepEqual(sections.find((s) => s.name === 'post vars')!.rows.map((r) => r.name), ['glow'])
+})
+
+// A folded paper reaches the scene table as thousands of element rows, nearly
+// all on one beat. Laying those out as handles is what makes the strip stall on
+// a phone, and there is nothing to place: an element is geometry, not an event.
+// The folds themselves are what a person wrote, so those get the band.
+test('sectionsFor: a mesh shows its folds, not its geometry', () => {
+  const three = [
+    { id: 'crane', event: 'create', beat: 1, shape: 'mesh' },
+    { id: 'crane:v0', of: 'crane', event: 'create', beat: 1, vert: 0 },
+    { id: 'crane:v0', of: 'crane', event: 'update', beat: 2, vert: 0, px: 1 },
+    { id: 'crane:t3', of: 'crane', event: 'create', beat: 1, tri: 3, face: 1 },
+    { id: 'crane:e7', of: 'crane', event: 'create', beat: 1, edge: 7 },
+    // a colour pulse painting one face IS an event: it names no `of`
+    { id: 'crane', event: 'color', beat: 4, face: 2, color: 0x2f6fff },
+  ]
+  const sections = sectionsFor({
+    cooked: { views: new Map([['three (system)', { rows: three }]]), hydraRows: [], baubleRows: [], postRows: [] },
+    particleRows: [],
+    timelineRows: [],
+    foldTables: [{ name: 'origami', rows: [{ step: 'diag', beat: 1, dur: 2 }, { step: 'wings', beat: 4, dur: 2 }] }],
+    sliderRows: [],
+    midiRows: [],
+    passes: {},
+  })
+  assert.deepEqual(sections.map((s) => s.name), ['origami', 'three'])
+  assert.deepEqual(sections[0].rows.map((r) => r.step), ['diag', 'wings'], 'one handle per fold')
+  assert.deepEqual(sections[1].rows.map((r) => r.id), ['crane', 'crane'],
+    'the mesh and its paint, with the geometry left out')
 })
 
 test('sectionBeat: a band with content passes counts its own; a flat one reports the warp\'s pass', () => {

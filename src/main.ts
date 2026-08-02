@@ -10,6 +10,7 @@ import { initBauble } from './bauble-scene.js'
 import { initPost } from './post-scene.js'
 import { createSceneVisualizer, createHydraVisualizer, createBaubleVisualizer, createPostVisualizer } from './visualizer.js'
 import type { PassState, VisualizerKind } from './visualizer.js'
+import { isFoldTable } from './fold-engine.js'
 import { sectionsFor, type TimelineSection } from './timeline-sections.js'
 import { mountApp } from './ui/app.js'
 import { createCmEditor } from './ui/cm-editor.js'
@@ -457,6 +458,10 @@ const sections = createRoot(() => {
       cooked: a.cooked,
       particleRows: a.particleRows,
       timelineRows: editableStore.get('timeline')?.rows ?? [],
+      foldTables: editableStore.listNames()
+        .map((name) => ({ name, data: editableStore.get(name) }))
+        .filter((t) => isFoldTable(t.data?.columns))
+        .map((t) => ({ name: t.name, rows: t.data!.rows })),
       sliderRows: sliderInput?.rows() ?? [],
       // One trace per note+channel: the folded rows key by `note` alone, so
       // the same note arriving on two channels would merge into one trace.
