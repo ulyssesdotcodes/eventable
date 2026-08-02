@@ -2,18 +2,21 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRuntime } from '../src/runtime.js'
 import { getLineage } from '../src/lineage.js'
-import { compileFoldTable, meshAt, type MeshAnim } from '../src/fold-engine.js'
+import { compileFoldTable } from '../src/fold-engine.js'
+import { buildFrameIndex, sampleFrame, rasterizeRows, elementRowsAt, type MeshSlab } from '../src/rasterize.js'
 
-// The scene row carries the paper as a baked MESH, so geometry assertions read
-// what is actually drawn. Positions come back flat, and Float32 storage means
-// "flat" is a small tolerance rather than an exact zero.
-const meshOf = (rows: { event?: unknown; mesh?: unknown }[]): MeshAnim =>
-  rows.find((r) => r.event === 'create')!.mesh as MeshAnim
-const posAt = (m: MeshAnim, fold: number): [number, number, number][] => {
-  const { verts } = meshAt(m, fold)
-  const out: [number, number, number][] = []
-  for (let i = 0; i < verts.length; i += 3) out.push([verts[i], verts[i + 1], verts[i + 2]])
-  return out
+// The paper is scene rows now — a vertex is an object with px/py/pz keyframes —
+// so geometry assertions read the same rows the renderer draws from, sampled
+// at the beat the fold lands on.
+// The store keeps a mesh's geometry as buffers, not as a row per vertex per
+// frame — but it still hands the paper back one vertex at a time on request,
+// which is what the table view and `.rasterize()` read.
+const posAtBeat = (rows: Row[], beat: number): [number, number, number][] => {
+  const frame = beatToFrame(beat)
+  return sampleFrame(buildFrameIndex(rows), frame)
+    .flatMap((r) => (r.slab ? elementRowsAt(r.slab as MeshSlab, r.id, frame) : [r]))
+    .filter((r) => typeof r.vert === 'number')
+    .map((r) => [r.px as number, r.py as number, r.pz as number])
 }
 // Fold-level facts (names, kinds, how far each swings) are the compiler's, not
 // the scene row's — compile the sample's own fold table for those.
@@ -23,7 +26,7 @@ import { conformRow, schemaColumns, invalidColumns, type ColumnType } from '../s
 import { SAMPLES } from '../src/samples.js'
 import { buildHydraIndex, hydraFrameAt } from '../src/hydra.js'
 import { beatToFrame } from '../src/constants.js'
-import { rasterizeRows } from '../src/rasterize.js'
+import type { Row } from '../src/lineage.js'
 import { outViewName, SCHEMAS } from '../src/dsl.js'
 
 test('new verbs cook end-to-end (grid/derive/groupBy/csv/join/triggerEach + lineage)', () => {
@@ -91,41 +94,42 @@ test('Origami Crane sample: 17 exact fold steps, wings held half-raised', () => 
   }).run(sample.code, { seed: 1 })
 
   const events = views.get(outViewName('three'))!
-  const mesh = meshOf(events.rows)
   const program = programOf(sample, 'origami')
-  assert.equal(mesh.kind, 'mesh-anim')
-  assert.equal(mesh.steps.length, 17)
   assert.equal(program.steps.length, 17)
+  // the paper reaches the scene as elements, not as a geometry blob
+  assert.ok(events.rows.some((r) => typeof r.vert === 'number'), 'vertices are rows')
+  assert.ok(events.rows.some((r) => typeof r.tri === 'number'), 'triangles are rows')
+  assert.equal(events.rows.find((r) => r.event === 'create')!.program, undefined)
   assert.equal(program.steps[16].name, 'wings')
   assert.equal(program.steps[16].to, 0.5)
-  assert.equal(mesh.steps[16].faces.length, 74)
+  assert.equal(program.steps[16].FV.length, 74)
   // solved fold kinds: the collapse and the point folds are reverse folds
   const kinds = program.steps.map((s) => s.type)
   assert.equal(kinds.filter((k) => k === 'Inside Reverse').length, 9)
 
-  // the schedule drives one numeric: fold rises 0 → 16.5 and never falls
-  const folds = events.rows
-    .filter((r) => r.event === 'update' && typeof r.fold === 'number')
-    .sort((a, b) => (a.beat as number) - (b.beat as number))
-    .map((r) => r.fold as number)
-  assert.equal(folds[folds.length - 1], 16.5)
-  for (let i = 1; i < folds.length; ++i) assert.ok(folds[i] >= folds[i - 1])
+  // ONE topology for the whole folding: folding only subdivides, so the last
+  // fold's vertices cover every earlier state. They are stated once and never
+  // replaced, which is what makes an element number the same piece of paper
+  // from the first beat to the last.
+  const created = events.rows.filter((r) => r.event === 'create' && typeof r.vert === 'number')
+  assert.equal(created.length, program.steps[16].Vfrom.length, 'every vertex of the final fold')
+  assert.equal(new Set(created.map((r) => r.beat)).size, 1, 'all stated at one beat')
+  assert.equal(events.rows.filter((r) => r.event === 'destroy').length, 0, 'and none is ever retired')
 
   // exact states at every landed fold: all flat (|z| only layer nudges = 0
   // here, raw positions), and the finished pose has the wings up
   for (let k = 0; k <= 16; ++k) {
-    for (const p of posAt(mesh, k)) assert.ok(Math.abs(p[2]) < 1e-6, `state ${k} is flat`)
+    const landed = program.steps[k === 0 ? 0 : k - 1]
+    const at = k === 0 ? program.steps[0].t0 : landed.t1
+    for (const p of posAtBeat(events.rows, at)) assert.ok(Math.abs(p[2]) < 1e-6, `state ${k} is flat`)
   }
-  const zMax = Math.max(...posAt(mesh, 16.5).map((p) => p[2]))
+  const zMax = Math.max(...posAtBeat(events.rows, program.steps[16].t1).map((p) => p[2]))
   assert.ok(zMax > 0.5, `wings rise out of plane (z ${zMax.toFixed(2)})`)
 
   // Playback rasterizes the routed events into the scene cache automatically —
-  // the baked frames must carry the same fold track.
+  // the baked frames must carry the paper's vertices.
   const sceneRows = rasterizeRows(events.rows)
-  const withFold = sceneRows.filter((r) => typeof r.fold === 'number')
-  assert.ok(withFold.length > 0, 'scene frames carry fold')
-  const last = withFold[withFold.length - 1]
-  assert.equal(last.fold, 16.5)
+  assert.ok(sceneRows.some((r: Row) => typeof r.vert === 'number'), 'baked frames carry vertices')
 })
 
 // The two flower samples are hand-authored fold tables; the contract is that
@@ -142,12 +146,12 @@ for (const { name, steps } of [
         (seed ?? sample.tables?.[n] ?? []).map((r) => conformRow(r, schemaColumns(schema))),
     }).run(sample.code, { seed: 1 })
 
-    const mesh = meshOf(views.get(outViewName('three'))!.rows)
-    assert.equal(mesh.kind, 'mesh-anim')
-    assert.equal(mesh.steps.length, steps)
+    const rows = views.get(outViewName('three'))!.rows
+    const program = programOf(sample, sample.table!)
+    assert.equal(program.steps.length, steps)
 
     // the finished flower lies flat
-    const pos = posAt(mesh, steps)
+    const pos = posAtBeat(rows, program.steps[steps - 1].t1)
     for (const p of pos) assert.ok(Math.abs(p[2]) < 1e-6, 'landed flower is flat')
 
     // and it reads as a bloom: paper reaches out to a comparable radius in
@@ -182,24 +186,56 @@ test('Origami Metamorphosis sample: retime pingpongs the lotus back to a square 
   assert.ok(rows.some((r) => r.event === 'create' && r.id === 'flowerB'), 'lily spawns')
   assert.ok(rows.some((r) => r.event === 'destroy' && r.id === 'flowerA'), 'lotus is retired')
 
-  const track = (id: string): [number, number][] => rows
-    .filter((r) => r.id === id && r.event === 'update' && typeof r.fold === 'number')
-    .map((r) => [r.beat as number, r.fold as number] as [number, number])
-    .sort((a, b) => a[0] - b[0])
-
+  // Read foldedness off the paper itself. A bounding box will not do — the
+  // corners stay put — but folding gathers the paper toward its own centre.
+  const idx = buildFrameIndex(rows)
+  const paperAt = (id: string, beat: number): Map<number, [number, number, number]> => {
+    const m = new Map<number, [number, number, number]>()
+    const frame = beatToFrame(beat)
+    for (const mesh of sampleFrame(idx, frame)) {
+      if (!mesh.slab || !String(mesh.id).startsWith(id)) continue
+      for (const r of elementRowsAt(mesh.slab as MeshSlab, mesh.id, frame)) {
+        if (typeof r.vert === 'number') m.set(r.vert, [r.px as number, r.py as number, r.pz as number])
+      }
+    }
+    return m
+  }
+  const gathered = (id: string, beat: number): number => {
+    const pts = [...paperAt(id, beat).values()]
+    const cx = pts.reduce((s, q) => s + q[0], 0) / pts.length
+    const cy = pts.reduce((s, q) => s + q[1], 0) / pts.length
+    return pts.reduce((s, q) => s + Math.hypot(q[0] - cx, q[1] - cy), 0) / pts.length
+  }
   // the lotus folds up, then .retime(pingpong) folds the very same run back
   // down to a flat square — no hand-mirrored rows
-  const a = track('flowerA')
-  const peak = Math.max(...a.map(([, f]) => f))
-  const peakBeat = a.find(([, f]) => f === peak)![0]
-  assert.ok(peak >= 11, 'lotus reaches its full fold')
-  assert.ok(a[a.length - 1][1] < 0.5, 'lotus unfolds back to a flat square')
-  assert.ok(a[a.length - 1][0] > peakBeat, 'the unfold comes after the bloom')
+  const flat = gathered('flowerA', 1)
+  assert.ok(gathered('flowerA', 7) < flat * 0.8, 'the lotus gathers as it blooms')
+  // beat 19 is beat 7 played backwards — the SAME run, vertex for vertex, which
+  // is what "no hand-mirrored rows" means
+  const out7 = paperAt('flowerA', 7), back19 = paperAt('flowerA', 19)
+  assert.equal(back19.size, out7.size)
+  for (const [v, q] of back19) {
+    const a = out7.get(v)!
+    assert.ok(Math.hypot(q[0] - a[0], q[1] - a[1], q[2] - a[2]) < 1e-6,
+      `vertex ${v} retraces its outward pose`)
+  }
 
-  // the lily then folds up from that square
-  const b = track('flowerB')
-  assert.equal(b[0][1], 0, 'the lily starts from a square')
-  assert.ok(Math.max(...b.map(([, f]) => f)) >= 7, 'the lily folds into its bloom')
+  // The pingpong lands on the very same square it started from at beat 25 —
+  // which is the instant the lotus retires and the lily takes over, so what
+  // the contract is really about is that the swap cannot be seen. The lotus is
+  // GONE at the hand-off (a destroyed mesh takes its geometry with it), and
+  // the lily standing in its place covers the same square.
+  const box = (pts: [number, number, number][]): number[] => [
+    Math.min(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[0])),
+    Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[1])),
+  ]
+  assert.equal(paperAt('flowerA', 25).size, 0, 'the lotus is retired at the hand-off')
+  const square = box([...paperAt('flowerA', 1).values()])
+  const takesOver = box([...paperAt('flowerB', 25).values()])
+  assert.ok(takesOver.every((v, i) => Math.abs(v - square[i]) < 1e-6),
+    `the lily covers the same square: ${takesOver} vs ${square}`)
+  // and it really is a flat square again by the last frame it is drawn
+  assert.ok(gathered('flowerA', 24.97) > flat * 0.95, 'the lotus unfolds back to the square')
 })
 
 test('Hydra Meta sample: replace/append/setSource/layer rewrite the sketch across the loop', () => {
@@ -248,14 +284,15 @@ test('Origami Cicada sample: nine simple folds, all exact', () => {
       (seed ?? sample.tables?.[name] ?? []).map((r) => conformRow(r, schemaColumns(schema))),
   }).run(sample.code, { seed: 1 })
   const events = views.get(outViewName('three'))!
-  const mesh = meshOf(events.rows)
   const program = programOf(sample, 'origami')
-  assert.equal(mesh.steps.length, 9)
+  assert.equal(program.steps.length, 9)
   for (const step of program.steps) assert.equal(step.type, 'Pureland')
-  for (let k = 0; k <= 9; ++k) {
-    for (const p of posAt(mesh, k)) assert.ok(Math.abs(p[2]) < 1e-6, `state ${k} flat`)
+  for (let k = 1; k <= 9; ++k) {
+    for (const p of posAtBeat(events.rows, program.steps[k - 1].t1)) {
+      assert.ok(Math.abs(p[2]) < 1e-6, `state ${k} flat`)
+    }
   }
-  const xs = posAt(mesh, 9).map((p) => p[0])
+  const xs = posAtBeat(events.rows, program.steps[8].t1).map((p) => p[0])
   assert.ok(Math.max(...xs) - Math.min(...xs) > 0.8, 'wings splay wide')
 })
 

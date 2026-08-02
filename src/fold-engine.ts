@@ -445,11 +445,10 @@ export interface FoldTableProgram {
   initial: { FV: number[][]; V: Vec2[] }
   steps: FoldProgramStep[]
   // What the folding knows about itself, as rows: one per fold, one per
-  // (fold, face), one per (fold, crease) — the same numbering the renderer
-  // draws with, so a row addresses exactly one element. All carry the fold's
-  // `beat`/`dur`, so they are already scene/post events once given an
-  // id+event. Face and edge numbers mean nothing across steps: every fold
-  // re-splits the paper.
+  // (fold, face), one per (fold, crease) — in the numbering the renderer draws
+  // with, so a row addresses exactly one element and means the same paper at
+  // every step. All carry the fold's `beat`/`dur`, so they are already
+  // scene/post events once given an id+event.
   folds: Row[]
   verts: Row[]
   faces: Row[]
@@ -551,9 +550,25 @@ export const parseFoldRows = (rows: Record<string, unknown>[]): FoldTableRowSpec
   return specs
 }
 
-// One fold's faces and creases as rows. Face and edge numbers are the ones
-// the renderer draws with, so a row addresses exactly one element — but only
-// within its own step, since the next fold re-splits the paper.
+// Barycentric weights of a sheet point inside a sheet triangle, or null when
+// it falls outside. The tolerance lets a point sitting exactly on a shared
+// edge resolve through either neighbour — the paper does not tear, so both
+// give the same place in space.
+const baryOf = (
+  p: Vec2, a: Vec2, b: Vec2, c: Vec2,
+): [number, number, number] | null => {
+  const d = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+  if (Math.abs(d) < 1e-12) return null
+  const u = ((b[1] - c[1]) * (p[0] - c[0]) + (c[0] - b[0]) * (p[1] - c[1])) / d
+  const v = ((c[1] - a[1]) * (p[0] - c[0]) + (a[0] - c[0]) * (p[1] - c[1])) / d
+  const w = 1 - u - v
+  const eps = -1e-7
+  return u < eps || v < eps || w < eps ? null : [u, v, w]
+}
+
+// One fold's faces and creases as rows, in the numbering that fold split the
+// paper into. That numbering is private to the step — restateOnFinal below
+// translates it to the one the renderer draws with.
 const stepAttrs = (
   k: number, spec: FoldTableRowSpec, out: FoldOutcome, Vdisp: Vec2[],
 ): { verts: Row[]; faces: Row[]; edges: Row[] } => {
@@ -619,6 +634,66 @@ const stepAttrs = (
     }
   })
   return { verts, faces, edges }
+}
+
+// Restate the face and edge rows in the LAST step's numbering — the one
+// foldElementRows gives the renderer, and the only one that means the same
+// paper for the whole folding. Without this a row from paper.faces() and the
+// face it paints are different pieces of paper on every step but the last.
+//
+// A final face is a sub-region of exactly one face of any earlier step, so it
+// takes that face's attributes and every step describes all of them. A final
+// crease is a sub-segment of an earlier crease, or does not exist yet — those
+// steps simply do not describe it. Vertex numbering already survives a fold
+// (a split appends), so vertex rows need no restating and sheet points can be
+// read from the final sheet throughout.
+const restateOnFinal = (
+  steps: FoldProgramStep[], verts: Row[], faces: Row[], edges: Row[],
+): { faces: Row[]; edges: Row[] } => {
+  const last = steps.length - 1
+  if (last < 0) return { faces, edges }
+  const sheet: Vec2[] = []
+  for (const r of verts) {
+    if (r.step === last) sheet[r.vert as number] = [r.sheetX as number, r.sheetY as number]
+  }
+  const centre = (F: number[]): Vec2 => [
+    F.reduce((s, i) => s + sheet[i][0], 0) / F.length,
+    F.reduce((s, i) => s + sheet[i][1], 0) / F.length,
+  ]
+  const centres = steps[last].FV.map(centre)
+  const onSeg = (p: Vec2, a: Vec2, b: Vec2): boolean => {
+    const ux = b[0] - a[0], uy = b[1] - a[1]
+    const vx = p[0] - a[0], vy = p[1] - a[1]
+    if (Math.abs(ux * vy - uy * vx) > 1e-9) return false
+    const t = (vx * ux + vy * uy) / (ux * ux + uy * uy)
+    return t > -1e-9 && t < 1 + 1e-9
+  }
+  const outFaces: Row[] = []
+  const outEdges: Row[] = []
+  const finalEdges = edges.filter((r) => r.step === last)
+  for (let k = 0; k <= last; ++k) {
+    const src = new Map(faces.filter((r) => r.step === k).map((r) => [r.face as number, r]))
+    const cells: { f: number; s: [Vec2, Vec2, Vec2] }[] = []
+    steps[k].FV.forEach((F, f) => {
+      for (let j = 1; j + 1 < F.length; ++j) {
+        cells.push({ f, s: [sheet[F[0]], sheet[F[j]], sheet[F[j + 1]]] })
+      }
+    })
+    centres.forEach((c, face) => {
+      const hit = cells.find((cell) => baryOf(c, cell.s[0], cell.s[1], cell.s[2]))
+      const from = hit && src.get(hit.f)
+      if (from) outFaces.push({ ...from, face })
+    })
+    const stepEdges = edges.filter((r) => r.step === k)
+    for (const fe of finalEdges) {
+      const pa = sheet[fe.a as number], pb = sheet[fe.b as number]
+      const from = stepEdges.find((r) =>
+        onSeg(pa, sheet[r.a as number], sheet[r.b as number])
+        && onSeg(pb, sheet[r.a as number], sheet[r.b as number]))
+      if (from) outEdges.push({ ...from, edge: fe.edge, a: fe.a, b: fe.b })
+    }
+  }
+  return { faces: outFaces, edges: outEdges }
 }
 
 export const compileFoldTable = (
@@ -726,8 +801,10 @@ export const compileFoldTable = (
   for (const step of steps) {
     for (const l of step.layers) maxLayer = Math.max(maxLayer, l)
   }
+  const onFinal = restateOnFinal(steps, verts, faces, edges)
   return {
-    kind: 'fold-table', size, initial, steps, folds, verts, faces, edges,
+    kind: 'fold-table', size, initial, steps, folds, verts,
+    faces: onFinal.faces, edges: onFinal.edges,
     end: steps.length > 0 ? steps[steps.length - 1].t1 : 1,
     gap: (STACK_DEPTH * size) / maxLayer,
     maxLayer,
@@ -1113,6 +1190,90 @@ export const foldValueAt = (program: FoldTableProgram, beat: number): number => 
   return v
 }
 
+// The fixed topology resampled onto one moment of the folding: where every
+// final vertex sits, and the layer offset every final face rides. A final
+// element is located in the step's own cells by its sheet point, which never
+// moves — that is what lets one numbering describe the whole folding. Both the
+// element rows and foldPointsAt read the paper through this.
+const finalSampler = (program: FoldTableProgram): {
+  sheet: Vec2[]
+  faceCentre: Vec2[]
+  at: (k: number, fold: number) => {
+    pos: [number, number, number][]; offs: [number, number, number][]
+  }
+} => {
+  const steps = program.steps
+  const sheetOf: Vec2[][] = steps.map(() => [])
+  for (const r of program.verts) {
+    sheetOf[r.step as number][r.vert as number] = [r.sheetX as number, r.sheetY as number]
+  }
+  const finalSheet = sheetOf[steps.length - 1]
+  const faceCentre: Vec2[] = steps[steps.length - 1].FV.map((F) => [
+    F.reduce((s, i) => s + finalSheet[i][0], 0) / F.length,
+    F.reduce((s, i) => s + finalSheet[i][1], 0) / F.length,
+  ])
+  // which cell each point landed in last time — see locate()
+  const vertCell: number[] = finalSheet.map(() => -1)
+  const faceCell: number[] = faceCentre.map(() => -1)
+  let cellStep = -1
+
+  const at = (k: number, fold: number): {
+    pos: [number, number, number][]; offs: [number, number, number][]
+  } => {
+    const st = steps[k]
+    const sheet = sheetOf[k]
+    if (k !== cellStep) { vertCell.fill(-1); faceCell.fill(-1); cellStep = k }
+    const { pos, zOff, zDir } = foldTablePositions(program, fold)
+    const off = (fi: number): [number, number, number] => (zDir
+      ? [zDir[fi][0] * zOff[fi], zDir[fi][1] * zOff[fi], zDir[fi][2] * zOff[fi]]
+      : [0, 0, zOff[fi]])
+    // the state's own triangles, in sheet space and in world space
+    const cells: { s: [Vec2, Vec2, Vec2]; w: [number, number, number][]; f: number }[] = []
+    st.FV.forEach((F, f) => {
+      for (let j = 1; j + 1 < F.length; ++j) {
+        const idx = [F[0], F[j], F[j + 1]]
+        cells.push({
+          s: [sheet[idx[0]], sheet[idx[1]], sheet[idx[2]]],
+          w: [pos[idx[0]], pos[idx[1]], pos[idx[2]]],
+          f,
+        })
+      }
+    })
+    const locate = (p: Vec2, hint: number): { c: typeof cells[0]; b: [number, number, number]; at: number } | null => {
+      // A point's cell only changes when a fold splits the one it was in, so
+      // checking last time's first turns the scan into a hit almost always.
+      if (hint >= 0 && hint < cells.length) {
+        const c = cells[hint]
+        const b = baryOf(p, c.s[0], c.s[1], c.s[2])
+        if (b) return { c, b, at: hint }
+      }
+      for (let i = 0; i < cells.length; ++i) {
+        const c = cells[i]
+        const b = baryOf(p, c.s[0], c.s[1], c.s[2])
+        if (b) return { c, b, at: i }
+      }
+      return null
+    }
+    const outPos: [number, number, number][] = finalSheet.map((sp, i) => {
+      const hit = locate(sp, vertCell[i])
+      if (!hit) return [0, 0, 0]
+      vertCell[i] = hit.at
+      const [u, v, w] = hit.b
+      return [0, 1, 2].map((c) =>
+        hit.c.w[0][c] * u + hit.c.w[1][c] * v + hit.c.w[2][c] * w) as [number, number, number]
+    })
+    // a final face rides the layer of whichever face of this state contains it
+    const outOffs: [number, number, number][] = faceCentre.map((cp, i) => {
+      const hit = locate(cp, faceCell[i])
+      if (!hit) return [0, 0, 0]
+      faceCell[i] = hit.at
+      return off(hit.c.f)
+    })
+    return { pos: outPos, offs: outOffs }
+  }
+  return { sheet: finalSheet, faceCentre, at }
+}
+
 /**
  * Attach each element's position to its own rows: `at` is a fraction of that
  * row's OWN fold (0 the moment it starts, 1 where it lands), so one call
@@ -1123,16 +1284,18 @@ export const foldValueAt = (program: FoldTableProgram, beat: number): number => 
 export const foldPointsAt = (
   program: FoldTableProgram, rows: Row[], at: number,
 ): Row[] => {
+  if (!program.steps.length) return rows
   const u = Math.min(1, Math.max(0, at))
-  const cache = new Map<number, ReturnType<typeof foldTablePositions>>()
-  const sampled = (k: number): ReturnType<typeof foldTablePositions> => {
+  const sampler = finalSampler(program)
+  const FV = program.steps[program.steps.length - 1].FV
+  const cache = new Map<number, ReturnType<typeof sampler.at>>()
+  const sampled = (k: number): ReturnType<typeof sampler.at> => {
     let s = cache.get(k)
     if (!s) {
-      // fold 0 is the bare sheet, one face — geometrically the same paper as
-      // step 0 about to start, but numbered differently. Stay just inside the
-      // step so element numbers are the ones the rows were built from.
+      // stay just inside the step: both ends of its fold range belong to a
+      // neighbour, and fold 0 is the bare sheet with a numbering of its own
       const f = k + u * program.steps[k].to
-      s = foldTablePositions(program, f > 0 ? f : Number.EPSILON)
+      s = sampler.at(k, Math.max(Number.EPSILON, Math.min(f, k + program.steps[k].to - 1e-9)))
       cache.set(k, s)
     }
     return s
@@ -1140,10 +1303,10 @@ export const foldPointsAt = (
   return rows.map((r) => {
     const k = r.step as number
     if (typeof k !== 'number' || !program.steps[k]) return r
-    const { FV, pos, zOff, zDir } = sampled(k)
+    const { pos, offs } = sampled(k)
     // the element's vertices: a face's loop, or a crease's two ends
     const vs = typeof r.vert === 'number' ? [r.vert]
-      : typeof r.face === 'number' ? FV[r.face]
+      : typeof r.face === 'number' ? FV[r.face as number]
         : typeof r.a === 'number' && typeof r.b === 'number' ? [r.a, r.b]
           : undefined
     if (!vs) return r
@@ -1151,11 +1314,7 @@ export const foldPointsAt = (
     // renderer does; a face takes its own
     const fi = typeof r.face === 'number' ? r.face
       : FV.findIndex((F) => vs.every((v) => F.includes(v)))
-    const off = fi >= 0 ? zOff[fi] : 0
-    const d = fi >= 0 && zDir ? zDir[fi] : undefined
-    const o: [number, number, number] = d
-      ? [d[0] * off, d[1] * off, d[2] * off]
-      : [0, 0, off]
+    const o = fi >= 0 ? offs[fi] : [0, 0, 0]
     let x = 0, y = 0, z = 0
     for (const vi of vs) { x += pos[vi][0]; y += pos[vi][1]; z += pos[vi][2] }
     return {
@@ -1165,140 +1324,121 @@ export const foldPointsAt = (
   })
 }
 
-// ── Baked mesh ──────────────────────────────────────────────────────────────
-// The folding, evaluated ahead of time into plain element data: topology per
-// step, vertex positions and per-face layer offsets sampled across each swing.
-// Keyed by FOLD VALUE rather than by frame, so retiming still works — a
-// timeline warps `fold`, and the reader lerps between the samples either side.
+// ── The folding as element rows ─────────────────────────────────────────────
+// The paper described the way everything else in a scene table is described:
+// one row per element, scalar columns, no nested geometry. A vertex is an
+// object with px/py/pz keyframes — which rasterize already interpolates and
+// the frame store already run-length encodes — and a face is a row naming the
+// vertices around it. The renderer groups by `of` and assembles; it needs to
+// know nothing about folding.
 
-export interface MeshStep {
-  faces: number[][]     // face → vertex loop, for this step's numbering
-  // creases in the engine's canonical order, so an `edge` handle from
-  // origami().edges() finds the right line without the fold program
-  edges: [number, number][]
-  from: number          // fold value of sample 0
-  span: number          // fold value covered (the step's `to`)
-  samples: number
-  verts: Float32Array   // samples × nv × 3, display frame
-  offs: Float32Array    // samples × nf × 3, the layer nudge each face carries
-}
+// Positions are keyframed at this many points across a swing. px/py/pz are
+// interpolated fields, so playback eases between them; 32 puts the chord error
+// of a half-turn under a thousandth of the paper.
+const SWING_KEYS = 32
 
-export interface MeshAnim {
-  kind: 'mesh-anim'
-  initial: { faces: number[][]; edges: [number, number][]; verts: Float32Array; offs: Float32Array }
-  steps: MeshStep[]
-  end: number           // fold value where the last swing lands
-}
-
-// Samples per swing. The motion is already smooth at this density — a rigid
-// hinge is a circular arc and the chord error at 1/32 of a half-turn is under
-// a thousandth of the paper — and the exact flat states land on the endpoints,
-// which is what the clearance and integration tests pin.
-const MESH_SAMPLES = 32
-
-const flatten3 = (v: [number, number, number][]): Float32Array => {
-  const out = new Float32Array(v.length * 3)
-  for (let i = 0; i < v.length; ++i) {
-    out[i * 3] = v[i][0]; out[i * 3 + 1] = v[i][1]; out[i * 3 + 2] = v[i][2]
-  }
-  return out
-}
-
-const offsetsOf = (
-  nf: number, zOff: number[], zDir: [number, number, number][] | undefined,
-): Float32Array => {
-  const out = new Float32Array(nf * 3)
-  for (let fi = 0; fi < nf; ++fi) {
-    if (zDir) {
-      out[fi * 3] = zDir[fi][0] * zOff[fi]
-      out[fi * 3 + 1] = zDir[fi][1] * zOff[fi]
-      out[fi * 3 + 2] = zDir[fi][2] * zOff[fi]
-    } else {
-      out[fi * 3 + 2] = zOff[fi]
-    }
-  }
-  return out
-}
-
-export const bakeMeshAnim = (program: FoldTableProgram): MeshAnim => {
-  const at0 = foldTablePositions(program, 0)
-  const steps: MeshStep[] = program.steps.map((s, k) => {
-    const nv = s.Vfrom.length
-    const nf = s.FV.length
-    const samples = MESH_SAMPLES + 1
-    const verts = new Float32Array(samples * nv * 3)
-    const offs = new Float32Array(samples * nf * 3)
-    for (let i = 0; i < samples; ++i) {
-      // Stay strictly inside this step's fold range. Both ends are shared
-      // with a neighbour and belong to the neighbour's numbering: fold 0 is
-      // the bare single-face sheet, and fold k+1 is step k+1 about to start,
-      // already re-split. The geometry is continuous across both, so sampling
-      // a hair inside gives the same paper in the numbering these faces use.
-      const f = Math.min(
-        Math.max(Number.EPSILON, k + (i / MESH_SAMPLES) * s.to),
-        k + s.to - 1e-9)
-      const { pos, zOff, zDir } = foldTablePositions(program, f)
-      verts.set(flatten3(pos), i * nv * 3)
-      offs.set(offsetsOf(nf, zOff, zDir), i * nf * 3)
-    }
-    const edges = program.edges
-      .filter((r) => r.step === k)
-      .map((r): [number, number] => [r.a as number, r.b as number])
-    return { faces: s.FV.map((F) => [...F]), edges, from: k, span: s.to, samples, verts, offs }
-  })
-  return {
-    kind: 'mesh-anim',
-    initial: {
-      faces: program.initial.FV.map((F) => [...F]),
-      edges: [] as [number, number][],
-      verts: flatten3(at0.pos),
-      offs: offsetsOf(program.initial.FV.length, at0.zOff, at0.zDir),
-    },
-    steps,
-    end: program.steps.length ? program.steps.length - 1 + program.steps[program.steps.length - 1].to : 0,
-  }
+export interface ElementRowOpts {
+  id: unknown           // the owning object
+  size?: number
 }
 
 /**
- * The mesh at a fold value: this step's face list, and the vertex positions and
- * per-face offsets lerped between the two samples either side. Whole fold
- * values land exactly on a sample, so the flat states stay exact.
+ * The whole folding as ordinary scene rows: one per vertex, triangle, face and
+ * crease, every cell a number.
+ *
+ * The topology is the LAST fold's — the finest — and it is stated once, at the
+ * top of the loop, and never changes. Folding only ever subdivides, so every
+ * earlier state is exactly representable on it: the creases a later fold will
+ * add are simply flat until then. Each vertex's position through an earlier
+ * state comes from the drawn triangle its sheet point lands in, which is exact
+ * for what is rendered, since flat triangles are what the renderer draws.
+ *
+ * That fixed topology is what makes an element number mean the same piece of
+ * paper for the whole folding, and what lets .retime() run the fold backwards:
+ * every animated quantity is a plain value on a keyframe track, and values warp
+ * cleanly where lifetimes do not.
  */
-export const meshAt = (
-  m: MeshAnim, fold: number,
-): { faces: number[][]; edges: [number, number][]; verts: Float32Array; offs: Float32Array; step: number } => {
-  const N = m.steps.length
-  if (N === 0 || fold <= 0) {
-    const { faces, edges, verts, offs } = m.initial
-    return { faces, edges, verts, offs, step: -1 }
+export const foldElementRows = (
+  program: FoldTableProgram, opts: ElementRowOpts,
+): Row[] => {
+  const of = opts.id
+  const out: Row[] = []
+  const steps = program.steps
+  if (!steps.length) return out
+  const last = steps[steps.length - 1]
+
+  const { sheet: finalSheet, faceCentre, at: sampleAt } = finalSampler(program)
+  const nv = finalSheet.length
+
+  // final faces, fanned to triangles once — this IS the draw order
+  const tris: { tri: number; face: number; v: [number, number, number] }[] = []
+  last.FV.forEach((F, f) => {
+    for (let j = 1; j + 1 < F.length; ++j) tris.push({ tri: tris.length, face: f, v: [F[0], F[j], F[j + 1]] })
+  })
+
+  const eid = (s: string): string => `${String(of)}:${s}`
+  for (let v = 0; v < nv; ++v) {
+    out.push({ id: eid(`v${v}`), of, event: 'create', beat: 1, vert: v })
   }
-  const k = Math.min(Math.floor(fold), N - 1)
-  const s = m.steps[k]
-  const u = s.span > 0 ? Math.min(1, Math.max(0, (fold - k) / s.span)) : 0
-  const x = u * (s.samples - 1)
-  const i0 = Math.min(s.samples - 1, Math.floor(x))
-  const i1 = Math.min(s.samples - 1, i0 + 1)
-  const t = x - i0
-  const nv = s.verts.length / s.samples
-  const nf = s.offs.length / s.samples
-  if (t === 0 || i0 === i1) {
-    return {
-      faces: s.faces,
-      edges: s.edges,
-      verts: s.verts.subarray(i0 * nv, i0 * nv + nv),
-      offs: s.offs.subarray(i0 * nf, i0 * nf + nf),
-      step: k,
+  last.FV.forEach((_F, f) => out.push({ id: eid(`f${f}`), of, event: 'create', beat: 1, face: f }))
+  for (const t of tris) {
+    out.push({
+      id: eid(`t${t.tri}`), of, event: 'create', beat: 1,
+      tri: t.tri, face: t.face, v0: t.v[0], v1: t.v[1], v2: t.v[2],
+    })
+  }
+  for (const r of program.edges) {
+    if (r.step !== steps.length - 1) continue
+    out.push({
+      id: eid(`e${r.edge as number}`), of, event: 'create', beat: 1,
+      edge: r.edge, a: r.a, b: r.b,
+    })
+  }
+
+  // Only what MOVED is written — but a skipped keyframe is a HOLD, and px/py/pz
+  // interpolate, so a gap would glide the element toward its next pose instead
+  // of leaving it still. Writing the previous value at the previous sample
+  // closes the segment before a move opens a new one.
+  const lastPos: (readonly [number, number, number])[] = finalSheet.map(() => [NaN, NaN, NaN])
+  const lastOff: (readonly [number, number, number])[] = faceCentre.map(() => [NaN, NaN, NaN])
+  const heldSince: number[] = finalSheet.map(() => -1)
+  const heldOffSince: number[] = faceCentre.map(() => -1)
+  const near3 = (a: readonly number[], b: readonly number[]): boolean =>
+    Math.abs(a[0] - b[0]) < 1e-7 && Math.abs(a[1] - b[1]) < 1e-7 && Math.abs(a[2] - b[2]) < 1e-7
+  let prevBeat = -1
+  const emit = (beat: number, k: number, fold: number): void => {
+    const { pos, offs } = sampleAt(k, fold)
+    for (let v = 0; v < nv; ++v) {
+      if (near3(pos[v], lastPos[v])) { if (heldSince[v] < 0) heldSince[v] = beat; continue }
+      const p = lastPos[v]
+      if (heldSince[v] >= 0 && prevBeat > heldSince[v] && Number.isFinite(p[0])) {
+        out.push({ id: eid(`v${v}`), of, event: 'update', beat: prevBeat, px: p[0], py: p[1], pz: p[2] })
+      }
+      heldSince[v] = -1
+      lastPos[v] = pos[v]
+      out.push({ id: eid(`v${v}`), of, event: 'update', beat, px: pos[v][0], py: pos[v][1], pz: pos[v][2] })
     }
+    for (let f = 0; f < offs.length; ++f) {
+      if (near3(offs[f], lastOff[f])) { if (heldOffSince[f] < 0) heldOffSince[f] = beat; continue }
+      const o0 = lastOff[f]
+      if (heldOffSince[f] >= 0 && prevBeat > heldOffSince[f] && Number.isFinite(o0[0])) {
+        out.push({ id: eid(`f${f}`), of, event: 'update', beat: prevBeat, ox: o0[0], oy: o0[1], oz: o0[2] })
+      }
+      heldOffSince[f] = -1
+      lastOff[f] = offs[f]
+      out.push({ id: eid(`f${f}`), of, event: 'update', beat, ox: offs[f][0], oy: offs[f][1], oz: offs[f][2] })
+    }
+    prevBeat = beat
   }
-  const verts = new Float32Array(nv)
-  const offs = new Float32Array(nf)
-  for (let j = 0; j < nv; ++j) {
-    const a = s.verts[i0 * nv + j], b = s.verts[i1 * nv + j]
-    verts[j] = a + (b - a) * t
-  }
-  for (let j = 0; j < nf; ++j) {
-    const a = s.offs[i0 * nf + j], b = s.offs[i1 * nf + j]
-    offs[j] = a + (b - a) * t
-  }
-  return { faces: s.faces, edges: s.edges, verts, offs, step: k }
+
+  emit(1, 0, Number.EPSILON)
+  steps.forEach((s, k) => {
+    for (let i = 0; i <= SWING_KEYS; ++i) {
+      const fold = Math.min(
+        Math.max(Number.EPSILON, k + (i / SWING_KEYS) * s.to),
+        k + s.to - 1e-9)
+      emit(s.t0 + (i / SWING_KEYS) * (s.t1 - s.t0), k, fold)
+    }
+  })
+  return out
 }

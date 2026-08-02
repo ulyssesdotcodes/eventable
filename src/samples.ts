@@ -216,8 +216,7 @@ editable("retime", schemas.timeline)
 
 const paper = origami().steps(table("origami"))
 paper.spawn({ id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.356 })
-  .concat(paper.sequence())
-  // Uncomment to see only a couple folds. 
+    // Uncomment to see only a couple folds. 
   // Check out the "retime" table below and adjust the "from" 
   // and  "to" columns to change which folds are shown.
   // Change the event to "pingpong" to see the folds reverse as well
@@ -478,7 +477,6 @@ editable("origami", schemas.origami)
 // again.
 const paper = origami().steps(table("origami"))
 paper.spawn({ id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.356 })
-  .concat(paper.sequence())
   .outThree()
 
 // The folding also KNOWS things about itself, and it comes out as ordinary
@@ -611,7 +609,6 @@ editable("origami", schemas.origami)
 // finished bug, then open flat and fold again.
 const paper = origami().steps(table("origami"))
 paper.spawn({ id: "cicada", color: 0xf4efe2, backColor: 0x79b356, pz: 1.2, rz: -0.785 })
-  .concat(paper.sequence())
   .outThree()
 
 // Things to try, live in the "origami" tab:
@@ -663,7 +660,6 @@ editable("origami", schemas.origami)
 // automatically.
 const paper = origami().steps(table("origami"))
 paper.spawn({ id: "lotus", color: 0xfff2d6, backColor: 0xe0518a, pz: 1.2, rx: -0.22, rz: 0.785 })
-  .concat(paper.sequence())
   .outThree()
 
 // Things to try, live in the "origami" tab:
@@ -711,7 +707,6 @@ editable("origami", schemas.origami)
 // scene; playback bakes the per-frame cache automatically.
 const paper = origami().steps(table("origami"))
 paper.spawn({ id: "lily", color: 0xf0eeff, backColor: 0x7a3fc0, pz: 1.2, rx: -0.22 })
-  .concat(paper.sequence())
   .outThree()
 
 // Things to try, live in the "origami" tab:
@@ -741,8 +736,8 @@ paper.spawn({ id: "lily", color: 0xf0eeff, backColor: 0x7a3fc0, pz: 1.2, rx: -0.
     code: `// eventable — Origami Metamorphosis: one sheet, two flowers
 // A single square folds itself into the lotus, opens all the way back to a
 // flat square, then folds into the lily — proof that a fold table runs in
-// reverse. The trick is that origami().sequence() emits the whole folding as
-// beat-keyed keyframes of ONE number (\`fold\`: how many folds have landed).
+// reverse. The trick is that origami().spawn() emits the whole folding as
+// beat-timed ELEMENT rows — every vertex, triangle and crease of every fold.
 // .retime() warps those beats through a timeline (schemas.timeline), and a
 // "pingpong" event replays the run there and BACK — so the paper unfolds
 // itself, with no hand-mirrored rows. Press "Run", then hit Play.
@@ -758,22 +753,21 @@ const pose = { pz: 1.2, rx: -0.3 }
 const lotus = origami().steps(table("lotus"))
 const lily = origami().steps(table("lily"))
 
-// pingpong the lotus: its fold runs over source beats 1–13; the pingpong's
+// pingpong the lotus: its folding runs over source beats 1–13; the pingpong's
 // until-next window (beat 1, closed by the hold at beat 25) plays that forward
 // then backward across beats 1–25, so it blooms by beat 13 and is flat again
-// by 25. .retime warps the sequence's beats; the spawn (create) row is unmapped.
+// by 25. .retime warps the paper's own rows.
 const bloomFall = rows([
   { event: "pingpong", beat: 1, from: 1, to: 13 },
   { event: "hold", beat: 25, from: 1 },
 ])
 
 lotus.spawn({ id: "flowerA", color: 0xfff2d6, backColor: 0xe0518a, ...pose })
-  .concat(lotus.sequence().retime(bloomFall))
+  .retime(bloomFall)
   // hand off at the flat square: retire the lotus and raise the lily there,
   // both a plain square at that instant, so the swap can't be seen
   .concat(rows([{ id: "flowerA", event: "destroy", beat: 25 }]))
-  .concat(lily.spawn({ id: "flowerB", beat: 25, color: 0xf0eeff, backColor: 0x7a3fc0, ...pose }))
-  .concat(lily.sequence().shift(24))
+  .concat(lily.spawn({ id: "flowerB", color: 0xf0eeff, backColor: 0x7a3fc0, ...pose }).shift(24))
   .outThree()
 
 // Things to try, live in the tabs on the right:

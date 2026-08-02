@@ -14,7 +14,7 @@ import { rasterizeRows } from './rasterize.js'
 import { timelineSegments, placeBeat } from './timeline.js'
 import { withLineage, carry, unionLineage, type Row } from './lineage.js'
 import { FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS } from './constants.js'
-import { compileFoldTable, bakeMeshAnim, foldPointsAt, foldValueAt, type FoldTableProgram, type MeshAnim } from './fold-engine.js'
+import { compileFoldTable, foldElementRows, foldPointsAt, foldValueAt, type FoldTableProgram } from './fold-engine.js'
 import type { Schema } from './editable-tables.js'
 import { beatSecondsFromTaps } from './tap-log.js'
 import { primitiveGeometry, pointsFromGeometry, geometryFromPoints } from './three-points.js'
@@ -1043,7 +1043,6 @@ export class OrigamiBuilder {
   private _id: unknown = 'paper'
   private _rows: Row[] = []
   private _compiled: FoldTableProgram | null = null
-  private _mesh: MeshAnim | null = null
 
   constructor(size: number, ctx: DSLContext | null) {
     this._size = size
@@ -1168,11 +1167,15 @@ export class OrigamiBuilder {
   }
 
   /**
-   * The create row. The paper arrives as a MESH — faces, creases and vertex
-   * positions sampled across the folding — not as a fold program the renderer
-   * has to know how to run, so the scene table speaks the same element
-   * vocabulary as verts()/faces()/edges(). `fold` says where to read it: k
-   * means the first k folds have landed, fractions swing the next flap.
+   * The paper as scene rows: one `shape: "mesh"` object carrying the colour
+   * and transform, and then every VERTEX, TRIANGLE, FACE and CREASE of every
+   * fold as its own row linked back by `of`. A vertex row carries beat-timed
+   * px/py/pz — ordinary keyframes, eased by playback like any other object —
+   * and a triangle row names three of them. Every column is a number; there is
+   * no geometry blob and nothing the renderer has to know how to run.
+   *
+   * Elements are numbered per FOLD, because every fold re-splits the paper, so
+   * each lives only for its own fold and is replaced when the next one lands.
    * Extra props (id, color, backColor, px/py/pz, …) merge over defaults.
    */
   spawn(props: Row = {}): Table {
@@ -1183,12 +1186,14 @@ export class OrigamiBuilder {
     // the bake resolves the turn-over into the vertex positions.
     const rz = typeof props.rz === 'number' ? props.rz : 0
     program.flipAxis = [Math.sin(rz), Math.cos(rz)]
-    this._mesh = bakeMeshAnim(program)
-    return new Table([{
-      id: this._id, event: 'create', beat: 1, shape: 'mesh',
-      px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0, color: 0xd94f2a,
-      fold: 0, mesh: this._mesh, ...props,
-    }], this._ctx)
+    return new Table([
+      {
+        id: this._id, event: 'create', beat: 1, shape: 'mesh',
+        px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0, color: 0xd94f2a,
+        ...props,
+      },
+      ...foldElementRows(program, { id: this._id }),
+    ], this._ctx)
   }
 
   /**

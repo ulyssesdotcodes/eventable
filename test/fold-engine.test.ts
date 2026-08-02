@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   initialState, foldStep, lineThrough, animatedPositions, compileFoldTable,
-  foldTablePositions, foldPointsAt, FoldError, type FoldOutcome, type Vec2,
+  foldTablePositions, foldPointsAt, foldElementRows, FoldError, type FoldOutcome, type Vec2,
 } from '../src/fold-engine.js'
 import { CRANE } from './util/crane.js'
 import { M } from '../src/vendor/flatfolder/math.js'
@@ -451,10 +451,18 @@ test('every fold reports its corners, creases and faces in one numbering', () =>
     { step: 'diag', p1: '0,0', p2: '1,1', move: '0.667,0.333' },
     { step: 'rev', p1: '0,0.5', p2: '1,0.5', move: '0.333,0.167', kind: 'reverse' },
   ])
+  // The renderer draws ONE topology for the whole folding, so an attribute row
+  // must address the element it draws — not the face its own fold happened to
+  // split the paper into, which is different paper on every step but the last.
+  const drawn = foldElementRows(program, { id: 'p' }).filter((r) => r.event === 'create')
+  const drawnFaces = new Set(drawn.filter((r) => r.tri == null && typeof r.face === 'number').map((r) => r.face))
+  const drawnEdges = new Set(drawn.filter((r) => typeof r.edge === 'number').map((r) => r.edge))
   for (let k = 0; k < program.steps.length; k++) {
     const verts = program.verts.filter((r) => r.step === k)
     const faces = program.faces.filter((r) => r.step === k)
-    assert.equal(faces.length, program.steps[k].FV.length, 'one row per face')
+    const edges = program.edges.filter((r) => r.step === k)
+    assert.deepEqual(new Set(faces.map((r) => r.face)), drawnFaces, 'every drawn face has a row')
+    assert.ok(edges.every((r) => drawnEdges.has(r.edge)), 'every crease row names a drawn crease')
     assert.equal(verts.length, program.steps[k].Vfrom.length, 'one row per corner')
     // every corner a face names has a row, and the numbering is the same one
     for (const F of program.steps[k].FV) {

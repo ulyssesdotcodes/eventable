@@ -5,9 +5,9 @@ import { FontLoader, type Font } from 'three/addons/loaders/FontLoader.js'
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import helvetiker from 'three/examples/fonts/helvetiker_regular.typeface.json'
-import { meshAt, type MeshAnim } from './fold-engine.js'
 import { geometryDims, primitiveGeometry, type GeometryDims } from './three-points.js'
 import type { PostAPI } from './post-scene.js'
+import type { MeshSlab } from './rasterize.js'
 
 export interface SceneAPI {
   createObject(row: Record<string, unknown>): void
@@ -324,22 +324,20 @@ function disposeLight(obj: LightObject): void {
   obj.light.dispose()
 }
 
-// A mesh whose geometry is element DATA rather than anything this file knows
-// how to compute: `mesh` carries faces, creases, and vertex positions sampled
-// across the animation, `fold` says where in it to read. Faces render as a
-// per-face triangle soup so each can carry its own offset (origami nudges each
-// face by its layer); edges are lines from the same positions.
+// A mesh drawn from the buffers the store compiled out of its element rows.
+// Nothing here knows how the elements got their positions — it lerps two
+// keyframes and lays them out. Faces render as a per-face triangle soup so
+// each can carry its own offset (origami nudges each face by its layer);
+// edges are lines from the same positions.
 interface MeshObject {
   root: THREE.Group
-  mesh: MeshAnim
   fold: number
-  shown: number
+  // the mesh's geometry, compiled by the store from its element rows
+  slab: MeshSlab | null
+  frame: number
   vertColor: PartColors
   faceColor: PartColors
   edgeColor: PartColors
-  // step → "a,b" → that crease's engine-canonical number, so a paint row's
-  // `edge` finds the right line in the face-traversal order lines are drawn in
-  edgeIndex: Map<number, Map<string, number>>
   posAttr: THREE.BufferAttribute
   linePosAttr: THREE.BufferAttribute
   tintAttr: THREE.BufferAttribute
@@ -356,9 +354,9 @@ interface MeshObject {
 const PAPER_BACK = 0xf4efe2
 
 // Per-element colours arrive already resolved by rasterize (index = the
-// shape's own element number, null = unpainted) and are shared by reference
-// across frames that did not change, so this only unpacks them into the
-// tint/mask buffers the shader reads.
+// element's own number, null = unpainted) and are shared by reference across
+// frames that did not change, so this only unpacks them into the tint/mask
+// buffers the shader reads.
 type PartColors = (number | null)[] | undefined
 
 const _tint = new THREE.Color()
@@ -374,83 +372,96 @@ function writeTint(
   K[at] = 1
 }
 
+const dynAttr = (n: number, size: number): THREE.BufferAttribute => {
+  const a = new THREE.BufferAttribute(new Float32Array(n), size)
+  a.setUsage(THREE.DynamicDrawUsage)
+  return a
+}
+
+// Buffers are sized to the mesh's fixed topology, once.
+function ensureRoom(obj: MeshObject, s: MeshSlab): void {
+  const corners = s.cornerVert.length
+  const ends = s.endVert.length
+  if (corners * 3 > obj.posAttr.array.length) {
+    obj.posAttr = dynAttr(corners * 3, 3)
+    obj.tintAttr = dynAttr(corners * 3, 3)
+    obj.maskAttr = dynAttr(corners, 1)
+    obj.geometry.setAttribute('position', obj.posAttr)
+    obj.geometry.setAttribute('tint', obj.tintAttr)
+    obj.geometry.setAttribute('tintMask', obj.maskAttr)
+  }
+  if (ends * 3 > obj.linePosAttr.array.length) {
+    obj.linePosAttr = dynAttr(ends * 3, 3)
+    obj.lineTintAttr = dynAttr(ends * 3, 3)
+    obj.lineMaskAttr = dynAttr(ends, 1)
+    obj.lineGeometry.setAttribute('position', obj.linePosAttr)
+    obj.lineGeometry.setAttribute('tint', obj.lineTintAttr)
+    obj.lineGeometry.setAttribute('tintMask', obj.lineMaskAttr)
+  }
+}
+
+// One frame of the paper: find the keyframes either side of it, then walk the
+// fixed corner order writing vertex + its face's layer offset. Both are lerped
+// with the same weight, and lerp is linear, so adding them after interpolating
+// is exactly the same paper as interpolating the sum.
 function fillMesh(obj: MeshObject): void {
-  const { faces: FV, verts, offs, step } = meshAt(obj.mesh, obj.fold)
-  const offX = (fi: number): number => offs[fi * 3]
-  const offY = (fi: number): number => offs[fi * 3 + 1]
-  const offZ = (fi: number): number => offs[fi * 3 + 2]
-  const vertColor = obj.vertColor
-  const faceColor = obj.faceColor
-  const edgeColor = obj.edgeColor
+  const s = obj.slab
+  if (!s) return
+  ensureRoom(obj, s)
+  let lo = 0, hi = s.axis.length - 1, i = 0
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1
+    if (s.axis[m] <= obj.frame) { i = m; lo = m + 1 } else hi = m - 1
+  }
+  const j = Math.min(i + 1, s.axis.length - 1)
+  const span = s.axis[j] - s.axis[i]
+  const u = span > 0 ? Math.min(1, Math.max(0, (obj.frame - s.axis[i]) / span)) : 0
+  const { vpos, foff, cornerVert, cornerFace, endVert, endFace, nv, nf } = s
+  const va = i * nv * 3, vb = j * nv * 3, fa = i * nf * 3, fb = j * nf * 3
+  const { vertColor, faceColor, edgeColor } = obj
+
   const P = obj.posAttr.array as Float32Array
   const T = obj.tintAttr.array as Float32Array
   const K = obj.maskAttr.array as Float32Array
-  let n = 0, k = 0
-  for (let fi = 0; fi < FV.length; ++fi) {
-    const F = FV[fi]
-    const ox = offX(fi), oy = offY(fi), oz = offZ(fi)
-    for (let j = 1; j + 1 < F.length; ++j) {
-      for (const vi of [F[0], F[j], F[j + 1]]) {
-        P[n++] = verts[vi * 3] + ox; P[n++] = verts[vi * 3 + 1] + oy; P[n++] = verts[vi * 3 + 2] + oz
-        // a corner's own colour is the more specific one, so it wins there —
-        // which is what lets a few painted vertices shade across a face
-        writeTint(T, K, k++, vertColor?.[vi] ?? faceColor?.[fi])
-      }
+  for (let c = 0; c < cornerVert.length; ++c) {
+    const v = cornerVert[c] * 3
+    const f = cornerFace[(c / 3) | 0] * 3
+    for (let k = 0; k < 3; ++k) {
+      P[c * 3 + k] = vpos[va + v + k] + (vpos[vb + v + k] - vpos[va + v + k]) * u
+        + foff[fa + f + k] + (foff[fb + f + k] - foff[fa + f + k]) * u
     }
+    // a corner's own colour is the more specific one, so it wins there —
+    // which is what lets a few painted vertices shade across a face
+    writeTint(T, K, c, vertColor?.[cornerVert[c]] ?? faceColor?.[cornerFace[(c / 3) | 0]])
   }
-  obj.geometry.setDrawRange(0, n / 3)
+  obj.geometry.setDrawRange(0, cornerVert.length)
   obj.posAttr.needsUpdate = true
   obj.tintAttr.needsUpdate = true
   obj.maskAttr.needsUpdate = true
+
   const L = obj.linePosAttr.array as Float32Array
   const LT = obj.lineTintAttr.array as Float32Array
   const LK = obj.lineMaskAttr.array as Float32Array
-  let m = 0, e = 0
-  const seen = new Set<string>()
-  for (let fi = 0; fi < FV.length; ++fi) {
-    const F = FV[fi]
-    const ox = offX(fi), oy = offY(fi), oz = offZ(fi)
-    let i = F.length - 1
-    for (let j = 0; j < F.length; ++j) {
-      const a = F[i], b = F[j]
-      i = j
-      const key = a < b ? `${a},${b}` : `${b},${a}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      L[m++] = verts[a * 3] + ox; L[m++] = verts[a * 3 + 1] + oy; L[m++] = verts[a * 3 + 2] + oz
-      L[m++] = verts[b * 3] + ox; L[m++] = verts[b * 3 + 1] + oy; L[m++] = verts[b * 3 + 2] + oz
-      // the line list is built in face-traversal order; edge NUMBERS are the
-      // engine's canonical order, so a row's `edge` resolves through the map
-      const ei = obj.edgeIndex.get(step)?.get(key)
-      const packed = ei === undefined ? null : edgeColor?.[ei]
-      writeTint(LT, LK, e++, vertColor?.[a] ?? packed)
-      writeTint(LT, LK, e++, vertColor?.[b] ?? packed)
+  for (let e = 0; e < endVert.length; ++e) {
+    const v = endVert[e] * 3
+    const fi = endFace[(e / 2) | 0]
+    const f = fi >= 0 ? fi * 3 : -1
+    for (let k = 0; k < 3; ++k) {
+      L[e * 3 + k] = vpos[va + v + k] + (vpos[vb + v + k] - vpos[va + v + k]) * u
+        + (f < 0 ? 0 : foff[fa + f + k] + (foff[fb + f + k] - foff[fa + f + k]) * u)
     }
+    writeTint(LT, LK, e, vertColor?.[endVert[e]] ?? edgeColor?.[(e / 2) | 0])
   }
-  obj.lineGeometry.setDrawRange(0, m / 3)
+  obj.lineGeometry.setDrawRange(0, endVert.length)
   obj.linePosAttr.needsUpdate = true
   obj.lineTintAttr.needsUpdate = true
   obj.lineMaskAttr.needsUpdate = true
-  obj.shown = obj.fold
 }
 
 function makeMesh(row: Record<string, unknown>): MeshObject {
-  const mesh = row.mesh as MeshAnim
-  let maxTris = Math.max(1, mesh.initial.faces.reduce((s, F) => s + F.length - 2, 0))
-  let maxEdges = Math.max(1, mesh.initial.faces.reduce((s, F) => s + F.length, 0))
-  for (const step of mesh.steps) {
-    maxTris = Math.max(maxTris, step.faces.reduce((s, F) => s + F.length - 2, 0))
-    maxEdges = Math.max(maxEdges, step.faces.reduce((s, F) => s + F.length, 0))
-  }
-
-  const dyn = (n: number, size: number): THREE.BufferAttribute => {
-    const a = new THREE.BufferAttribute(new Float32Array(n), size)
-    a.setUsage(THREE.DynamicDrawUsage)
-    return a
-  }
-  const posAttr = dyn(maxTris * 9, 3)
-  const tintAttr = dyn(maxTris * 9, 3)
-  const maskAttr = dyn(maxTris * 3, 1)
+  const posAttr = dynAttr(9, 3)
+  const tintAttr = dynAttr(9, 3)
+  const maskAttr = dynAttr(3, 1)
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', posAttr)
   geometry.setAttribute('tint', tintAttr)
@@ -471,7 +482,7 @@ function makeMesh(row: Record<string, unknown>): MeshObject {
   }
   // Per-element paint blends OVER each material's own colour rather than
   // multiplying it (what `vertexColors` would do): front and back share one
-  // geometry, so a multiplied tint could never leave the two papers different
+  // geometry, so a multiplied tint could never leave the two sides different
   // colours. `materialColor` reads material.color live, so an unpainted model
   // and the `color` decay pulse both keep working with no buffer refill.
   const paintNode = () =>
@@ -481,9 +492,9 @@ function makeMesh(row: Record<string, unknown>): MeshObject {
   front.colorNode = paintNode()
   back.colorNode = paintNode()
 
-  const linePosAttr = dyn(maxEdges * 6, 3)
-  const lineTintAttr = dyn(maxEdges * 6, 3)
-  const lineMaskAttr = dyn(maxEdges * 2, 1)
+  const linePosAttr = dynAttr(6, 3)
+  const lineTintAttr = dynAttr(6, 3)
+  const lineMaskAttr = dynAttr(2, 1)
   const lineGeometry = new THREE.BufferGeometry()
   lineGeometry.setAttribute('position', linePosAttr)
   lineGeometry.setAttribute('tint', lineTintAttr)
@@ -496,40 +507,14 @@ function makeMesh(row: Record<string, unknown>): MeshObject {
   root.add(new THREE.Mesh(geometry, back))
   root.add(new THREE.LineSegments(lineGeometry, line))
 
-  const edgeIndex = new Map<number, Map<string, number>>()
-  mesh.steps.forEach((step, k) => {
-    const at = new Map<string, number>()
-    step.edges.forEach(([a, b], i) => at.set(`${a},${b}`, i))
-    edgeIndex.set(k, at)
-  })
-
   const obj: MeshObject = {
-    root, mesh, fold: 0, shown: -1,
-    vertColor: undefined, faceColor: undefined, edgeColor: undefined, edgeIndex,
+    root, fold: 0, slab: null, frame: 0,
+    vertColor: undefined, faceColor: undefined, edgeColor: undefined,
     posAttr, linePosAttr, tintAttr, maskAttr, lineTintAttr, lineMaskAttr,
     front, back, line, geometry, lineGeometry,
   }
   applyMeshRow(obj, row)
-  fillMesh(obj)
   return obj
-}
-
-function applyMeshRow(obj: MeshObject, row: Record<string, unknown>): void {
-  applyTransform(obj.root, row)
-  if (row.color != null) obj.front.color.set(row.color as number)
-  if (row.backColor != null) obj.back.color.set(row.backColor as number)
-  if (typeof row.fold === 'number' && Number.isFinite(row.fold)) obj.fold = row.fold
-  // rasterize hands the same array back on frames where no element's colour
-  // changed, so identity alone decides whether the buffers need refilling.
-  const vertColor = row.vertColor as PartColors
-  const faceColor = row.faceColor as PartColors
-  const edgeColor = row.edgeColor as PartColors
-  if (vertColor !== obj.vertColor || faceColor !== obj.faceColor || edgeColor !== obj.edgeColor) {
-    obj.vertColor = vertColor
-    obj.faceColor = faceColor
-    obj.edgeColor = edgeColor
-    obj.shown = NaN   // force a refill: the fold value alone hasn't changed
-  }
 }
 
 function disposeMesh(obj: MeshObject): void {
@@ -539,6 +524,21 @@ function disposeMesh(obj: MeshObject): void {
   obj.back.dispose()
   obj.line.dispose()
 }
+
+function applyMeshRow(obj: MeshObject, row: Record<string, unknown>): void {
+  applyTransform(obj.root, row)
+  if (row.color != null) obj.front.color.set(row.color as number)
+  if (row.backColor != null) obj.back.color.set(row.backColor as number)
+  // rasterize hands the same array back on frames where no element's colour
+  // changed, so identity alone decides whether the buffers need refilling.
+  obj.vertColor = row.vertColor as PartColors
+  obj.faceColor = row.faceColor as PartColors
+  obj.edgeColor = row.edgeColor as PartColors
+  if (row.slab) obj.slab = row.slab as MeshSlab
+  obj.frame = typeof row.frame === 'number' ? row.frame : obj.frame
+  fillMesh(obj)
+}
+
 
 // Renders to its own canvas, which is *not* shown directly — hydra (see
 // hydra-scene.ts) takes it as a source texture and post-processes it onto the
@@ -583,6 +583,7 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
 
   const objects = new Map<unknown, THREE.Mesh>()
   const meshes = new Map<unknown, MeshObject>()
+  // element rows can be applied before their mesh's create row lands
   const texts = new Map<unknown, TextObject>()
   const lights = new Map<unknown, LightObject>()
   const cameras = new Set<unknown>()
@@ -665,9 +666,6 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
   let post: PostAPI | null = null
 
   function animate(): void {
-    for (const o of meshes.values()) {
-      if (o.shown !== o.fold) fillMesh(o)
-    }
     if (particles?.sprite.visible) particles.tick(particleTime)
     if (!post?.render()) renderer.render(scene, camera)
     requestAnimationFrame(animate)
@@ -714,7 +712,7 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
         addLight(id, buildLight(lightParams(row)))
         return
       }
-      if (shape === 'mesh' && row.mesh) {
+      if (shape === 'mesh') {
         const obj = makeMesh(row)
         scene.add(obj.root)
         meshes.set(id, obj)
@@ -750,19 +748,6 @@ export function initThree(canvas: HTMLCanvasElement, sizeFrom: HTMLElement): Sce
       }
       const meshObj = meshes.get(id)
       if (meshObj) {
-        // Re-cooking gives a NEW mesh, and a re-run always arrives here rather
-        // than as a create — so a changed mesh has to rebuild the object. Its
-        // buffers are sized for the old topology and its paint is keyed by the
-        // old element numbering; keeping it would draw the wrong thing in the
-        // wrong colours.
-        if (row.mesh && row.mesh !== meshObj.mesh) {
-          scene.remove(meshObj.root)
-          disposeMesh(meshObj)
-          const rebuilt = makeMesh(row)
-          scene.add(rebuilt.root)
-          meshes.set(id, rebuilt)
-          return
-        }
         applyMeshRow(meshObj, row)
         return
       }
