@@ -136,6 +136,23 @@ test('windowsFor: rows cover until-next, the last row runs to the end of its pas
   ])
 })
 
+test('the last row\'s outTo sets the pass count, and the block loops to the end of it', () => {
+  // Over a 16-beat loop: an outTo inside the first pass keeps one pass (the
+  // block loops to 16), one past it grows the sequence to two (loops to 32).
+  const reach = (outTo?: number): [number, number] => {
+    const rows = [{ event: 'retime', beat: 1, from: 1, to: 5, ...(outTo ? { outTo } : {}) }]
+    return [windowsFor(rows, 16)[0].end, buildTimeline(rows, 16).loops]
+  }
+  assert.deepEqual(reach(5), [17, 1], 'outTo 5 → loops until 16, one pass')
+  assert.deepEqual(reach(19), [33, 2], 'outTo 19 → loops until 32, two passes')
+  assert.deepEqual(reach(), [17, 1], 'no outTo → the pass length alone')
+  // The extra pass has to exist for playback to reach it: the block repeats
+  // past its end frame, so the same source beat comes round again in pass 1.
+  const tl = buildTimeline([{ event: 'retime', beat: 1, from: 1, to: 5, outTo: 19 }], 16)
+  assert.equal(tl.sourceBeatAt(10), 3)
+  assert.equal(tl.sourceBeatAt(28), 3, 'the block came round again in the second pass')
+})
+
 test('windowsFor: a later pass (via loop, or a beat past the pass length) extends the sequence', () => {
   const viaLoop = windowsFor([{ event: 'retime', beat: 1, loop: 0 }, { event: 'retime', beat: 1, loop: 1 }], 8)
   assert.deepEqual(viaLoop, [

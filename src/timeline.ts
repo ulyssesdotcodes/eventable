@@ -1,7 +1,9 @@
 // eventable timeline — an OPTIONAL remap on top of the beat-grid playhead,
 // defined as a table of EVENTS (see schemas.timeline). Rows are ordered by
 // (loop, beat) and each covers an UNTIL-NEXT window: from its own `beat`
-// (1-indexed) to the next row's, the last row running to the end of its pass.
+// (1-indexed) to the next row's, the last row running to the end of its pass —
+// or, when it sets `outTo`, to the end of the pass that contains THAT, so its
+// block goes on looping for as many passes as the end frame reaches.
 // The pass length is the GUI loop-beats value the engine supplies, NOT the
 // timeline's own extent — so buildTimeline/timelineSegments/windowsFor all
 // take it as an argument. Playback reads it from the transport; a cook-time
@@ -68,6 +70,15 @@ const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : und
 // are 1-indexed, so 0 in any optional column reads as "unset".
 const opt = (v: unknown): number | undefined => (typeof v === 'number' && v !== 0 ? v : undefined)
 
+// How many passes the LAST row's `outTo` end frame spans (1 when unset). It is
+// the one column that grows the sequence beyond the passes the `loop` column
+// alone gives, so the block keeps looping to the end of the pass that contains
+// it: over a 16-beat loop, outTo 5 runs to 16, outTo 19 to 32.
+function outToPasses(timelineRows: Row[], last: { row: number; lane: number } | undefined, lb: number): number {
+  const outTo = last && opt(timelineRows[last.row].outTo)
+  return outTo ? Math.floor((outTo + last!.lane * lb - 1) / lb) + 1 : 1
+}
+
 // Order the enabled, beat-bearing rows by (loop, beat) and give each an
 // until-next window: it runs to the next row's position, the last row to the
 // end of the last pass any row touches (pass length = loopBeats). A row past
@@ -83,7 +94,10 @@ export function windowsFor(timelineRows: Row[], loopBeats: number = DEFAULT_LOOP
   // Extended playback axis: pass L's rows sit L pass-lengths after pass 0.
   const ext = (x: { beat: number; lane: number }): number => x.beat + x.lane * lb
   rows.sort((a, b) => a.lane - b.lane || a.beat - b.beat)
-  const lastPass = rows.reduce((m, x) => Math.max(m, Math.floor((ext(x) - 1) / lb)), 0)
+  const lastPass = Math.max(
+    rows.reduce((m, x) => Math.max(m, Math.floor((ext(x) - 1) / lb)), 0),
+    outToPasses(timelineRows, rows[rows.length - 1], lb) - 1,
+  )
   const seqEnd = (lastPass + 1) * lb + 1
   return rows.map((x, i) => {
     const next = i + 1 < rows.length ? ext(rows[i + 1]) : seqEnd
@@ -98,7 +112,13 @@ function compile(timelineRows: Row[], loopBeats: number = DEFAULT_LOOP_BEATS): {
   const windows = windowsFor(timelineRows, lb)
   if (!windows.length) return { segments: [], span: 0, loops: 1 }
   const rows = timelineRows ?? []
-  const loops = windows.reduce((m, w) => Math.max(m, w.lane), 0) + 1
+  // The lanes the `loop` column gives, widened to whatever the last row's
+  // `outTo` reaches — those passes must exist or the playhead wraps before
+  // the block has finished looping through them.
+  const loops = Math.max(
+    windows.reduce((m, w) => Math.max(m, w.lane), 0) + 1,
+    outToPasses(rows, windows[windows.length - 1], lb),
+  )
 
   const segments: TimelineSegment[] = []
   const keyframes = windows

@@ -1422,7 +1422,11 @@ export const SCHEMAS = deepFreeze({
    * ordered by (loop, beat); a row's window runs from its own `beat`
    * (1-indexed, like every other table) to the next row's, so there are never
    * gaps or overlaps — the LAST row runs to the end of its pass, and the pass
-   * length is the GUI "beats" control, NOT the timeline's own extent. `event`
+   * length is the GUI "beats" control, NOT the timeline's own extent. An
+   * `outTo` on that last row sets the pass COUNT: its window runs to the end of
+   * whichever pass contains that end frame, and its block keeps looping for all
+   * of them — over a 16-beat loop, outTo 5 loops to 16, outTo 19 loops to 32.
+   * `event`
    * picks the warp: "retime" (the general one — beats(count, { fit }) emits a
    * single retime) stretches input source beats `from`..`to` into the output
    * block `outFrom`..`outTo` (from > to runs backwards) and repeats the block
