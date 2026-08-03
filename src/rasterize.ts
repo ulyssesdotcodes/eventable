@@ -457,7 +457,11 @@ function keyframeObject(evs: Row[], maxFrame: number): ObjectTracks | null {
   const o: ObjectTracks = {
     id: evs[0].id,
     born: createEv.frame as number,
-    dies: destroy && !unwarpedDeath ? (destroy.frame as number) : maxFrame + 1,
+    // `dies` is compared against the frame the object is READ at, which for a
+    // warped one is a source frame — and the store's extent is in playback
+    // frames, a different axis. Only a real destroy bounds it.
+    dies: destroy && !unwarpedDeath ? (destroy.frame as number)
+      : warp ? Infinity : maxFrame + 1,
     cols: {},
     lineage: unionLineage(evs),
     ...(warp ? { warp } : {}),
@@ -548,9 +552,18 @@ export function buildFrameStore(
   // `maxBeats` loop samples (its span EXCLUSIVE — frame span belongs to the
   // next pass, and pad frames reaching it would spuriously add one). How the
   // extent chops into passes is playback's concern.
+  // A warped object's own frames are SOURCE frames — it is shown over its
+  // warp's out-range instead, which is what the extent has to cover. Take the
+  // source extent of one and playback wraps into passes that replay the whole
+  // window again, once per pass of source it never actually reaches.
+  const extentOf = (e: Row): number => {
+    const warp = getWarp(e)
+    if (!warp?.length) return (e.frame as number) ?? 0
+    return beatToFrame(warp.reduce((m, seg) => Math.max(m, seg.p1), 0)) - 1
+  }
   const maxFrame = Math.max(
     maxBeats != null ? Math.max(0, beatsToFrames(maxBeats) - 1) : 0,
-    events.reduce((m, e) => Math.max(m, (e.frame as number) ?? 0), 0),
+    events.reduce((m, e) => Math.max(m, extentOf(e)), 0),
   )
   const objects: ObjectTracks[] = []
   for (const evs of buildTimelines(events).values()) {
