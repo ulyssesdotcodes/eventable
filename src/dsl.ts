@@ -1099,8 +1099,8 @@ export class OrigamiBuilder {
    * `kind` its classification ("Pureland", "Inside Reverse", …), `states` how
    * many valid layer orders existed, `faces`/`moving`/`flaps` how much paper
    * there is and how much of it swings, `layers` the stack height, `plies` the
-   * deepest pile, `flip` whether the row turns the model over first, `motion`
-   * how the in-between is played ("rigid", "relaxed", "mechanism").
+   * deepest pile, `motion` how the in-between is played ("rigid", "relaxed",
+   * "mechanism", or "turn" for a turn-over row, whose `kind` is "Turn").
    *
    *   // pulse a post-processing glow on every fold as it happens
    *   paper.folds().derive({ event: "pulse", name: "glow", value: 0.8 }).outPost()
@@ -1576,15 +1576,15 @@ export const SCHEMAS = deepFreeze({
    * point(s) naming the flap(s) that swing, `kind`/`pick` choose among valid
    * layer orders ("simple", "reverse", "sink", …), `beat`/`dur` the swing's
    * timing (1-indexed, like every other table), `to` how far it lands
-   * (1 = flat). Check `flip` to turn the model over before the fold swings —
-   * the "turn over" of a printed diagram, and what keeps a fold that would
-   * dip away swinging toward the viewer instead. Check `disabled` to skip
-   * a fold.
+   * (1 = flat). `kind: "turn"` makes the row a turn-over instead of a fold —
+   * a diagram's "turn over", a step of its own with its own beat/dur, and
+   * what keeps a fold that would work the underside swinging toward the
+   * viewer; it needs no `p1`/`p2`/`move`. Check `disabled` to skip a fold.
    */
   origami: {
     step: 'string', p1: 'string', p2: 'string', move: 'string',
     kind: 'string', pick: 'number', beat: 'number', dur: 'number', to: 'number',
-    flip: 'boolean', disabled: 'boolean',
+    disabled: 'boolean',
   },
 } as const satisfies Record<string, Schema>)
 

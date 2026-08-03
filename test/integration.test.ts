@@ -86,7 +86,7 @@ test('every sample.table names a table the sample declares', () => {
   }
 })
 
-test('Origami Crane sample: 17 exact fold steps, wings held half-raised', () => {
+test('Origami Crane sample: 17 exact folds and 5 turn-overs, wings held half-raised', () => {
   const sample = SAMPLES.find((s) => s.name === 'Origami Crane')!
   // Materialize seed rows exactly like the app (cook-service): the sample's table
   // data seeds the store, conformed so every schema column exists with type defaults.
@@ -97,14 +97,17 @@ test('Origami Crane sample: 17 exact fold steps, wings held half-raised', () => 
 
   const events = views.get(outViewName('three'))!
   const program = programOf(sample, 'origami')
-  assert.equal(program.steps.length, 17)
+  const folds = program.steps.filter((s) => s.type !== 'Turn')
+  const last = program.steps.length - 1
+  assert.equal(folds.length, 17)
+  assert.equal(program.steps.length - folds.length, 5, 'five turn-over steps between them')
   // the paper reaches the scene as elements, not as a geometry blob
   assert.ok(events.rows.some((r) => typeof r.vert === 'number'), 'vertices are rows')
   assert.ok(events.rows.some((r) => typeof r.tri === 'number'), 'triangles are rows')
   assert.equal(events.rows.find((r) => r.event === 'create')!.program, undefined)
-  assert.equal(program.steps[16].name, 'wings')
-  assert.equal(program.steps[16].to, 0.5)
-  assert.equal(program.steps[16].FV.length, 74)
+  assert.equal(program.steps[last].name, 'wings')
+  assert.equal(program.steps[last].to, 0.5)
+  assert.equal(program.steps[last].FV.length, 74)
   // solved fold kinds: the collapse and the point folds are reverse folds
   const kinds = program.steps.map((s) => s.type)
   assert.equal(kinds.filter((k) => k === 'Inside Reverse').length, 9)
@@ -114,18 +117,18 @@ test('Origami Crane sample: 17 exact fold steps, wings held half-raised', () => 
   // replaced, which is what makes an element number the same piece of paper
   // from the first beat to the last.
   const created = events.rows.filter((r) => r.event === 'create' && typeof r.vert === 'number')
-  assert.equal(created.length, program.steps[16].Vfrom.length, 'every vertex of the final fold')
+  assert.equal(created.length, program.steps[last].Vfrom.length, 'every vertex of the final fold')
   assert.equal(new Set(created.map((r) => r.beat)).size, 1, 'all stated at one beat')
   assert.equal(events.rows.filter((r) => r.event === 'destroy').length, 0, 'and none is ever retired')
 
   // exact states at every landed fold: all flat (|z| only layer nudges = 0
   // here, raw positions), and the finished pose has the wings up
-  for (let k = 0; k <= 16; ++k) {
+  for (let k = 0; k <= last; ++k) {
     const landed = program.steps[k === 0 ? 0 : k - 1]
     const at = k === 0 ? program.steps[0].t0 : landed.t1
     for (const p of posAtBeat(events.rows, at)) assert.ok(Math.abs(p[2]) < 1e-6, `state ${k} is flat`)
   }
-  const zMax = Math.max(...posAtBeat(events.rows, program.steps[16].t1).map((p) => p[2]))
+  const zMax = Math.max(...posAtBeat(events.rows, program.steps[last].t1).map((p) => p[2]))
   assert.ok(zMax > 0.5, `wings rise out of plane (z ${zMax.toFixed(2)})`)
 
   // Playback rasterizes the routed events into the scene cache automatically —
@@ -150,10 +153,10 @@ for (const { name, steps } of [
 
     const rows = views.get(outViewName('three'))!.rows
     const program = programOf(sample, sample.table!)
-    assert.equal(program.steps.length, steps)
+    assert.equal(program.steps.filter((s) => s.type !== 'Turn').length, steps)
 
     // the finished flower lies flat
-    const pos = posAtBeat(rows, program.steps[steps - 1].t1)
+    const pos = posAtBeat(rows, program.steps[program.steps.length - 1].t1)
     for (const p of pos) assert.ok(Math.abs(p[2]) < 1e-6, 'landed flower is flat')
 
     // and it reads as a bloom: paper reaches out to a comparable radius in
@@ -211,18 +214,18 @@ test('Origami Metamorphosis sample: retime pingpongs the lotus back to a square 
   // the lotus folds up, then .retime(pingpong) folds the very same run back
   // down to a flat square — no hand-mirrored rows
   const flat = gathered('flowerA', 1)
-  assert.ok(gathered('flowerA', 7) < flat * 0.8, 'the lotus gathers as it blooms')
-  // beat 19 is beat 7 played backwards — the SAME run, vertex for vertex, which
-  // is what "no hand-mirrored rows" means
-  const out7 = paperAt('flowerA', 7), back19 = paperAt('flowerA', 19)
-  assert.equal(back19.size, out7.size)
-  for (const [v, q] of back19) {
-    const a = out7.get(v)!
+  assert.ok(gathered('flowerA', 10) < flat * 0.8, 'the lotus gathers as it blooms')
+  // beat 26 is beat 10 played backwards (the window mirrors about beat 18) —
+  // the SAME run, vertex for vertex, which is what "no hand-mirrored rows" means
+  const out10 = paperAt('flowerA', 10), back26 = paperAt('flowerA', 26)
+  assert.equal(back26.size, out10.size)
+  for (const [v, q] of back26) {
+    const a = out10.get(v)!
     assert.ok(Math.hypot(q[0] - a[0], q[1] - a[1], q[2] - a[2]) < 1e-6,
       `vertex ${v} retraces its outward pose`)
   }
 
-  // The pingpong lands on the very same square it started from at beat 25 —
+  // The pingpong lands on the very same square it started from at beat 35 —
   // which is the instant the lotus retires and the lily takes over, so what
   // the contract is really about is that the swap cannot be seen. The lotus is
   // GONE at the hand-off (a destroyed mesh takes its geometry with it), and
@@ -231,13 +234,13 @@ test('Origami Metamorphosis sample: retime pingpongs the lotus back to a square 
     Math.min(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[0])),
     Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[1])),
   ]
-  assert.equal(paperAt('flowerA', 25).size, 0, 'the lotus is retired at the hand-off')
+  assert.equal(paperAt('flowerA', 35).size, 0, 'the lotus is retired at the hand-off')
   const square = box([...paperAt('flowerA', 1).values()])
-  const takesOver = box([...paperAt('flowerB', 25).values()])
+  const takesOver = box([...paperAt('flowerB', 35).values()])
   assert.ok(takesOver.every((v, i) => Math.abs(v - square[i]) < 1e-6),
     `the lily covers the same square: ${takesOver} vs ${square}`)
   // and it really is a flat square again by the last frame it is drawn
-  assert.ok(gathered('flowerA', 24.97) > flat * 0.95, 'the lotus unfolds back to the square')
+  assert.ok(gathered('flowerA', 34.97) > flat * 0.95, 'the lotus unfolds back to the square')
 })
 
 test('Hydra Meta sample: replace/append/setSource/layer rewrite the sketch across the loop', () => {
@@ -279,7 +282,7 @@ test('Hydra Meta sample: replace/append/setSource/layer rewrite the sketch acros
   assert.equal(at(16).code, 'osc(30, 0.2, 2).kaleid(7).out(o0)')
 })
 
-test('Origami Cicada sample: nine simple folds, all exact', () => {
+test('Origami Cicada sample: nine simple folds and six turn-overs, all exact', () => {
   const sample = SAMPLES.find((s) => s.name === 'Origami Cicada')!
   const { views } = createRuntime({
     editableRows: (name: string, schema: Record<string, ColumnType>, seed?: Record<string, unknown>[]) =>
@@ -287,14 +290,16 @@ test('Origami Cicada sample: nine simple folds, all exact', () => {
   }).run(sample.code, { seed: 1 })
   const events = views.get(outViewName('three'))!
   const program = programOf(sample, 'origami')
-  assert.equal(program.steps.length, 9)
-  for (const step of program.steps) assert.equal(step.type, 'Pureland')
-  for (let k = 1; k <= 9; ++k) {
-    for (const p of posAtBeat(events.rows, program.steps[k - 1].t1)) {
-      assert.ok(Math.abs(p[2]) < 1e-6, `state ${k} flat`)
+  assert.equal(program.steps.filter((s) => s.type !== 'Turn').length, 9)
+  for (const step of program.steps) {
+    if (step.type !== 'Turn') assert.equal(step.type, 'Pureland')
+  }
+  for (const step of program.steps) {
+    for (const p of posAtBeat(events.rows, step.t1)) {
+      assert.ok(Math.abs(p[2]) < 1e-6, `state after "${step.name}" flat`)
     }
   }
-  const xs = posAtBeat(events.rows, program.steps[8].t1).map((p) => p[0])
+  const xs = posAtBeat(events.rows, program.steps[program.steps.length - 1].t1).map((p) => p[0])
   assert.ok(Math.max(...xs) - Math.min(...xs) > 0.8, 'wings splay wide')
 })
 
