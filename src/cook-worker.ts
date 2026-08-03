@@ -16,5 +16,16 @@ const post = self.postMessage.bind(self) as (msg: unknown) => void
 
 self.addEventListener('message', (e) => {
   const req = (e as MessageEvent).data as CookRequest
-  void ready.then(() => post(service.handle(req)))
+  void ready.then(() => {
+    const resp = service.handle(req)
+    try {
+      post(resp)
+    } catch (err) {
+      // A value the pack layer didn't reach (a function in a declared seed row,
+      // say) throws DataCloneError here. Answering with the error keeps the
+      // client's promise from hanging forever — an unanswered cook leaves the
+      // main thread stuck mid-run with no error strip.
+      post({ id: req.id, ok: false, error: `cook result could not be sent: ${(err as Error).message}` })
+    }
+  })
 })

@@ -1857,9 +1857,10 @@ export type DSLSurface = Easings & {
    * the column names + types (number → numeric input; code → opens in the main
    * editor); a column tracks the schema exactly unless the table panel has
    * genuinely touched it, which claims it for the user. `seedRows` populate
-   * the table the first time it's created.
+   * the table the first time it's created — rows or a table, so a computed
+   * table can seed it: editable("post", schemas.post, paper.folds().derive(…)).
    */
-  editable(name: string, schema: Schema, seedRows?: Row[]): Table
+  editable(name: string, schema: Schema, seedRows?: Row[] | Table): Table
   /**
    * The Expr helpers, grouped: expr.field/lit/idx build diffable expressions
    * over a row (chain .add/.mul/.gt/.cond/… and math like .sin()/.clamp());
@@ -1986,8 +1987,12 @@ export function createDSL(ctx: DSLContext | null): DSLSurface {
     three,
     t: three,
     origami: makeOrigami(ctx),
-    editable: (name: string, schema: Schema, seedRows?: Row[]): Table => {
-      const rows = (ctx?.editableRows?.(name, schema, seedRows) ?? []).map((r) => ({ ...r }))
+    editable: (name: string, schema: Schema, seedRows?: Row[] | Table): Table => {
+      // A Table seed must be materialized here: undefined still means "no seed"
+      // (an example's seed then wins), and a Table crossing back to the main
+      // thread as a declaration is not structured-cloneable.
+      const seed = seedRows === undefined ? undefined : rowsOf(seedRows)
+      const rows = (ctx?.editableRows?.(name, schema, seed) ?? []).map((r) => ({ ...r }))
       return new Table(rows, ctx).save(name)
     },
     expr: makeExprNamespace(ctx),
