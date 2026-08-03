@@ -14,7 +14,9 @@ import { buildFrameIndex, sampleFrame, rasterizeRows, elementRowsAt, type MeshSl
 const posAtBeat = (rows: Row[], beat: number): [number, number, number][] => {
   const frame = beatToFrame(beat)
   return sampleFrame(buildFrameIndex(rows), frame)
-    .flatMap((r) => (r.slab ? elementRowsAt(r.slab as MeshSlab, r.id, frame) : [r]))
+    // a mesh's row carries the frame its geometry should be read at — the same
+    // one its own tracks were read at, which a .retime() moves
+    .flatMap((r) => (r.slab ? elementRowsAt(r.slab as MeshSlab, r.id, r.frame as number) : [r]))
     .filter((r) => typeof r.vert === 'number')
     .map((r) => [r.px as number, r.py as number, r.pz as number])
 }
@@ -194,7 +196,7 @@ test('Origami Metamorphosis sample: retime pingpongs the lotus back to a square 
     const frame = beatToFrame(beat)
     for (const mesh of sampleFrame(idx, frame)) {
       if (!mesh.slab || !String(mesh.id).startsWith(id)) continue
-      for (const r of elementRowsAt(mesh.slab as MeshSlab, mesh.id, frame)) {
+      for (const r of elementRowsAt(mesh.slab as MeshSlab, mesh.id, mesh.frame as number)) {
         if (typeof r.vert === 'number') m.set(r.vert, [r.px as number, r.py as number, r.pz as number])
       }
     }

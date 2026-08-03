@@ -8,10 +8,11 @@
 
 import { withLineage, unionLineage, getLineage, type Row } from './lineage.js'
 import { mixColor } from './color.js'
-import { beatToFrame, beatsToFrames } from './constants.js'
+import { beatToFrame, beatsToFrames, frameToBeat } from './constants.js'
 // dsl.ts imports rasterizeRows back; the cycle is benign — each side only
 // calls the other at runtime, never during module evaluation.
-import { EASINGS, isBinding, isStreamingNode, evalExpr, substituteExpr } from './dsl.js'
+import { EASINGS, isBinding, isStreamingNode, evalExpr, substituteExpr, getWarp } from './dsl.js'
+import { sourceAt, type TimelineSegment } from './timeline.js'
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x)
 
@@ -270,6 +271,15 @@ interface ObjectTracks {
   // resolved once: the union is per object, and rebuilding it on every sampled
   // frame dominated playback once a scene held hundreds of elements
   lineage: ReturnType<typeof getLineage>
+  // A .retime()'d object is READ at a warped time rather than having its rows
+  // moved, so it keeps its source beats and carries the map here — as segment
+  // data, not a closure, since the store crosses to the worker.
+  warp?: TimelineSegment[]
+  // A lifecycle row that was NOT retimed speaks in playback time — a destroy
+  // concatenated after a .retime() means "stop drawing this at beat 25", not
+  // "at whatever source beat 25 happens to show". The warp decides which pose
+  // an object wears, not whether it is there.
+  diesPlay?: number
 }
 
 export interface FrameStore {
@@ -442,12 +452,16 @@ function keyframeObject(evs: Row[], maxFrame: number): ObjectTracks | null {
     for (const k in e) if (isBinding(e[k])) return null
   }
   const destroy = evs.find((e) => e.event === 'destroy')
+  const warp = evs.map(getWarp).find(Boolean)
+  const unwarpedDeath = warp && destroy && !getWarp(destroy)
   const o: ObjectTracks = {
     id: evs[0].id,
     born: createEv.frame as number,
-    dies: destroy ? (destroy.frame as number) : maxFrame + 1,
+    dies: destroy && !unwarpedDeath ? (destroy.frame as number) : maxFrame + 1,
     cols: {},
     lineage: unionLineage(evs),
+    ...(warp ? { warp } : {}),
+    ...(unwarpedDeath ? { diesPlay: destroy.frame as number } : {}),
   }
   const key = (k: string, frame: number, v: unknown, ease: unknown): void => {
     let t = o.cols[k]
@@ -542,8 +556,10 @@ export function buildFrameStore(
   for (const evs of buildTimelines(events).values()) {
     const keyed = keyframeObject(evs, maxFrame)
     if (keyed) { objects.push(keyed); continue }
+    const warp = evs.map(getWarp).find(Boolean)
     const o: ObjectTracks = {
       id: evs[0].id, born: -1, dies: maxFrame + 1, cols: {}, lineage: [],
+      ...(warp ? { warp } : {}),
     }
     const seenSource = new Set<Row>()
     let parts: Record<PartKind, (number | null)[]> = { vert: [], face: [], edge: [] }
@@ -626,13 +642,24 @@ export function storeRows(store: FrameStore): Row[] {
       if (!row) continue
       const { slab, ...rest } = row
       out.push(slab ? rest : row)
-      if (slab) out.push(...elementRowsAt(slab as MeshSlab, row.id, frame))
+      // `row.frame` is the SOURCE frame — the same one rowAt read the object's
+      // own tracks at — which is not `frame` once the object is retimed.
+      if (slab) out.push(...elementRowsAt(slab as MeshSlab, row.id, row.frame as number))
     }
   }
   return out
 }
 
-function rowAt(o: ObjectTracks, frameFloat: number): Row | null {
+function rowAt(o: ObjectTracks, playFrame: number): Row | null {
+  // A warped object is asked what it looked like at the SOURCE time this
+  // playback time shows — its lifetime, its keyframes and its slab are all in
+  // source frames, so the map applies once, here, and nothing downstream has
+  // to know. Where a remap has to pick a value wherever two segments meet, a
+  // warp just evaluates: sourceAt returns one number.
+  if (o.diesPlay != null && playFrame >= o.diesPlay) return null
+  const frameFloat = o.warp
+    ? beatToFrame(sourceAt(o.warp, frameToBeat(playFrame)))
+    : playFrame
   const f0 = Math.floor(frameFloat)
   if (f0 < o.born || f0 >= o.dies) return null
   const frac = frameFloat - f0

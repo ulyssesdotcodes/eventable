@@ -6,6 +6,12 @@ import { FRAMES_PER_BEAT } from '../src/constants.js'
 import { withLineage, getLineage } from '../src/lineage.js'
 import { createRuntime } from '../src/runtime.js'
 import { cookProgram } from '../src/replay.js'
+import { buildFrameIndex, sampleFrame, elementRowsAt, type MeshSlab } from '../src/rasterize.js'
+import { SAMPLES } from '../src/samples.js'
+import { conformRow, schemaColumns, type ColumnType } from '../src/editable-tables.js'
+import { outViewName } from '../src/dsl.js'
+import { beatToFrame } from '../src/constants.js'
+import type { Row } from '../src/lineage.js'
 
 test('no timeline rows → identity mapping, not active', () => {
   const tl = buildTimeline([])
@@ -354,4 +360,39 @@ test('a user timeline table (editable, schemas.timeline) remaps other tables in 
   const result = rt.run(code, { seed: 1 })
   const hits = result.views.get('hits')!
   assert.deepEqual(hits.rows.map((r) => r.beat), [2, 6])
+})
+
+// A paper's geometry is a baked animation, not a set of events. Moving its rows
+// leaves every element to arrive on its own schedule — one vertex glides from
+// the flat sheet over eight beats while its neighbour takes one — so the paper
+// tears itself apart and faces cut through each other. Read it at a warped time
+// instead and there is nothing to desynchronise: the whole mesh resolves to ONE
+// source beat, and an identity retime is bit-exact.
+test('a retimed mesh is read at a warped time, not moved', () => {
+  const sample = SAMPLES.find((s) => s.name === 'Origami retime')!
+  const seeded = (name: string, schema: Record<string, ColumnType>, seed?: Row[]): Row[] =>
+    (seed ?? sample.tables?.[name] ?? []).map((r) => conformRow(r, schemaColumns(schema)))
+  const poseAt = (code: string, beat: number): number[] => {
+    const rows = createRuntime({ loopBeats: () => 64, editableRows: seeded })
+      .run(code, { seed: 1 }).views.get(outViewName('three'))!.rows
+    const frame = beatToFrame(beat)
+    const mesh = sampleFrame(buildFrameIndex(rows), frame).find((r) => r.slab)
+    if (!mesh) return []
+    return elementRowsAt(mesh.slab as MeshSlab, mesh.id, mesh.frame as number)
+      .filter((r) => typeof r.vert === 'number')
+      .flatMap((r) => [r.px as number, r.py as number, r.pz as number])
+  }
+  const plain = sample.code
+  const identity = plain
+    .replace('// .retime(table("retime"))', '.retime(rows([{ beat: 1, event: "retime", from: 1, to: 53, outFrom: 1, outTo: 53 }]))')
+  assert.notEqual(identity, plain, 'the sample still has a retime line to enable')
+
+  // half-open: at beat 53 the block has ended and the timeline wraps to replay
+  // it, so that instant belongs to the next cycle rather than to this one
+  for (const beat of [1, 7.5, 20, 33.25, 52]) {
+    const a = poseAt(plain, beat), b = poseAt(identity, beat)
+    assert.ok(a.length > 100 && a.length === b.length, `beat ${beat} has geometry`)
+    const worst = Math.max(...a.map((v, i) => Math.abs(v - b[i])))
+    assert.equal(worst, 0, `identity retime is bit-exact at beat ${beat}`)
+  }
 })
