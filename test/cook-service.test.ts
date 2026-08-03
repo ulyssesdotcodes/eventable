@@ -100,6 +100,22 @@ define("out", (rand, table) => table("notes"))
   assert.deepEqual(unpackCooked(edited.cooked).views.get('out')!.rows.map((r) => ({ beat: r.beat, x: r.x })), [{ beat: 2, x: 9 }])
 })
 
+// A computed table is the natural thing to hand editable() as a seed
+// (editable("post", schemas.post, paper.folds().flatMap(…))). It used to ride
+// back in the declaration as a live Table, which structured clone rejects —
+// the response never left the worker and the cook hung forever.
+test('a table seeds an editable, and the declaration crosses the boundary as plain rows', () => {
+  const service = createCookService()
+  const resp = service.handle(req(`
+define("src", () => rows([{ beat: 1, x: 2 }]))
+editable("notes", { beat: "number", x: "number" }, table("src"))
+`))
+  assert.equal(resp.ok, true)
+  if (!resp.ok) return
+  structuredClone(resp)
+  assert.deepEqual(resp.declared[0].seedRows!.map((r) => ({ beat: r.beat, x: r.x })), [{ beat: 1, x: 2 }])
+})
+
 test('tap rows flow into tempo() and a broken program returns an error response', () => {
   const service = createCookService()
   const taps = [{ beat: 0, time: 0 }, { beat: 1, time: 250 }]
