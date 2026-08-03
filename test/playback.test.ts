@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { wallAlignedTick, wallAlignedLoop, loopEpochsFromApplies, loopBeatsFromEvents } from '../src/playback.js'
+import { wallAlignedTick, wallAlignedLoop, loopEpochFromApplies, loopBeatsFromEvents } from '../src/playback.js'
 
 test('wallAlignedTick: phase since the anchor, wrapped into [0, loopSeconds), 0 for a non-positive loop', () => {
   assert.equal(wallAlignedTick(1000, 1000, 4), 0, 'at the anchor instant')
@@ -420,23 +420,17 @@ test('wallAlignedLoop: completed loops since the anchor — the quotient to wall
   assert.equal(wallAlignedLoop(5000, 1000, -4), 0)
 })
 
-// --- loopEpochsFromApplies — shared loop epochs from stamped apply pulses ----
+// --- loopEpochFromApplies — the one loop epoch from stamped apply pulses -----
 
-test('loopEpochsFromApplies keeps the newest stamp per changed kind, ignoring unstamped and non-apply events', () => {
-  assert.deepEqual(loopEpochsFromApplies([
-    { kind: 'apply', changed: ['scene', 'hydra'], at: 1000 },
-    { kind: 'apply', changed: ['scene'], at: 5000 },
-  ]), { scene: 5000, hydra: 1000 })
-  assert.deepEqual(loopEpochsFromApplies([
+test('loopEpochFromApplies keeps the newest apply stamp, ignoring unstamped and non-apply events', () => {
+  assert.equal(loopEpochFromApplies([
     { kind: 'peer-join', at: 1 },
-    { kind: 'session-start' },
+    { kind: 'session-start', at: 500 },
+    { kind: 'apply', at: 1000 },
     { kind: 'apply' }, // legacy pulse, no stamp
-    { kind: 'apply', changed: ['timeline'], at: 2000 },
-    { kind: 'apply', changed: [], at: 9000 }, // a run that changed nothing
-  ]), { timeline: 2000 })
-  // Omitting `changed` is how evaluate() spells "every kind" on a fresh log.
-  assert.deepEqual(loopEpochsFromApplies([{ kind: 'apply', at: 7 }]),
-    { scene: 7, timeline: 7, hydra: 7, bauble: 7, post: 7 })
+    { kind: 'apply', at: 5000 },
+  ]), 5000)
+  assert.equal(loopEpochFromApplies([]), 0, 'the Unix epoch until an apply is stamped')
 })
 
 // --- loopBeatsFromEvents — the loop length folded off the activity table -----
@@ -498,6 +492,41 @@ test('a hydra event past the loop plays once the wall-aligned pass reaches it', 
   assert.equal(sketches.at(-1), 'a.out(o0)', 'the sequence wraps to pass 0')
 })
 
+test('multi-pass tracks share one pass 0: they advance and re-base together', () => {
+  const time = fakeTime(0)
+  const engine = createPlaybackEngine(
+    [createSceneVisualizer(fakeScene()), createHydraVisualizer(fakeHydra())],
+    { clock: time.clock },
+  )
+  engine.setLoopBeats(2)
+  // Both tracks put an event on beat 3 — one past the 2-beat loop, so each
+  // spans two passes.
+  const apply = (loopEpoch: number): void => {
+    engine.load({
+      scene: buildFrameIndex(rasterizeRows([sceneCreate(), { id: 's', event: 'update', beat: 3, px: 5 }], 2)),
+      hydraRows: [{ event: 'setCode', code: 'a', beat: 1 }, { event: 'setCode', code: 'b', beat: 3 }],
+      timelineRows: [],
+      loopEpoch,
+    })
+  }
+  const passes = () => engine.viewState().passes
+
+  apply(0)
+  engine.toggle()
+  assert.deepEqual(passes().scene, { pass: 0, loops: 2 })
+  assert.deepEqual(passes().hydra, { pass: 0, loops: 2 })
+  time.advance(2 * DEFAULT_BEAT_SECONDS * 1000) // one full loop
+  time.frame()
+  assert.deepEqual(passes().scene, { pass: 1, loops: 2 })
+  assert.deepEqual(passes().hydra, { pass: 1, loops: 2 }, 'both tracks reach pass 1 on the same loop')
+  // A re-cook re-bases every track at pass 0 at once. Per-kind epochs used to
+  // re-base only the kinds that cook had changed, leaving the rest a pass
+  // ahead of them for good — one track on 1/2 while another sat on 2/2.
+  apply(time.clock.epochNow())
+  assert.deepEqual(passes().scene, { pass: 0, loops: 2 })
+  assert.deepEqual(passes().hydra, { pass: 0, loops: 2 })
+})
+
 // --- per-kind pass exposure on viewState (R1: content pass vs timeline pass) -
 
 test("viewState surfaces each kind's own content pass, distinct from the engine's timeline pass", () => {
@@ -557,7 +586,7 @@ test('the engine supplies ctx.time: a time() binding resolves to source seconds'
 test('scene: content past the loop plays in later passes; short content resets every loop', () => {
   const viz = createSceneVisualizer(fakeScene())
   const at = (srcFrameF: number, loopFrames: number, pass = 0) =>
-    viz.applyFrame({ srcFrameF, loopFrames, ctx: null, passAt: () => pass })[0]
+    viz.applyFrame({ srcFrameF, loopFrames, ctx: null, pass })[0]
 
   // px glides 0 → 20 across beats 1..21 (600 frames): a 16-beat loop
   // (480 frames) makes a two-loop, 32-beat sequence.

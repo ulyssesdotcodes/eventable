@@ -7,7 +7,7 @@ import { activeLineage } from './lineage.js'
 import type { EvalCtx } from './dsl.js'
 import { FPS, FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS, DEFAULT_LOOP_BEATS, beatsToFrames } from './constants.js'
 import type { Row } from './lineage.js'
-import { LOOP_KINDS, type CookedVisualRows, type LoopEpochs, type PassState, type Visualizer, type VisualizerKind } from './visualizer.js'
+import { type CookedVisualRows, type PassState, type Visualizer, type VisualizerKind } from './visualizer.js'
 import { beatSecondsFromTaps } from './tap-log.js'
 
 export interface TapControl {
@@ -67,9 +67,9 @@ export interface PlaybackViewState {
   // passes[K].pass * loopBeats + srcBeat.
   passes: Partial<Record<VisualizerKind, PassState>>
   // The engine's own TIMELINE pass, on the extended PLAYBACK axis, BEFORE the
-  // warp: passesSince(timelineEpoch) modulo timeline.loops when the timeline
-  // has more than one pass, else 0. A different axis from each kind's own
-  // entry in `passes`.
+  // warp: the shared pass count modulo timeline.loops when the timeline has
+  // more than one pass, else 0. A different axis from each kind's own entry in
+  // `passes`, though both wrap the same counter.
   timelinePass: number
 }
 
@@ -124,19 +124,16 @@ export function loopBeatsFromEvents(events: Row[]): number | null {
   return out
 }
 
-// Fold the activity event stream into per-kind loop epochs: the newest
-// 'apply' stamp naming each kind. Stamps are the author's absolute clock, so
-// every replica (including late joiners) derives identical epochs with no
-// extra sync message. An apply without `changed` counts for every kind;
-// unstamped events (legacy pulses) are ignored.
-export function loopEpochsFromApplies(events: Row[]): LoopEpochs {
-  const out: LoopEpochs = {}
+// Fold the activity event stream into the loop epoch: the newest 'apply'
+// stamp. Stamps are the author's absolute clock, so every replica (including
+// late joiners) derives the same epoch with no extra sync message; unstamped
+// events (legacy pulses) are ignored, and 0 (the Unix epoch) means none yet.
+// ONE epoch for every kind on purpose — a per-kind epoch let two multi-pass
+// tracks count from different origins and sit a pass apart forever.
+export function loopEpochFromApplies(events: Row[]): number {
+  let out = 0
   for (const e of events ?? []) {
-    if (e.kind !== 'apply' || typeof e.at !== 'number') continue
-    const kinds: readonly unknown[] = Array.isArray(e.changed) ? e.changed : LOOP_KINDS
-    for (const k of kinds) {
-      if ((LOOP_KINDS as readonly unknown[]).includes(k)) out[k as (typeof LOOP_KINDS)[number]] = e.at
-    }
+    if (e.kind === 'apply' && typeof e.at === 'number') out = e.at
   }
   return out
 }
@@ -222,7 +219,7 @@ export function playbackOrigin(events: Row[], tapAnchorMs: number | null): numbe
 
 // What load() consumes — the timeline is the engine's own (it remaps time, it
 // doesn't render). replay's CookedResult is structurally assignable.
-export type LoadedRows = CookedVisualRows & { timelineRows: Row[] }
+export type LoadedRows = CookedVisualRows & { timelineRows: Row[]; loopEpoch?: number }
 
 export interface PlaybackAPI {
   load(cooked: LoadedRows): void
@@ -285,9 +282,11 @@ export function createPlaybackEngine(
   // a timeline's pass length is now the GUI loop-beats, not its own extent.
   let timelineRows: Row[] = []
   let timeline: Timeline = buildTimeline([])
-  // Absolute instant the timeline's pass counting is based on — its shared
-  // apply stamp (see loopEpochsFromApplies). 0 (the Unix epoch) until stamped.
-  let timelineEpoch = 0
+  // Absolute instant ALL pass counting is based on — the shared apply stamp
+  // (see loopEpochFromApplies). The timeline warp and every visualizer count
+  // from this one instant, so tracks spanning several passes are always on the
+  // same one. 0 (the Unix epoch) until stamped.
+  let loopEpoch = 0
   let maxBeats = 0 // loop length in beats
   let isScrubbing = false
   let scrubPos = 0
@@ -339,7 +338,7 @@ export function createPlaybackEngine(
   // so passing this pre-modulo'd value through it is a no-op — computing it
   // once here is what lets viewState() surface it too.
   function timelinePassNow(): number {
-    return timeline.loops > 1 ? passesSince(timelineEpoch) % timeline.loops : 0
+    return timeline.loops > 1 ? passesSince(loopEpoch) % timeline.loops : 0
   }
 
   // Source beat shown at playhead beat `pos` (0-based elapsed beats): the
@@ -372,7 +371,11 @@ export function createPlaybackEngine(
     const states: Row[] = []
     const loopFrames = beatsToFrames(loopBeats)
     const bpm = tappedBpm() ?? 60 / DEFAULT_BEAT_SECONDS
-    for (const v of visualizers) states.push(...v.applyFrame({ srcFrameF, loopFrames, ctx, passAt: passesSince, bpm }))
+    // Counted ONCE for the whole frame: every kind wraps this same number by
+    // its own pass count, so no two multi-pass tracks can disagree about which
+    // pass it is.
+    const pass = passesSince(loopEpoch)
+    for (const v of visualizers) states.push(...v.applyFrame({ srcFrameF, loopFrames, ctx, pass, bpm }))
     // Graphed/table views key their rows by `beat`, so report the source beat.
     onTick?.(pos, activeLineage(states), srcBeat)
   }
@@ -452,15 +455,15 @@ export function createPlaybackEngine(
     }
   }
 
-  // Swap in a freshly cooked cache without moving the playhead. loopEpochs are
-  // the shared apply stamps multi-loop sequences count passes from: a kind
-  // present re-bases its pass counting (the phase within the loop stays put);
-  // a kind absent keeps its current epoch.
+  // Swap in a freshly cooked cache without moving the playhead. loopEpoch is
+  // the shared apply stamp every multi-loop sequence counts passes from: a new
+  // one re-bases them all together at pass 0 (the phase within the loop stays
+  // put); absent, the current epoch stands.
   function load(cooked: LoadedRows): void {
     for (const v of visualizers) v.load(cooked)
     timelineRows = cooked.timelineRows ?? []
     timeline = buildTimeline(timelineRows, loopBeats)
-    if (typeof cooked.loopEpochs?.timeline === 'number') timelineEpoch = cooked.loopEpochs.timeline
+    if (typeof cooked.loopEpoch === 'number') loopEpoch = cooked.loopEpoch
     recomputeMax()
     retimeTo(currentTime())
   }

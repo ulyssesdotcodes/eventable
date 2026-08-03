@@ -40,7 +40,7 @@ import { createTapLog } from './tap-log.js'
 import { connectMultiplayer } from './multiplayer.js'
 import type { MultiplayerConnection, MultiplayerStatus } from './multiplayer.js'
 import { PRESENCE_LOG } from './room-core.js'
-import { loopEpochsFromApplies, loopBeatsFromEvents, pausedMsBefore, transportStateFromEvents, playbackOrigin } from './playback.js'
+import { loopEpochFromApplies, loopBeatsFromEvents, pausedMsBefore, transportStateFromEvents, playbackOrigin } from './playback.js'
 import type { PlaybackAPI, PlaybackOptions } from './playback.js'
 import { getLineage, type Row } from './lineage.js'
 import type { PeerPresence } from './ui/table-panel.js'
@@ -674,24 +674,6 @@ function tablesForDisplay(views: Map<string, Table>): Map<string, Table> {
   return display
 }
 
-const lastCookedSigs = { scene: '', timeline: '', hydra: '', bauble: '', post: '' }
-
-// Which cooked outputs changed (re-baselining for the next diff) — stamped
-// onto the apply pulse so the whole room resets the same multi-loop sequences.
-// The worker stamps a graph-hash signature per output (see CookedSigs), so
-// this never serializes the dense rows.
-function diffCooked({ sigs }: CookedResult): { scene: boolean; timeline: boolean; hydra: boolean; bauble: boolean; post: boolean } {
-  const changed = {
-    scene: sigs.scene !== lastCookedSigs.scene,
-    timeline: sigs.timeline !== lastCookedSigs.timeline,
-    hydra: sigs.hydra !== lastCookedSigs.hydra,
-    bauble: sigs.bauble !== lastCookedSigs.bauble,
-    post: sigs.post !== lastCookedSigs.post,
-  }
-  Object.assign(lastCookedSigs, sigs)
-  return changed
-}
-
 // The editable store row a cooked band's row came from, for the timeline
 // pane's drag (see Handle.source). A lineage ref addresses the MATERIALIZED
 // view — ensure()'s visibleRows, disabled rows excluded — while store.setRow
@@ -735,7 +717,7 @@ function applyCooked(cooked: CookedResult): void {
   const activityEvents = editableStore.get(ACTIVITY_TABLE)?.events ?? []
   const loopBeats = loopBeatsFromEvents(activityEvents)
   if (loopBeats != null) playback.setLoopBeats(loopBeats)
-  playback.load({ ...cooked, loopEpochs: loopEpochsFromApplies(activityEvents) })
+  playback.load({ ...cooked, loopEpoch: loopEpochFromApplies(activityEvents) })
 }
 
 // A tap changed the tempo. Nothing re-cooks — content sits on a fixed beat
@@ -853,21 +835,12 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     // is suppressed by `cooking` right now.
     setProgram(code)
     // recordApply commits every pending edit as the apply node that *is* the
-    // run — BEFORE applyCooked, so the loop epochs it folds already include
+    // run — BEFORE applyCooked, so the loop epoch it folds already includes
     // this apply, re-basing this replica from the very stamp its peers will.
     // A reactive evaluate commits nothing: the author's apply is already
-    // merged, and onMerge has already made it our head.
-    const changed = diffCooked(cooked)
-    if (broadcast) {
-      const changedKinds = Object.keys(changed).filter((k) => changed[k as keyof typeof changed])
-      // The seed rides the apply — the replay unit that scrubSession re-cooks
-      // from. `lastCookedSigs` survives a store clear (new session, sample load,
-      // scene import), so on a fresh log it would report nothing changed and
-      // leave every visualizer on the old session's epoch; omitting `changed`
-      // entirely is how loopEpochsFromApplies already spells "every kind".
-      const prior = (editableStore.get(ACTIVITY_TABLE)?.events ?? []).some((e) => e.kind === APPLY_KIND)
-      editableStore.recordApply({ ...(prior && { changed: changedKinds }), at: Date.now(), seed })
-    }
+    // merged, and onMerge has already made it our head. The seed rides the
+    // apply too — it's the replay unit scrubSession re-cooks from.
+    if (broadcast) editableStore.recordApply({ at: Date.now(), seed })
     syncSessionBar()
     applyCooked(cooked)
     if (persist) persistSession()
@@ -1048,9 +1021,6 @@ async function scrubSession(pos: number): Promise<void> {
     liveCode = code
     liveSeed = seed
     setError(null)
-    // Re-baseline changed-detection so the next Run's apply pulse diffs
-    // against the scrubbed view the user sees.
-    diffCooked(cooked)
     applyCooked(cooked)
   } catch (err) {
     if (epoch === scrubEpoch) setError((err as Error).message)
