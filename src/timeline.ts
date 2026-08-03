@@ -196,7 +196,10 @@ export function timelineSegments(timelineRows: Row[], loopBeats: number = DEFAUL
   return compile(timelineRows, loopBeats).segments
 }
 
-function sourceAt(segments: TimelineSegment[], p: number): number {
+// The playback beat -> source beat direction, on compiled segments. A retimed
+// table reads itself through this rather than moving its rows: a warp composes
+// where a remap has to pick a value wherever two segments meet.
+export function sourceAt(segments: TimelineSegment[], p: number): number {
   for (const seg of segments) {
     if (p < seg.p0) break // sorted by p0 — we're in a gap, which plays unmapped
     if (p <= seg.p1) {

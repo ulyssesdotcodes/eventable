@@ -11,7 +11,7 @@
 // is its audience. Use /** */ for anything the editor should show on hover.
 
 import { rasterizeRows } from './rasterize.js'
-import { timelineSegments, placeBeat } from './timeline.js'
+import { timelineSegments, placeBeat, type TimelineSegment } from './timeline.js'
 import { withLineage, carry, unionLineage, type Row } from './lineage.js'
 import { FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS } from './constants.js'
 import { compileFoldTable, foldElementRows, foldPointsAt, foldValueAt, type FoldTableProgram } from './fold-engine.js'
@@ -566,6 +566,25 @@ const spread = (res: Row | Row[] | null | undefined, refs: ReturnType<typeof car
 const rowsOf = (x: Table | Row[] | null | undefined): Row[] =>
   x instanceof Table ? x.rows : x ?? []
 
+/**
+ * The warp a retimed row is read through, riding the row the way lineage does —
+ * an enumerable symbol, so it survives `{ ...row }` through every verb between
+ * .retime() and .outThree(), and is invisible to Object.keys and the table view.
+ *
+ * Only rasterize reads it, and only inside the cook, so it never has to cross
+ * the worker boundary: buildFrameStore lifts it onto the object it belongs to,
+ * as plain segment data.
+ */
+declare const _warpUnique: unique symbol
+export const WARP = Symbol.for('eventable.warp') as unknown as typeof _warpUnique
+type WarpedRow = Row & { [WARP]?: TimelineSegment[] }
+
+export const withWarp = (row: Row, segments: TimelineSegment[]): Row => {
+  (row as WarpedRow)[WARP] = segments
+  return row
+}
+export const getWarp = (row: Row): TimelineSegment[] | undefined => (row as WarpedRow)[WARP]
+
 export class Table {
   name: string | null
   _ctx: DSLContext | null
@@ -904,8 +923,17 @@ export class Table {
     return this._xf('retime', { loopBeats }, (ins) => {
       const segments = timelineSegments(ins[1], loopBeats)
       if (!segments.length) return ins[0].map(recarry)
+      // A mesh and the elements that belong to it are one baked animation, so
+      // they warp together — the mesh's own row included, or its geometry
+      // would be read on a different clock from the object holding it.
+      const meshes = new Set<unknown>(ins[0].map((r) => r.of).filter((v) => v != null))
       return ins[0].flatMap((r) => {
         if (typeof r.beat !== 'number') return [recarry(r)]
+        // Geometry is a baked animation, not a set of events: it is retimed by
+        // being READ at a warped time, so its rows keep their source beats and
+        // carry the warp instead. Moving them would make each element arrive
+        // on its own schedule — see withWarp.
+        if (r.of != null || meshes.has(r.id)) return [withWarp(recarry(r), segments)]
         return placeBeat(segments, r.beat as number).map(({ beat, stretch }) => {
           const next: Row = { ...r, beat }
           if (typeof r.dur === 'number') next.dur = (r.dur as number) * stretch
