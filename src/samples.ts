@@ -235,16 +235,16 @@ editable("hydra", schemas.hydra,
   tables: {
     origami: [
       { step: "diag", p1: "0,0", p2: "1,1", move: "0.667,0.333", beat: 1, dur: 2 },
-      { step: "collapse1", p1: "0,0.5", p2: "1,0.5", move: "0.333,0.167", kind: "reverse", beat: 4, dur: 2 },
-      { step: "collapse2", p1: "0.5,0", p2: "0.5,1", move: "0.833,0.667", kind: "reverse", beat: 7, dur: 2 },
+      { step: "collapse1", p1: "0,0.5", p2: "1,0.5", move: "0.333,0.167", kind: "reverse", beat: 4, dur: 2, flip: true },
+      { step: "collapse2", p1: "0.5,0", p2: "0.5,1", move: "0.833,0.667", kind: "reverse", beat: 7, dur: 2, flip: true },
       { step: "collapse3", p1: "0,1", p2: "0.4142135624,0", move: "0.667,0.069036", kind: "reverse", beat: 10, dur: 2 },
       { step: "collapse4", p1: "0,1", p2: "1,0.5857864376", move: "0.930964,0.667", kind: "reverse", beat: 13, dur: 2 },
       { step: "flatten", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.930964,0.333", beat: 16, dur: 2 },
-      { step: "tuck1", p1: "0,1", p2: "0.4142135624,0", move: "0.069036,0.667", kind: "reverse", beat: 19, dur: 2 },
+      { step: "tuck1", p1: "0,1", p2: "0.4142135624,0", move: "0.069036,0.667", kind: "reverse", beat: 19, dur: 2, flip: true },
       { step: "tuck2", p1: "0,1", p2: "1,0.5857864376", move: "0.667,0.930964", kind: "reverse", beat: 22, dur: 2 },
-      { step: "kite1", p1: "0,1", p2: "0.6681786379,0", move: "0.525373,0.274808", pick: 1, beat: 25, dur: 2 },
+      { step: "kite1", p1: "0,1", p2: "0.6681786379,0", move: "0.525373,0.274808", pick: 1, beat: 25, dur: 2, flip: true },
       { step: "kite2", p1: "0,1", p2: "1,0.3318213621", move: "0.897812,0.667", beat: 28, dur: 2 },
-      { step: "turn", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.333,0.930964", beat: 31, dur: 2 },
+      { step: "turn", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.333,0.930964", beat: 31, dur: 2, flip: true },
       { step: "kite3", p1: "0,1", p2: "1,0.3318213621", move: "0.667,0.897812", pick: 1, beat: 34, dur: 2 },
       { step: "kite4", p1: "0,1", p2: "0.6681786379,0", move: "0.208238,0.583899", pick: 1, beat: 37, dur: 2 },
       { step: "neck", p1: "0.1345593806,0", p2: "0.4733251916,1", move: "0.906033,0.694263", kind: "reverse", beat: 40, dur: 2 },
@@ -450,6 +450,12 @@ rows([
 //   beat,dur when the swing starts, and how long it takes, in beats
 //   to     how far to swing: 1 lands flat (default). Only the last row
 //          may stop short — the wings hold at 0.5, half-raised
+//   flip   the "turn over" of a printed diagram: check it and the model
+//          rotates onto its other face before this fold swings. The paper
+//          lies on a table and you are looking down at it, so a fold that
+//          would work the underside has to be turned over first — check
+//          flip and it swings toward you instead of dipping away behind
+//          the model. Uncheck one and watch that fold go the wrong way.
 //   disabled  an ordinary boolean column: check a step's box to skip that
 //          fold entirely (as if the row weren't there) without deleting
 //          it — handy for previewing an earlier stage of the fold.
@@ -464,9 +470,10 @@ rows([
 editable("origami", schemas.origami)
 
 // Feed the fold table to a sheet of paper, colored side DOWN (backColor)
-// the way a crane is folded so the finished bird comes out colored. Every
-// fold swings toward you on its own — the engine keeps the paper flat on
-// the table and turns it over whenever the next fold would dip away. The
+// the way a crane is folded so the finished bird comes out colored. The
+// paper stays flat on the table and every fold swings toward you, because
+// the five rows that need it are checked "flip" — the folding turns over
+// exactly where the diagram says to, not wherever the engine guesses. The
 // fold value is one number: how many folds have landed (fractions = the
 // next flap mid-swing), so scrubbing the timeline scrubs the folding.
 // .outThree() routes the create row + fold keyframes to the 3D scene (the
@@ -526,6 +533,9 @@ rows([{ beat: 1, event: "setCode", code: "bloom((p) => p.glow, 0.5, 0.7)" },
 //     folding wrong.
 //   - Slow a step down: give "neck" dur: 6 and watch the reverse fold
 //     swing through.
+//   - Uncheck \`flip\` on "turn": that fold now works the underside, so it
+//     swings away from you behind the model instead of toward you. Check
+//     it again and the model turns over first, as the diagram says.
 //
 // Things to try with what the folding knows (the "swinging" tab shows the
 // rows being painted with):
@@ -556,19 +566,19 @@ rows([{ beat: 1, event: "setCode", code: "bloom((p) => p.glow, 0.5, 0.7)" },
         // in half along the diagonal
         { step: "diag", p1: "0,0", p2: "1,1", move: "0.667,0.333", beat: 1, dur: 2 },
         // collapse into the square base: four inside reverse folds
-        { step: "collapse1", p1: "0,0.5", p2: "1,0.5", move: "0.333,0.167", kind: "reverse", beat: 4, dur: 2 },
-        { step: "collapse2", p1: "0.5,0", p2: "0.5,1", move: "0.833,0.667", kind: "reverse", beat: 7, dur: 2 },
+        { step: "collapse1", p1: "0,0.5", p2: "1,0.5", move: "0.333,0.167", kind: "reverse", beat: 4, dur: 2, flip: true },
+        { step: "collapse2", p1: "0.5,0", p2: "0.5,1", move: "0.833,0.667", kind: "reverse", beat: 7, dur: 2, flip: true },
         { step: "collapse3", p1: "0,1", p2: "0.4142135624,0", move: "0.667,0.069036", kind: "reverse", beat: 10, dur: 2 },
         { step: "collapse4", p1: "0,1", p2: "1,0.5857864376", move: "0.930964,0.667", kind: "reverse", beat: 13, dur: 2 },
         // flatten the stray flap, then tuck the side corners in
         { step: "flatten", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.930964,0.333", beat: 16, dur: 2 },
-        { step: "tuck1", p1: "0,1", p2: "0.4142135624,0", move: "0.069036,0.667", kind: "reverse", beat: 19, dur: 2 },
+        { step: "tuck1", p1: "0,1", p2: "0.4142135624,0", move: "0.069036,0.667", kind: "reverse", beat: 19, dur: 2, flip: true },
         { step: "tuck2", p1: "0,1", p2: "1,0.5857864376", move: "0.667,0.930964", kind: "reverse", beat: 22, dur: 2 },
         // kite folds onto the centre line, front then (after turning a flap
         // like a page) back — this thins the points into neck and tail
-        { step: "kite1", p1: "0,1", p2: "0.6681786379,0", move: "0.525373,0.274808", pick: 1, beat: 25, dur: 2 },
+        { step: "kite1", p1: "0,1", p2: "0.6681786379,0", move: "0.525373,0.274808", pick: 1, beat: 25, dur: 2, flip: true },
         { step: "kite2", p1: "0,1", p2: "1,0.3318213621", move: "0.897812,0.667", beat: 28, dur: 2 },
-        { step: "turn", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.333,0.930964", beat: 31, dur: 2 },
+        { step: "turn", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.333,0.930964", beat: 31, dur: 2, flip: true },
         { step: "kite3", p1: "0,1", p2: "1,0.3318213621", move: "0.667,0.897812", pick: 1, beat: 34, dur: 2 },
         { step: "kite4", p1: "0,1", p2: "0.6681786379,0", move: "0.208238,0.583899", pick: 1, beat: 37, dur: 2 },
         // swing the points up: neck, tail, then the head, all reverse folds
@@ -614,19 +624,19 @@ paper.spawn({ id: "cicada", color: 0xf4efe2, backColor: 0x79b356, pz: 1.2, rz: -
         // in half along the diagonal: the triangle, point down
         { step: "half", p1: "0,0", p2: "1,1", move: "0.667,0.333", beat: 1, dur: 2 },
         // both corners up to the top point
-        { step: "cornerL", p1: "0,0.5", p2: "1,0.5", move: "0.1,0.3;0.3,0.1", beat: 4, dur: 2 },
-        { step: "cornerR", p1: "0.5,0", p2: "0.5,1", move: "0.6,0.8;0.8,0.6", beat: 7, dur: 2 },
+        { step: "cornerL", p1: "0,0.5", p2: "1,0.5", move: "0.1,0.3;0.3,0.1", beat: 4, dur: 2, flip: true },
+        { step: "cornerR", p1: "0.5,0", p2: "0.5,1", move: "0.6,0.8;0.8,0.6", beat: 7, dur: 2, flip: true },
         // wings: sweep each tip back down so they point away from each
         // other and stick out past the triangle's edges
-        { step: "wingL", p1: "0.19885,0.598479", p2: "1.001892,0.99618", move: "0.03,0.12;0.12,0.03", beat: 10, dur: 2 },
-        { step: "wingR", p1: "0.401521,0.80115", p2: "0.00382,-0.001892", move: "0.88,0.97;0.97,0.88", beat: 13, dur: 2 },
+        { step: "wingL", p1: "0.19885,0.598479", p2: "1.001892,0.99618", move: "0.03,0.12;0.12,0.03", beat: 10, dur: 2, flip: true },
+        { step: "wingR", p1: "0.401521,0.80115", p2: "0.00382,-0.001892", move: "0.88,0.97;0.97,0.88", beat: 13, dur: 2, flip: true },
         // the head: one layer down over the wings, the second stops short —
         // that little gap is the cicada's stripe
         { step: "head1", p1: "-0.19,0.59", p2: "0.41,1.19", move: "0.97,0.03", beat: 16, dur: 2 },
-        { step: "head2", p1: "-0.24,0.64", p2: "0.36,1.24", move: "0.03,0.97", beat: 19, dur: 2 },
+        { step: "head2", p1: "-0.24,0.64", p2: "0.36,1.24", move: "0.03,0.97", beat: 19, dur: 2, flip: true },
         // narrow the body: fold the side corners behind
         { step: "tuckL", p1: "0.09,0.59", p2: "0.39,0.29", move: "0.05,0.55", beat: 22, dur: 2 },
-        { step: "tuckR", p1: "0.41,0.91", p2: "0.71,0.61", move: "0.45,0.95", beat: 25, dur: 2 },
+        { step: "tuckR", p1: "0.41,0.91", p2: "0.71,0.61", move: "0.45,0.95", beat: 25, dur: 2, flip: true },
       ],
     },
   },
@@ -662,17 +672,17 @@ paper.spawn({ id: "lotus", color: 0xfff2d6, backColor: 0xe0518a, pz: 1.2, rx: -0
     tables: {
       origami: [
         // blintz: fold all four corners to the centre
-        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 1, dur: 0.9 },
-        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 2, dur: 0.9 },
+        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 1, dur: 0.9, flip: true },
+        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 2, dur: 0.9, flip: true },
         { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 3, dur: 0.9 },
         { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 4, dur: 0.9 },
         // fold each corner-point back out past the rim: four petals
-        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 5, dur: 0.9 },
-        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 6, dur: 0.9 },
+        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 5, dur: 0.9, flip: true },
+        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 6, dur: 0.9, flip: true },
         { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 7, dur: 0.9 },
         { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 8, dur: 0.9 },
         // fold each petal's tip back for a rounded, two-tone petal
-        { step: "tSW", p1: "0.42,0", p2: "0,0.42", move: "0.01,0.01", beat: 9, dur: 0.9 },
+        { step: "tSW", p1: "0.42,0", p2: "0,0.42", move: "0.01,0.01", beat: 9, dur: 0.9, flip: true },
         { step: "tSE", p1: "0.58,0", p2: "1,0.42", move: "0.99,0.01", beat: 10, dur: 0.9 },
         { step: "tNE", p1: "1,0.58", p2: "0.58,1", move: "0.99,0.99", beat: 11, dur: 0.9 },
         { step: "tNW", p1: "0,0.58", p2: "0.42,1", move: "0.01,0.99", beat: 12, dur: 0.9 },
@@ -710,13 +720,13 @@ paper.spawn({ id: "lily", color: 0xf0eeff, backColor: 0x7a3fc0, pz: 1.2, rx: -0.
     tables: {
       origami: [
         // blintz: fold all four corners to the centre
-        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 1, dur: 0.9 },
-        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 2, dur: 0.9 },
+        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 1, dur: 0.9, flip: true },
+        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 2, dur: 0.9, flip: true },
         { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 3, dur: 0.9 },
         { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 4, dur: 0.9 },
         // pull each corner-point back out past the rim into a petal
-        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 5, dur: 0.9 },
-        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 6, dur: 0.9 },
+        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 5, dur: 0.9, flip: true },
+        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 6, dur: 0.9, flip: true },
         { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 7, dur: 0.9 },
         { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 8, dur: 0.9 },
       ],
@@ -773,26 +783,26 @@ lotus.spawn({ id: "flowerA", color: 0xfff2d6, backColor: 0xe0518a, ...pose })
     tables: {
       lotus: [
         // blintz: fold all four corners to the centre
-        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 1, dur: 0.9 },
-        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 2, dur: 0.9 },
+        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 1, dur: 0.9, flip: true },
+        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 2, dur: 0.9, flip: true },
         { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 3, dur: 0.9 },
         { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 4, dur: 0.9 },
-        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 5, dur: 0.9 },
-        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 6, dur: 0.9 },
+        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 5, dur: 0.9, flip: true },
+        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 6, dur: 0.9, flip: true },
         { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 7, dur: 0.9 },
         { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 8, dur: 0.9 },
-        { step: "tSW", p1: "0.42,0", p2: "0,0.42", move: "0.01,0.01", beat: 9, dur: 0.9 },
+        { step: "tSW", p1: "0.42,0", p2: "0,0.42", move: "0.01,0.01", beat: 9, dur: 0.9, flip: true },
         { step: "tSE", p1: "0.58,0", p2: "1,0.42", move: "0.99,0.01", beat: 10, dur: 0.9 },
         { step: "tNE", p1: "1,0.58", p2: "0.58,1", move: "0.99,0.99", beat: 11, dur: 0.9 },
         { step: "tNW", p1: "0,0.58", p2: "0.42,1", move: "0.01,0.99", beat: 12, dur: 0.9 },
       ],
       lily: [
-        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 1, dur: 0.9 },
-        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 2, dur: 0.9 },
+        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 1, dur: 0.9, flip: true },
+        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 2, dur: 0.9, flip: true },
         { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 3, dur: 0.9 },
         { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 4, dur: 0.9 },
-        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 5, dur: 0.9 },
-        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 6, dur: 0.9 },
+        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 5, dur: 0.9, flip: true },
+        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 6, dur: 0.9, flip: true },
         { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 7, dur: 0.9 },
         { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 8, dur: 0.9 },
       ],

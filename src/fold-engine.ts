@@ -411,6 +411,7 @@ export interface FoldTableRowSpec {
   dur: number
   to: number   // terminal swing fraction: 1 = flat, 0.5 = held at 90°
   crease: boolean  // kind "crease": cut only, nothing folds, no timeline slot
+  flip: boolean    // turn the model over before this fold swings
 }
 
 export interface FoldProgramStep {
@@ -432,9 +433,9 @@ export interface FoldProgramStep {
   // per frame ([frame][face][xyz]) — the world ẑ carried by the face's
   // assembly so the display stack rides the paper instead of shearing.
   soft?: { frames: number; pos: number[]; zDirs?: number[] }
-  // display parity before/after: a fold acting on the underside turns the
-  // model over first (flipTo ≠ flipFrom, animated in the opening window)
-  // so the working side always faces up
+  // display parity before/after: a row marked `flip` turns the model over
+  // first (flipTo ≠ flipFrom, animated in the opening window) so the side the
+  // fold works on faces up
   flipFrom: number
   flipTo: number
 }
@@ -501,6 +502,8 @@ const posAt = (r: Record<string, unknown>, key: string): number | undefined => {
   const n = numAt(r, key)
   return n !== undefined && n > 0 ? n : undefined
 }
+const boolAt = (r: Record<string, unknown>, key: string): boolean =>
+  r[key] === true || strAt(r, key)?.toLowerCase() === 'true'
 
 const isCrease = (r: Record<string, unknown>): boolean =>
   (strAt(r, 'kind') ?? '').toLowerCase() === 'crease'
@@ -544,7 +547,7 @@ export const parseFoldRows = (rows: Record<string, unknown>[]): FoldTableRowSpec
     specs.push({
       name, line: lineThrough(p1, p2), move,
       kind, pick: numAt(r, 'pick'),
-      beat, dur, to, crease,
+      beat, dur, to, crease, flip: boolAt(r, 'flip'),
     })
   })
   return specs
@@ -737,23 +740,13 @@ export const compileFoldTable = (
       if (e instanceof FoldError) throw new FoldError(`step "${spec.name}": ${e.message}`)
       throw e
     }
-    const soft = bakeMotion(out, spec, reverses, priorLines, scale, size, parity)
-    // the paper lies on a table and the folder looks down: every swing must
-    // rise toward the viewer. Measure the apex of the motion that will
-    // actually play and turn the model over first when it would dip — the
-    // parity while the fold plays mirrors z, so the sign picks it outright.
-    // Mechanism steps never flip: their anchor is already probed (bakeMotion)
-    // to open toward the viewer under the running parity.
-    const stepMotion: StepMotion = {
-      Vfrom: out.anim.Vfrom.map(toDisplay),
-      line: lineToDisplay(out.anim.line),
-      moving: out.anim.moving,
-      dirs: out.anim.dirs,
-      FV: out.state.FV,
-      soft,
-    }
-    const apex = soft?.zDirs ? 0 : swingApex(stepMotion, spec.to)
-    const flipTo = apex === 0 ? parity : apex > 0 ? 0 : 1
+    // the paper lies on a table and the folder looks down: every swing should
+    // rise toward the viewer, and the table says when the model must be turned
+    // over for that — as a diagram does. The turn-over plays first, so the
+    // fold itself (and the bake that plans it) runs at the parity AFTER it.
+    const flipTo = spec.flip ? parity ^ 1 : parity
+    const soft = bakeMotion(out, spec, reverses, priorLines, scale, size, flipTo)
+    const Vfrom = out.anim.Vfrom.map(toDisplay)
     steps.push({
       name: spec.name,
       type: out.type,
@@ -761,8 +754,8 @@ export const compileFoldTable = (
       t1: spec.beat + spec.dur,
       to: spec.to,
       FV: out.state.FV.map((F) => [...F]),
-      Vfrom: stepMotion.Vfrom,
-      line: stepMotion.line,
+      Vfrom,
+      line: lineToDisplay(out.anim.line),
       moving: out.anim.moving,
       layers: out.state.layers,
       layersFrom: out.anim.layersFrom,
@@ -772,7 +765,7 @@ export const compileFoldTable = (
       flipTo,
     })
     const k = steps.length - 1
-    const attrs = stepAttrs(k, spec, out, stepMotion.Vfrom)
+    const attrs = stepAttrs(k, spec, out, Vfrom)
     verts.push(...attrs.verts)
     faces.push(...attrs.faces)
     edges.push(...attrs.edges)
@@ -784,10 +777,10 @@ export const compileFoldTable = (
       flaps: new Set(out.anim.flap.filter((f) => f >= 0)).size,
       layers: Math.max(...out.state.layers) + 1,
       plies: Math.max(...out.plies),
-      flip: flipTo !== parity,
+      flip: spec.flip,
       motion: soft ? (soft.zDirs ? 'mechanism' : 'relaxed') : 'rigid',
     })
-    parity = steps[steps.length - 1].flipTo
+    parity = flipTo
     const rec = reverseRecordOf(out)
     if (rec) reverses.push(rec)
     priorLines.push(spec.line)
@@ -1033,10 +1026,8 @@ const bakePassesGate = (
 
 // Signed apex of a step's swing in the engine frame: area-weighted height of
 // the faces at the deepest point of the motion that will ACTUALLY play (rigid
-// or baked), sampled through the same path playback uses. The display parity
-// is chosen from this — the rigid fold direction can disagree with a baked
-// relax or mechanism motion, and a vote from the wrong motion is exactly what
-// made the paper flip over and then fold away from the viewer anyway.
+// or baked), sampled through the same path playback uses — so what is judged
+// is what is shown, not the rigid swing a bake replaced.
 const swingApex = (m: StepMotion, to: number): number => {
   const area = m.FV.map((F) => polyArea(F, m.Vfrom))
   const base = sampleStepMotion(m, 0).pos
@@ -1076,10 +1067,10 @@ const bakeMotion = (
         strain <= GATE_RELAX_STRAIN) return relax
   }
   const recent = [...priorLines].reverse()
-  // mechanism steps play under the running parity (they never flip — see
-  // compileFoldTable), so try both anchors and keep the first whose book
-  // measurably opens toward the viewer; a gate-passing bake that opens away
-  // is only a last resort
+  // the mechanism has two mirror anchors and only the table knows which side
+  // is down, so try both under the parity the step plays at and keep the first
+  // whose book measurably opens toward the viewer; a gate-passing bake that
+  // opens away is only a last resort
   const motionOf = (soft: { frames: number; pos: number[]; zDirs: number[] }): StepMotion => ({
     Vfrom: out.anim.Vfrom.map((p): Vec2 => [(p[0] - 0.5) * scale, (p[1] - 0.5) * scale]),
     line: [out.anim.line[0], (out.anim.line[1] - (out.anim.line[0][0] + out.anim.line[0][1]) * 0.5) * scale],
