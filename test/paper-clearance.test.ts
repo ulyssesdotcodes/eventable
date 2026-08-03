@@ -12,15 +12,20 @@ import { clearanceAt } from './util/clearance.js'
 
 const CRANE_ROWS = [
   { step: 'diag', p1: '0,0', p2: '1,1', move: '0.667,0.333', beat: 1 },
+  { step: 'overcollapse1', kind: 'turn', beat: 1.75, dur: 0.25 },
   { step: 'collapse1', p1: '0,0.5', p2: '1,0.5', move: '0.333,0.167', kind: 'reverse', beat: 2 },
+  { step: 'overcollapse2', kind: 'turn', beat: 2.75, dur: 0.25 },
   { step: 'collapse2', p1: '0.5,0', p2: '0.5,1', move: '0.833,0.667', kind: 'reverse', beat: 3 },
   { step: 'collapse3', p1: '0,1', p2: '0.4142135624,0', move: '0.667,0.069036', kind: 'reverse', beat: 4 },
   { step: 'collapse4', p1: '0,1', p2: '1,0.5857864376', move: '0.930964,0.667', kind: 'reverse', beat: 5 },
   { step: 'flatten', p1: '0,0.2928932188', p2: '0.7071067812,1', move: '0.930964,0.333', beat: 6 },
+  { step: 'overtuck1', kind: 'turn', beat: 6.75, dur: 0.25 },
   { step: 'tuck1', p1: '0,1', p2: '0.4142135624,0', move: '0.069036,0.667', kind: 'reverse', beat: 7 },
   { step: 'tuck2', p1: '0,1', p2: '1,0.5857864376', move: '0.667,0.930964', kind: 'reverse', beat: 8 },
+  { step: 'overkite1', kind: 'turn', beat: 8.75, dur: 0.25 },
   { step: 'kite1', p1: '0,1', p2: '0.6681786379,0', move: '0.525373,0.274808', pick: 1, beat: 9 },
   { step: 'kite2', p1: '0,1', p2: '1,0.3318213621', move: '0.897812,0.667', beat: 10 },
+  { step: 'overturn', kind: 'turn', beat: 10.75, dur: 0.25 },
   { step: 'turn', p1: '0,0.2928932188', p2: '0.7071067812,1', move: '0.333,0.930964', beat: 11 },
   { step: 'kite3', p1: '0,1', p2: '1,0.3318213621', move: '0.667,0.897812', pick: 1, beat: 12 },
   { step: 'kite4', p1: '0,1', p2: '0.6681786379,0', move: '0.208238,0.583899', pick: 1, beat: 13 },
@@ -32,13 +37,19 @@ const CRANE_ROWS = [
 
 const CICADA_ROWS = [
   { step: 'half', p1: '0,0', p2: '1,1', move: '0.667,0.333', beat: 1 },
+  { step: 'overcornerL', kind: 'turn', beat: 1.75, dur: 0.25 },
   { step: 'cornerL', p1: '0,0.5', p2: '1,0.5', move: '0.1,0.3;0.3,0.1', beat: 2 },
+  { step: 'overcornerR', kind: 'turn', beat: 2.75, dur: 0.25 },
   { step: 'cornerR', p1: '0.5,0', p2: '0.5,1', move: '0.6,0.8;0.8,0.6', beat: 3 },
+  { step: 'overwingL', kind: 'turn', beat: 3.75, dur: 0.25 },
   { step: 'wingL', p1: '0.19885,0.598479', p2: '1.001892,0.99618', move: '0.03,0.12;0.12,0.03', beat: 4 },
+  { step: 'overwingR', kind: 'turn', beat: 4.75, dur: 0.25 },
   { step: 'wingR', p1: '0.401521,0.80115', p2: '0.00382,-0.001892', move: '0.88,0.97;0.97,0.88', beat: 5 },
   { step: 'head1', p1: '-0.19,0.59', p2: '0.41,1.19', move: '0.97,0.03', beat: 6 },
+  { step: 'overhead2', kind: 'turn', beat: 6.75, dur: 0.25 },
   { step: 'head2', p1: '-0.24,0.64', p2: '0.36,1.24', move: '0.03,0.97', beat: 7 },
   { step: 'tuckL', p1: '0.09,0.59', p2: '0.39,0.29', move: '0.05,0.55', beat: 8 },
+  { step: 'overtuckR', kind: 'turn', beat: 8.75, dur: 0.25 },
   { step: 'tuckR', p1: '0.41,0.91', p2: '0.71,0.61', move: '0.45,0.95', beat: 9 },
 ]
 
@@ -87,38 +98,35 @@ test('the deep reverse folds keep their baked mechanism motion', () => {
   }
 })
 
-test('table folding: parity chains across steps and starts face-up', () => {
+test('table folding: a turn row is the step that turns the model over', () => {
   for (const rows of [CRANE_ROWS, CICADA_ROWS]) {
     const program = compileFoldTable(rows, { size: 1 })
     let parity = 0
-    for (const step of program.steps) {
+    program.steps.forEach((step, k) => {
       assert.equal(step.flipFrom, parity, `step "${step.name}" starts at the running parity`)
-      assert.ok(step.flipTo === step.flipFrom || step.flipTo === (step.flipFrom ^ 1))
+      assert.equal(step.flipTo !== step.flipFrom, rows[k].kind === 'turn',
+        `step "${step.name}" turns the model over exactly when it is a turn row`)
       parity = step.flipTo
-    }
-    // mechanism steps never flip: they open upward off the anchored cover
-    for (const step of program.steps) {
-      if (step.soft?.zDirs) assert.equal(step.flipFrom, step.flipTo, `mech step "${step.name}" does not flip`)
-    }
+    })
   }
 })
 
 test('every fold swings toward the viewer (paper on a table, folder looking down)', () => {
-  // the user-facing contract behind the parity flips: at the apex of each
-  // step's swing, the paper that moves sits ABOVE where it sat once any
-  // turn-over finished — never folding away behind the model. Measured on
-  // the displayed positions, the exact frames playback draws. The final held
-  // pose (to < 1 — the crane's wings) is exempt: the finished model lifts
-  // into 3D and its flaps legitimately spread both ways.
+  // the user-facing contract the turn rows exist to keep: at the apex of each
+  // fold's swing, the paper that moves sits ABOVE where it started — never
+  // folding away behind the model. Measured on the displayed positions, the
+  // exact frames playback draws. Turn steps are exempt (they move no paper of
+  // their own), and so is the final held pose (to < 1 — the crane's wings):
+  // the finished model lifts into 3D and its flaps legitimately spread both
+  // ways.
   for (const [name, rows] of [['crane', CRANE_ROWS], ['cicada', CICADA_ROWS]] as const) {
     const program = compileFoldTable(rows, { size: 1 })
     for (let k = 0; k < program.steps.length; ++k) {
       const step = program.steps[k]
-      if (step.to < 1) continue
-      const flips = step.flipFrom !== step.flipTo
-      const base = foldTablePositions(program, k + (flips ? 0.32 : 0.02) * step.to)
+      if (step.to < 1 || step.type === 'Turn') continue
+      const base = foldTablePositions(program, k + 0.02 * step.to)
       let apex = 0
-      for (const tRaw of flips ? [0.5, 0.65, 0.8] : [0.25, 0.5, 0.75]) {
+      for (const tRaw of [0.25, 0.5, 0.75]) {
         const { pos } = foldTablePositions(program, k + tRaw * step.to)
         for (let v = 0; v < pos.length; ++v) {
           const moved = Math.hypot(

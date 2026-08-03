@@ -411,6 +411,7 @@ export interface FoldTableRowSpec {
   dur: number
   to: number   // terminal swing fraction: 1 = flat, 0.5 = held at 90°
   crease: boolean  // kind "crease": cut only, nothing folds, no timeline slot
+  turn: boolean    // kind "turn": turn the model over, folding nothing
 }
 
 export interface FoldProgramStep {
@@ -432,9 +433,9 @@ export interface FoldProgramStep {
   // per frame ([frame][face][xyz]) — the world ẑ carried by the face's
   // assembly so the display stack rides the paper instead of shearing.
   soft?: { frames: number; pos: number[]; zDirs?: number[] }
-  // display parity before/after: a fold acting on the underside turns the
-  // model over first (flipTo ≠ flipFrom, animated in the opening window)
-  // so the working side always faces up
+  // display parity before/after: they differ only on a turn step, which is
+  // the whole of that step's motion. Every fold holds the parity it plays at,
+  // so the side it works on faces up.
   flipFrom: number
   flipTo: number
 }
@@ -501,50 +502,48 @@ const posAt = (r: Record<string, unknown>, key: string): number | undefined => {
   const n = numAt(r, key)
   return n !== undefined && n > 0 ? n : undefined
 }
-
-const isCrease = (r: Record<string, unknown>): boolean =>
-  (strAt(r, 'kind') ?? '').toLowerCase() === 'crease'
-
 export const parseFoldRows = (rows: Record<string, unknown>[]): FoldTableRowSpec[] => {
   const specs: FoldTableRowSpec[] = []
   let foldCount = 0
   rows.forEach((r, i) => {
     if (r == null) return
     const name = strAt(r, 'step') ?? `fold${i + 1}`
-    const p1raw = strAt(r, 'p1')
-    const p2raw = strAt(r, 'p2')
-    if (p1raw === undefined || p2raw === undefined) {
-      throw new FoldError(`step "${name}": needs p1 and p2 ("x,y") for its fold line`)
-    }
-    const p1 = parsePoint(p1raw, 'p1', name)
-    const p2 = parsePoint(p2raw, 'p2', name)
-    const moveRaw = strAt(r, 'move')
-    if (moveRaw === undefined && !isCrease(r)) {
-      throw new FoldError(`step "${name}": needs move ("x,y" sheet points, ";"-separated)`)
-    }
-    const move = (moveRaw ?? '').split(';').filter((m) => m.trim() !== '')
-      .map((m) => parsePoint(m, 'move', name))
-    let kind: string | undefined
-    let crease = false
     const kindRaw = strAt(r, 'kind')
-    if (kindRaw !== undefined) {
-      if (kindRaw.toLowerCase() === 'crease') {
-        crease = true
-      } else {
-        kind = KINDS.includes(kindRaw) ? kindRaw : KIND_ALIASES[kindRaw.toLowerCase()]
-        if (kind === undefined) {
-          throw new FoldError(`step "${name}": unknown kind "${kindRaw}" (try simple, reverse, sink, crease, …)`)
-        }
+    const lowered = kindRaw?.toLowerCase()
+    const crease = lowered === 'crease'
+    const turn = lowered === 'turn'
+    let kind: string | undefined
+    if (kindRaw !== undefined && !crease && !turn) {
+      kind = KINDS.includes(kindRaw) ? kindRaw : KIND_ALIASES[lowered as string]
+      if (kind === undefined) {
+        throw new FoldError(`step "${name}": unknown kind "${kindRaw}" (try simple, reverse, sink, turn, crease, …)`)
       }
+    }
+    // a turn folds nothing, so it asks for no fold line and no flap; the line
+    // it carries is never read (nothing moves relative to the paper)
+    let line: Line = [[1, 0], 0]
+    let move: Vec2[] = []
+    if (!turn) {
+      const p1raw = strAt(r, 'p1')
+      const p2raw = strAt(r, 'p2')
+      if (p1raw === undefined || p2raw === undefined) {
+        throw new FoldError(`step "${name}": needs p1 and p2 ("x,y") for its fold line`)
+      }
+      line = lineThrough(parsePoint(p1raw, 'p1', name), parsePoint(p2raw, 'p2', name))
+      const moveRaw = strAt(r, 'move')
+      if (moveRaw === undefined && !crease) {
+        throw new FoldError(`step "${name}": needs move ("x,y" sheet points, ";"-separated)`)
+      }
+      move = (moveRaw ?? '').split(';').filter((m) => m.trim() !== '')
+        .map((m) => parsePoint(m, 'move', name))
     }
     if (!crease) foldCount += 1
     const beat = posAt(r, 'beat') ?? foldCount
     const dur = posAt(r, 'dur') ?? 0.75
-    const to = Math.min(1, posAt(r, 'to') ?? 1)
     specs.push({
-      name, line: lineThrough(p1, p2), move,
+      name, line, move,
       kind, pick: numAt(r, 'pick'),
-      beat, dur, to, crease,
+      beat, dur, to: turn ? 1 : Math.min(1, posAt(r, 'to') ?? 1), crease, turn,
     })
   })
   return specs
@@ -696,6 +695,43 @@ const restateOnFinal = (
   return { faces: outFaces, edges: outEdges }
 }
 
+// A turn-over as a fold outcome: the same paper, nothing moving. Giving it
+// this shape is what lets a turn be an ordinary step — one row in folds(), one
+// scrub position, and its own verts/faces/edges rows in the same numbering —
+// instead of a mode the fold after it has to play in its opening window.
+// Crease angles carry from the fold before (a turn re-labels no crease); the
+// first row of a table has none yet, so its creases read flat.
+const turnOutcome = (st: FoldState, prev: FoldOutcome | undefined): FoldOutcome => {
+  const seen = new Set<string>()
+  const EV: [number, number][] = []
+  for (const F of st.FV) {
+    for (let i = F.length - 1, j = 0; j < F.length; i = j++) {
+      const key = F[i] < F[j] ? `${F[i]},${F[j]}` : `${F[j]},${F[i]}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      EV.push([F[i], F[j]])
+    }
+  }
+  const angles = prev && prev.anim.EV.length === EV.length ? prev.anim.angleTo : EV.map(() => 0)
+  return {
+    state: st,
+    anim: {
+      Vfrom: st.V.map((p) => [...p] as Vec2),
+      moving: st.FV.map(() => false),
+      line: [[1, 0], 0],
+      layersFrom: [...st.layers],
+      dirs: st.FV.map(() => 0),
+      flap: st.FV.map(() => -1),
+      EV,
+      angleFrom: angles,
+      angleTo: angles,
+    },
+    type: 'Turn',
+    nStates: 1,
+    plies: prev?.plies ?? st.FV.map(() => 1),
+  }
+}
+
 // A table of folds, by the columns that make a row one: a line to fold about
 // and a mark on the flap that moves. Everything else in schemas.origami is
 // optional or shared with other tables.
@@ -720,6 +756,7 @@ export const compileFoldTable = (
   const reverses: ReverseRecord[] = []
   const priorLines: Line[] = []
   let parity = 0
+  let last: FoldOutcome | undefined
   for (const spec of specs) {
     if (spec.crease) {
       try {
@@ -731,29 +768,24 @@ export const compileFoldTable = (
       continue
     }
     let out: FoldOutcome
-    try {
-      out = foldStep(st, spec)
-    } catch (e) {
-      if (e instanceof FoldError) throw new FoldError(`step "${spec.name}": ${e.message}`)
-      throw e
+    if (spec.turn) {
+      out = turnOutcome(st, last)
+    } else {
+      try {
+        out = foldStep(st, spec)
+      } catch (e) {
+        if (e instanceof FoldError) throw new FoldError(`step "${spec.name}": ${e.message}`)
+        throw e
+      }
     }
-    const soft = bakeMotion(out, spec, reverses, priorLines, scale, size, parity)
-    // the paper lies on a table and the folder looks down: every swing must
-    // rise toward the viewer. Measure the apex of the motion that will
-    // actually play and turn the model over first when it would dip — the
-    // parity while the fold plays mirrors z, so the sign picks it outright.
-    // Mechanism steps never flip: their anchor is already probed (bakeMotion)
-    // to open toward the viewer under the running parity.
-    const stepMotion: StepMotion = {
-      Vfrom: out.anim.Vfrom.map(toDisplay),
-      line: lineToDisplay(out.anim.line),
-      moving: out.anim.moving,
-      dirs: out.anim.dirs,
-      FV: out.state.FV,
-      soft,
-    }
-    const apex = soft?.zDirs ? 0 : swingApex(stepMotion, spec.to)
-    const flipTo = apex === 0 ? parity : apex > 0 ? 0 : 1
+    // the paper lies on a table and the folder looks down, so a fold that
+    // would work the underside has to be turned over first — which the
+    // table says outright, as a diagram does, in a step of its own.
+    const flipTo = spec.turn ? parity ^ 1 : parity
+    const soft = spec.turn
+      ? undefined
+      : bakeMotion(out, spec, reverses, priorLines, scale, size, parity)
+    const Vfrom = out.anim.Vfrom.map(toDisplay)
     steps.push({
       name: spec.name,
       type: out.type,
@@ -761,8 +793,8 @@ export const compileFoldTable = (
       t1: spec.beat + spec.dur,
       to: spec.to,
       FV: out.state.FV.map((F) => [...F]),
-      Vfrom: stepMotion.Vfrom,
-      line: stepMotion.line,
+      Vfrom,
+      line: lineToDisplay(out.anim.line),
       moving: out.anim.moving,
       layers: out.state.layers,
       layersFrom: out.anim.layersFrom,
@@ -772,7 +804,7 @@ export const compileFoldTable = (
       flipTo,
     })
     const k = steps.length - 1
-    const attrs = stepAttrs(k, spec, out, stepMotion.Vfrom)
+    const attrs = stepAttrs(k, spec, out, Vfrom)
     verts.push(...attrs.verts)
     faces.push(...attrs.faces)
     edges.push(...attrs.edges)
@@ -784,14 +816,17 @@ export const compileFoldTable = (
       flaps: new Set(out.anim.flap.filter((f) => f >= 0)).size,
       layers: Math.max(...out.state.layers) + 1,
       plies: Math.max(...out.plies),
-      flip: flipTo !== parity,
-      motion: soft ? (soft.zDirs ? 'mechanism' : 'relaxed') : 'rigid',
+      motion: spec.turn ? 'turn' : soft ? (soft.zDirs ? 'mechanism' : 'relaxed') : 'rigid',
     })
-    parity = steps[steps.length - 1].flipTo
+    parity = flipTo
+    st = out.state
+    // a turn contributes no fold line and no reverse-fold record: it is the
+    // same paper, seen from the other side
+    if (spec.turn) continue
+    last = out
     const rec = reverseRecordOf(out)
     if (rec) reverses.push(rec)
     priorLines.push(spec.line)
-    st = out.state
   }
   for (let i = 1; i < steps.length; ++i) {
     if (steps[i].t0 < steps[i - 1].t1 - 1e-9) {
@@ -918,8 +953,6 @@ const GATE_MECH_DEPTH = 4.5 * STACK_DEPTH
 const GATE_RELAX_STRAIN = 0.65
 // how far the book opens when earlier reverse folds ride along (~35°)
 const MECH_BETA_CAP = 0.6
-// fraction of a flipping step's swing spent turning the model over
-const FLIP_WINDOW = 0.3
 
 // One step's motion at fraction t (display frame, before layer offsets and
 // parity). Shared by playback and the compile-time gates, so what is
@@ -1033,10 +1066,8 @@ const bakePassesGate = (
 
 // Signed apex of a step's swing in the engine frame: area-weighted height of
 // the faces at the deepest point of the motion that will ACTUALLY play (rigid
-// or baked), sampled through the same path playback uses. The display parity
-// is chosen from this — the rigid fold direction can disagree with a baked
-// relax or mechanism motion, and a vote from the wrong motion is exactly what
-// made the paper flip over and then fold away from the viewer anyway.
+// or baked), sampled through the same path playback uses — so what is judged
+// is what is shown, not the rigid swing a bake replaced.
 const swingApex = (m: StepMotion, to: number): number => {
   const area = m.FV.map((F) => polyArea(F, m.Vfrom))
   const base = sampleStepMotion(m, 0).pos
@@ -1076,10 +1107,10 @@ const bakeMotion = (
         strain <= GATE_RELAX_STRAIN) return relax
   }
   const recent = [...priorLines].reverse()
-  // mechanism steps play under the running parity (they never flip — see
-  // compileFoldTable), so try both anchors and keep the first whose book
-  // measurably opens toward the viewer; a gate-passing bake that opens away
-  // is only a last resort
+  // the mechanism has two mirror anchors and only the table knows which side
+  // is down, so try both under the parity the step plays at and keep the first
+  // whose book measurably opens toward the viewer; a gate-passing bake that
+  // opens away is only a last resort
   const motionOf = (soft: { frames: number; pos: number[]; zDirs: number[] }): StepMotion => ({
     Vfrom: out.anim.Vfrom.map((p): Vec2 => [(p[0] - 0.5) * scale, (p[1] - 0.5) * scale]),
     line: [out.anim.line[0], (out.anim.line[1] - (out.anim.line[0][0] + out.anim.line[0][1]) * 0.5) * scale],
@@ -1133,15 +1164,11 @@ export const foldTablePositions = (
     }
   }
   const k = Math.min(Math.floor(fold), N - 1)
-  const tRaw = Math.min(1, Math.max(0, fold - k))
+  const t = Math.min(1, Math.max(0, fold - k))
   const step = program.steps[k]
-  // a flipping step turns the model over in its opening window, then the
-  // fold plays in the remainder
-  const flipping = step.flipTo !== step.flipFrom
-  const t = flipping ? Math.max(0, (tRaw - FLIP_WINDOW) / (1 - FLIP_WINDOW)) : tRaw
-  const flipT = flipping
-    ? step.flipFrom + (step.flipTo - step.flipFrom) * smooth(0, FLIP_WINDOW, tRaw)
-    : step.flipFrom
+  // a turn step moves no paper — its whole swing is the model coming over,
+  // so parity eases across it; every other step holds the parity it plays at
+  const flipT = step.flipFrom + (step.flipTo - step.flipFrom) * smooth(0, 1, t)
   const sampled = sampleStepMotion(
     { Vfrom: step.Vfrom, line: step.line, moving: step.moving, dirs: step.dirs, FV: step.FV, soft: step.soft }, t)
   let pos = sampled.pos
