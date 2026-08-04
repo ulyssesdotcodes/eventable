@@ -480,7 +480,7 @@ test('the post visualizer precompiles with the real loopFrames — no state comp
   const loops = Math.floor(maxIndex / L) + 1
   for (let pass = 0; pass < loops; pass++) {
     for (let f = 0; f < L; f++) {
-      viz.applyFrame({ srcFrameF: f, loopFrames: L, ctx: null, pass, bpm: 120 })
+      viz.applyFrame({ srcFrameF: f, loopFrames: L, ctx: null, pass, span: loops, bpm: 120 })
     }
   }
   assert.equal(lazy, 0, 'a post state compiled lazily — setProgram under-enumerated (wrong loopFrames)')

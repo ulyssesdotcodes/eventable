@@ -29,8 +29,9 @@ export interface CookedVisualRows {
   postRows?: Row[]
 }
 
-// A kind's current loop-pass mechanics: how many passes its content spans and
-// which one is showing. {pass:0, loops:1} before any frame is applied.
+// A kind's current loop-pass mechanics: how many passes it repeats over (its
+// content's, widened to stay in step with the longest track — see passCycle)
+// and which one is showing. {pass:0, loops:1} before any frame is applied.
 export interface PassState {
   pass: number
   loops: number
@@ -40,19 +41,30 @@ export interface PassState {
 // but they are playback.ts's own axis, not a visualizer's — see passOffset.)
 export type VisualizerKind = 'scene' | 'hydra' | 'bauble' | 'post'
 
+// How many passes a track repeats over inside a `span`-pass program: its own
+// count when that divides the program, so it plays through a whole number of
+// times per program cycle and comes back to its pass 0 exactly when the
+// longest track does. When it doesn't divide, the tightest longer cycle that
+// does — a 3-pass track in a 4-pass program repeats when the program repeats,
+// holding its last pass through the odd one out rather than starting a pass
+// late every time around. `span` 0 (unknown) leaves a track on its own count.
+export function passCycle(loops: number, span: number): number {
+  for (let c = loops; c <= span; c++) if (span % c === 0) return c
+  return loops
+}
+
 // Pure per-kind pass arithmetic, shared by every multi-loop visualizer:
 // content whose beat count runs past one loop (`max` frames long against a
 // `loopFrames`-long loop) forms later passes. `pass` is the engine's ONE
-// wall-aligned pass count since the last apply, which every kind wraps by its
-// own length — that shared counter is what keeps two multi-pass tracks on a
-// common pass 0 instead of drifting a pass apart. This is the CONTENT pass —
-// computed in SOURCE space, after playback.ts has already picked the source
-// beat through any timeline warp. It is a different axis from playback.ts's
-// own TIMELINE pass (playback space, before the warp — see
-// PlaybackViewState.timelinePass); conflating the two mis-places content
-// under an active timeline.
-export function passOffset(max: number, loopFrames: number, pass: number): PassState & { offset: number } {
-  const loops = loopFrames > 0 ? Math.floor(max / loopFrames) + 1 : 1
+// wall-aligned pass count, which every kind wraps by its own cycle — that
+// shared counter is what keeps multi-pass tracks on a common pass 0 instead of
+// drifting apart. This is the CONTENT pass — computed in SOURCE space, after
+// playback.ts has already picked the source beat through any timeline warp. It
+// is a different axis from playback.ts's own TIMELINE pass (playback space,
+// before the warp — see PlaybackViewState.timelinePass); conflating the two
+// mis-places content under an active timeline.
+export function passOffset(max: number, loopFrames: number, pass: number, span = 0): PassState & { offset: number } {
+  const loops = passCycle(loopFrames > 0 ? Math.floor(max / loopFrames) + 1 : 1, span)
   const wrapped = loops > 1 ? pass % loops : 0
   return { pass: wrapped, loops, offset: wrapped * loopFrames }
 }
@@ -62,9 +74,10 @@ export function passOffset(max: number, loopFrames: number, pass: number): PassS
 const indexMax = (rows: Row[]): number => rows.reduce((m, r) => Math.max(m, r.index as number), 0)
 
 // How many passes a cooked program spans at this loop length: its longest
-// track's. An apply records it (see playback.ts's programPasses), which is what
-// lets the loop-epoch fold tell whether a re-cook still HAS the pass the
-// playhead is on — the only thing that restarts the sequences.
+// track's, each track's own count unwidened. It is what every track repeats
+// inside (passCycle) and what an apply records (see playback.ts's
+// programPasses) so the pass-base fold can tell whether a re-cook still HAS the
+// pass being played.
 export function contentPasses(cooked: CookedVisualRows, loopFrames: number): number {
   const spans = [
     cooked.scene?.maxFrame ?? 0,
@@ -83,10 +96,13 @@ export interface VisualizerFrame {
   loopFrames: number
   // Streaming context midi() bindings resolve against; null when no stream.
   ctx: EvalCtx | null
-  // Wall-aligned loops completed since the program was last applied — supplied
-  // by the engine, which owns time. A multi-pass visualizer shows this modulo
-  // its own pass count; every kind gets the same number in a frame.
+  // The pass the piece is on — supplied by the engine, which owns time. A
+  // multi-pass visualizer shows this modulo its own cycle; every kind gets the
+  // same number in a frame.
   pass: number
+  // How many passes the whole program spans (its longest track's). Tracks
+  // repeat inside it rather than against it — see passCycle.
+  span: number
   // Beats per minute from the playback clock (tapped tempo, else the default).
   // Optional so pre-existing callers/fixtures stay assignable; the post
   // visualizer exposes it to chains as `props.bpm`.
@@ -131,12 +147,12 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
       frameIndex = cooked.scene ?? buildFrameIndex([])
     },
     hasContent: () => frameIndex.objects.length > 0,
-    applyFrame({ srcFrameF, loopFrames, ctx, pass }): Row[] {
+    applyFrame({ srcFrameF, loopFrames, ctx, pass, span }): Row[] {
       // Frames land on the loop, so a last event on beat 21 of a 16-beat loop
       // makes a 32-beat sequence (beat 13, a plain 16-beat one). The clamp
       // holds the final pose through the last pass's tail rather than
       // blanking mid-pass.
-      const { offset, ...p } = passOffset(frameIndex.maxFrame, loopFrames, pass)
+      const { offset, ...p } = passOffset(frameIndex.maxFrame, loopFrames, pass, span)
       current = p
       const frameF = Math.min(offset + srcFrameF, frameIndex.maxFrame)
       const baked = sampleFrame(frameIndex, frameF)
@@ -183,11 +199,11 @@ export function createHydraVisualizer(hydraAPI: HydraAPI, previewCode?: () => st
       maxIndex = indexMax(index)
     },
     hasContent: () => index.length > 0,
-    applyFrame({ srcFrameF, loopFrames, ctx, pass }): Row[] {
+    applyFrame({ srcFrameF, loopFrames, ctx, pass, span }): Row[] {
       // floor: an event at exactly beat loopBeats+1 opens a new pass — that's
       // how a later pass is authored. The absolute frame also drives the
       // clock, so transitions animate across passes.
-      const { offset, ...p } = passOffset(maxIndex, loopFrames, pass)
+      const { offset, ...p } = passOffset(maxIndex, loopFrames, pass, span)
       current = p
       const frameF = offset + srcFrameF
       const sketch = hydraFrameAt(index, Math.floor(frameF), loopFrames)
@@ -236,10 +252,10 @@ export function createBaubleVisualizer(baubleAPI: BaubleAPI): Visualizer {
       maxIndex = indexMax(index)
     },
     hasContent: () => index.length > 0,
-    applyFrame({ srcFrameF, loopFrames, ctx, pass }): Row[] {
+    applyFrame({ srcFrameF, loopFrames, ctx, pass, span }): Row[] {
       // Pass derivation mirrors the hydra visualizer's; the absolute frame
       // also drives `t`, keeping (ss t …) transition windows on one clock.
-      const { offset, ...p } = passOffset(maxIndex, loopFrames, pass)
+      const { offset, ...p } = passOffset(maxIndex, loopFrames, pass, span)
       current = p
       const frameF = offset + srcFrameF
       const sketch = baubleFrameAt(index, Math.floor(frameF), loopFrames)
@@ -284,12 +300,12 @@ export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => strin
       programmedLoop = null
     },
     hasContent: () => index.length > 0,
-    applyFrame({ srcFrameF, loopFrames, ctx, pass, bpm }): Row[] {
+    applyFrame({ srcFrameF, loopFrames, ctx, pass, span, bpm }): Row[] {
       if (programmedLoop !== loopFrames) {
         postAPI.setProgram(index, loopFrames)
         programmedLoop = loopFrames
       }
-      const { offset, ...p } = passOffset(maxIndex, loopFrames, pass)
+      const { offset, ...p } = passOffset(maxIndex, loopFrames, pass, span)
       current = p
       const frameF = offset + srcFrameF
       const frame = postFrameAt(index, Math.floor(frameF), loopFrames)

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { wallAlignedTick, wallAlignedLoop, loopEpochFromApplies, loopBeatsFromEvents } from '../src/playback.js'
+import { wallAlignedTick, wallAlignedLoop, passBaseFrom, loopBeatsFromEvents } from '../src/playback.js'
 
 test('wallAlignedTick: phase since the anchor, wrapped into [0, loopSeconds), 0 for a non-positive loop', () => {
   assert.equal(wallAlignedTick(1000, 1000, 4), 0, 'at the anchor instant')
@@ -19,7 +19,7 @@ import {
   createPlaybackEngine, pausedMsBefore, transportStateFromEvents, playbackOrigin, programPasses,
   type PlaybackEngine, type TapControl,
 } from '../src/playback.js'
-import { createSceneVisualizer, createHydraVisualizer, type Visualizer } from '../src/visualizer.js'
+import { createSceneVisualizer, createHydraVisualizer, passOffset, type Visualizer } from '../src/visualizer.js'
 import { rasterizeRows, buildFrameIndex } from '../src/rasterize.js'
 import { DEFAULT_BEAT_SECONDS, DEFAULT_LOOP_BEATS } from '../src/constants.js'
 import { Table, time as timeExpr, type EvalCtx } from '../src/dsl.js'
@@ -420,31 +420,45 @@ test('wallAlignedLoop: completed loops since the anchor — the quotient to wall
   assert.equal(wallAlignedLoop(5000, 1000, -4), 0)
 })
 
-// --- loopEpochFromApplies — the one loop epoch from stamped apply pulses -----
+// --- passBaseFrom — the one pass base folded off the activity and tap logs ---
 
-test('loopEpochFromApplies moves only for an apply that dropped the pass being played', () => {
-  // A fake grid of one pass per second, standing in for the engine's own.
-  const fold = (events: Row[]): number => loopEpochFromApplies(events, (a, b) => Math.max(0, Math.floor((b - a) / 1000)))
+// A 2-beat loop at the default tempo is one pass per second, and the session
+// origin is 0, so a base of N means "pass 0 was the second starting at N".
+const foldBase = (events: Row[], taps: Row[] = []): number => passBaseFrom(events, taps, 2, (t) => t)
+// The pass playing at `at`, off a base folded on the same grid.
+const passAt = (base: number, at: number, anchor = 0, loopMs = 1000): number => Math.floor((at - anchor) / loopMs) - base
 
-  assert.equal(fold([
+test('passBaseFrom moves only for an apply that dropped the pass being played', () => {
+  assert.equal(foldBase([
     { kind: 'peer-join', at: 1 },
-    { kind: 'session-start', at: 500 },
+    { kind: 'session-start', at: 0 },
     { kind: 'apply', at: 1000, passes: 4 }, // the session's first apply anchors the count
     { kind: 'apply', at: 3000, passes: 4 }, // played pass 2, which a 4-pass program has
     { kind: 'apply', at: 4000, passes: 4 }, // played pass 3, ditto
-  ]), 1000, 'a run of edits that keeps the program the same length never restarts')
+  ]), 1, 'a run of edits that keeps the program the same length never restarts')
 
-  assert.equal(fold([
+  assert.equal(foldBase([
     { kind: 'apply', at: 1000, passes: 4 },
     { kind: 'apply', at: 2000, passes: 2 },
-  ]), 1000, 'a shorter program that still has the pass being played (1) keeps counting')
+  ]), 1, 'a shorter program that still has the pass being played (1) keeps counting')
 
-  assert.equal(fold([
+  assert.equal(foldBase([
     { kind: 'apply', at: 1000, passes: 4 },
     { kind: 'apply', at: 4000, passes: 2 }, // played pass 3; a 2-pass program has no such pass
-  ]), 4000, 'dropping the pass being played restarts the sequences from that apply')
+  ]), 4, 'dropping the pass being played restarts the sequences from that apply')
 
-  assert.equal(fold([{ kind: 'peer-join', at: 1 }, { kind: 'apply' }]), 0, 'unstamped and non-apply events never anchor it')
+  assert.equal(foldBase([{ kind: 'peer-join', at: 1 }, { kind: 'apply' }]), 0, 'unstamped and non-apply events never anchor it')
+})
+
+test('passBaseFrom carries the pass being played onto a tapped grid', () => {
+  const events: Row[] = [{ kind: 'session-start', at: 0 }, { kind: 'apply', at: 1000, passes: 4 }]
+  // Untapped, the 5.5s mark is pass 4 of the count that started at 1s.
+  assert.equal(passAt(foldBase(events), 5500), 4)
+  // Two taps 500ms apart keep the beat length but move "beat 0" onto the first
+  // press, so the same instant sits at the very top of a pass on the new grid —
+  // and it is still pass 4 that plays there.
+  const taps: Row[] = [{ beat: 0, time: 5000 }, { beat: 1, time: 5500 }]
+  assert.equal(passAt(foldBase(events, taps), 5500, 5000), 4, 'the tap re-phases the piece, it does not rewind it')
 })
 
 // --- loopBeatsFromEvents — the loop length folded off the activity table -----
@@ -548,6 +562,54 @@ test('multi-pass tracks share one pass 0: they advance together, and only a shru
   assert.deepEqual(passes().hydra, { pass: 0, loops: 2 })
 })
 
+test('a track repeats inside the longest one rather than drifting against it', () => {
+  // Four tracks in a 4-pass program, each `loops` passes of a 60-frame loop.
+  // The pass each shows over eight passes of the piece:
+  const over = (loops: number): number[] =>
+    Array.from({ length: 8 }, (_, piece) => passOffset((loops - 1) * 60, 60, piece, 4).pass)
+  const cycleOf = (loops: number): number => passOffset((loops - 1) * 60, 60, 0, 4).loops
+
+  assert.deepEqual(over(4), [0, 1, 2, 3, 0, 1, 2, 3], 'the longest track sets the piece')
+  assert.deepEqual(over(2), [0, 1, 0, 1, 0, 1, 0, 1], 'a track that divides it plays through twice')
+  assert.deepEqual(over(1), [0, 0, 0, 0, 0, 0, 0, 0], 'a single-pass track plays every pass')
+  // 3 doesn't divide 4, so wrapping at 3 would start it a pass late every time
+  // around. It repeats with the 4-pass track instead, holding its last pass.
+  assert.deepEqual(over(3), [0, 1, 2, 3, 0, 1, 2, 3], 'and one that does not repeats with the piece')
+  assert.deepEqual([cycleOf(4), cycleOf(3), cycleOf(2), cycleOf(1)], [4, 4, 2, 1])
+})
+
+test('a tap re-phases the piece without rewinding it', () => {
+  const time = fakeTime(0)
+  let taps: Row[] = []
+  const tapControl: TapControl = {
+    tap(): void {}, clear(): void {}, rows: () => taps,
+    // main.ts wires this to the tap anchor, falling back to the session origin.
+    anchor: () => (taps.length >= 2 ? (taps[0].time as number) : 0),
+  }
+  const engine = createPlaybackEngine([createSceneVisualizer(fakeScene())], { clock: time.clock, tapControl })
+  engine.setLoopBeats(2) // one pass per second at the default tempo
+  engine.load({
+    scene: buildFrameIndex(rasterizeRows([sceneCreate(), { id: 's', event: 'update', beat: 7, px: 5 }], 2)),
+    hydraRows: [],
+    timelineRows: [],
+    activity: [{ kind: 'apply', at: 0, passes: 4 }],
+  })
+  engine.toggle()
+  time.advance(2500)
+  time.frame()
+  assert.deepEqual(engine.viewState().passes.scene, { pass: 2, loops: 4 })
+
+  // Tap out a faster tempo. The grid moves under the playhead — "beat 0" is
+  // now the first press and a pass is 600ms — but pass 2 is still what plays.
+  taps = [{ beat: 0, time: 2500 }, { beat: 1, time: 2800 }]
+  time.advance(300)
+  engine.retempo()
+  assert.deepEqual(engine.viewState().passes.scene, { pass: 2, loops: 4 })
+  time.advance(600)
+  time.frame()
+  assert.deepEqual(engine.viewState().passes.scene, { pass: 3, loops: 4 }, 'and it carries on from there at the tapped rate')
+})
+
 // --- per-kind pass exposure on viewState (R1: content pass vs timeline pass) -
 
 test("viewState surfaces each kind's own content pass, distinct from the engine's timeline pass", () => {
@@ -607,7 +669,7 @@ test('the engine supplies ctx.time: a time() binding resolves to source seconds'
 test('scene: content past the loop plays in later passes; short content resets every loop', () => {
   const viz = createSceneVisualizer(fakeScene())
   const at = (srcFrameF: number, loopFrames: number, pass = 0) =>
-    viz.applyFrame({ srcFrameF, loopFrames, ctx: null, pass })[0]
+    viz.applyFrame({ srcFrameF, loopFrames, ctx: null, pass, span: 0 })[0]
 
   // px glides 0 → 20 across beats 1..21 (600 frames): a 16-beat loop
   // (480 frames) makes a two-loop, 32-beat sequence.
