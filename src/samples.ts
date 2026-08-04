@@ -273,6 +273,75 @@ editable("hydra", schemas.hydra,
   },
 },
   {
+    name: "Random Segments",
+    table: "segments",
+    code: `// eventable — Random Segments: a folding cut up and dealt back out
+// .randomSegments() WRITES a timeline table — the same \`schemas.timeline\`
+// rows the Retime Table example enters by hand — but it writes them from the
+// base table itself: it reads how long the content is, cuts that span into
+// random-length chunks, and deals them back out in a random order, each
+// played exactly once. Made for CONTINUOUS motion like a folding, where any
+// source beat is a usable in-between and only the overall length matters; a
+// table of discrete hits scrambles less kindly, since a cut can land anywhere.
+// Press "Run" (or Cmd/Ctrl-Enter), then hit Play. Run again for a new cut.
+
+// 1. The folding: an origami lily — a blintz base, then each corner-point
+//    pulled back out past the rim into a pointed petal. Twelve simple folds,
+//    laid out to end just as the 16-beat loop does. Rows are seeded in the
+//    "origami" tab (see the Origami Lily example for the column notes).
+editable("origami", schemas.origami)
+
+const paper = origami().steps(table("origami"))
+const lily = paper.spawn({ id: "lily", color: 0xf0eeff, backColor: 0x7a3fc0, pz: 1.2, rx: -0.22 })
+
+// 2. The cut. It sizes itself to \`lily\`'s own span, so there is no length to
+//    keep in sync — only how to chop it:
+//      count    how many chunks (default 8)
+//      vary     how uneven their lengths are — 0 all equal, 1 anywhere from a
+//               sliver to double (default 0.5)
+//      reverse  the chance a chunk runs backwards, so the paper un-folds
+//      seed     pin one cut; leave it off and every Run re-rolls
+//    Each chunk gets playback time in PROPORTION to its own length, so the
+//    speed never changes — with the "beats" control as long as the folding,
+//    every chunk plays at its natural speed, just out of order.
+//    .save("segments") gives it a tab: it is an ordinary timeline table, so
+//    the from/to columns on the right are the cut, and you can edit them.
+const segments = lily.randomSegments({ count: 6, reverse: 0.3 }).save("segments")
+
+// 3. Warp the paper through it. A mesh is a baked animation rather than a set
+//    of events, so .retime() READS it at the warped beat instead of moving its
+//    rows — the whole sheet resolves to one source beat, which is what stops
+//    the petals arriving on six different schedules and tearing the paper.
+lily.retime(segments).outThree()
+
+// Things to try:
+//   - Raise \`count\` to 16 for a stutter; drop it to 2 for two long takes.
+//   - \`vary: 0\` cuts equal chunks; \`vary: 1\` lets one be a flicker and the
+//     next half the folding.
+//   - \`reverse: 1\` runs every chunk backwards — the lily comes apart.
+//   - Swap the line above for segments.outTimeline(): the same cut warps
+//     GLOBAL playback instead, scrambling every table in the scene at once.
+`,
+    tables: {
+      origami: [
+        // blintz: fold all four corners to the centre
+        { step: "overbl1", kind: "turn", beat: 1, dur: 0.5 },
+        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 2, dur: 1.2 },
+        { step: "overbl2", kind: "turn", beat: 3.5, dur: 0.5 },
+        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 4.5, dur: 1.2 },
+        { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 6, dur: 1.2 },
+        { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 7.5, dur: 1.2 },
+        // pull each corner-point back out past the rim into a petal
+        { step: "overpetSW", kind: "turn", beat: 9, dur: 0.5 },
+        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 10, dur: 1.2 },
+        { step: "overpetSE", kind: "turn", beat: 11.5, dur: 0.5 },
+        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 12.5, dur: 1.2 },
+        { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 14, dur: 1.2 },
+        { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 15.5, dur: 1.2 },
+      ],
+    },
+  },
+  {
     name: "Text",
     code: `// eventable — text in the 3D scene
 // A \`shape: "text"\` object is real extruded 3D text (three.js TextGeometry): it
