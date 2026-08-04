@@ -1,10 +1,12 @@
-// eventable rasterize — Houdini-style bake: expand sparse object events
-// (create/update/color/destroy, keyed by `id`) into a dense frame-indexed
-// cache, one row per alive object per frame, on the FRAMES_PER_BEAT grid.
+// eventable rasterize — sparse object events (create/update/color/destroy,
+// keyed by `id`) compiled into a store the playhead can ask for one frame.
+// Most objects keep their KEYFRAMES and are interpolated on read; one that can
+// change on a frame no event names (a colour pulse, a { $expr }) is baked per
+// frame instead; a mesh's elements become buffers on the mesh itself.
 // Timing fields (`beat`, `dur`) are in beats, 1-indexed (beat 1 = frame 0).
-// The beat axis is absolute: events past the loop's end just bake further
-// along the grid, and playback wraps the playhead into it in loop-length
-// passes (see the scene visualizer in visualizer.ts).
+// The beat axis is absolute: events past the loop's end just sit further along
+// the grid, and playback wraps the playhead into it in loop-length passes
+// (see the scene visualizer in visualizer.ts).
 
 import { withLineage, unionLineage, getLineage, type Row } from './lineage.js'
 import { mixColor } from './color.js'

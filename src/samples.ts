@@ -748,7 +748,7 @@ const lily = origami().steps(table("lily"))
 // pingpong the lotus: its folding runs over source beats 1–13; the pingpong's
 // until-next window (beat 1, closed by the hold at beat 25) plays that forward
 // then backward across beats 1–25, so it blooms by beat 13 and is flat again
-// by 25. .retime warps the paper's own rows.
+// by 25. .retime warps when the paper is read, not where its rows sit.
 const bloomFall = rows([
   { event: "pingpong", beat: 1, from: 1, to: 13 },
   { event: "hold", beat: 25, from: 1 },

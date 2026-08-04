@@ -911,10 +911,15 @@ export class Table {
    * spacing, and rows no event plays are dropped. Rows without a numeric
    * `beat` — and every row when the timeline has no events — pass through
    * unchanged. e.g. table("melody").retime(table("warp")).rasterize().
-   * An origami folding retimes the same way: warp the beat-keyed fold
-   * keyframes of paper.sequence() (keep the spawn row unmapped) to loop or
-   * stretch subsections of the folding —
-   * paper.spawn().concat(paper.sequence().retime(table("warp"))).
+   *
+   * A MESH and its geometry retime differently, because they are a baked
+   * animation rather than a set of events: their rows keep their own beats
+   * and are READ at the warped time instead of being moved to it. So a
+   * vertex needs no keyframe inside the window — it is interpolated at
+   * whatever source beat the window shows — and the whole paper resolves to
+   * one source beat, which is what stops its faces sliding out of step with
+   * each other. Retime a folding by warping the paper itself:
+   * paper.spawn().retime(table("warp")).
    */
   retime(timeline: Table | Row[] | null | undefined): Table {
     // In the spec, not just the closure: the pass length changes where rows
@@ -1225,9 +1230,10 @@ export class OrigamiBuilder {
   }
 
   /**
-   * Fold schedule → update keyframes driving `fold`. With no argument, uses
-   * the beat/dur timings from the steps() rows; override with rows
-   * { step?, beat, dur? } to retime.
+   * DEAD, kept only so an old program still runs: the fold schedule as update
+   * keyframes driving a `fold` column that nothing reads any more. A paper's
+   * geometry comes from .spawn() as element rows, and a folding is retimed by
+   * warping the paper itself — paper.spawn().retime(table("warp")).
    */
   sequence(steps?: Table | Row[] | null, opts: { id?: unknown } = {}): Table {
     const id = opts.id ?? this._id
@@ -1841,8 +1847,8 @@ export type DSLSurface = Easings & {
   /**
    * Folding paper: origami() is a bare sheet. Chain .steps(table) to fold it
    * by instructions (one fold per row — see schemas.origami), then
-   * .spawn({ id, color, … }) for the create row and .sequence() for beat-timed
-   * fold keyframes. .folds(), .verts(), .faces() and .edges() are what the folding
+   * .spawn({ id, color, … }) for the paper itself — its mesh and every vertex,
+   * face and crease of it. .folds(), .verts(), .faces() and .edges() are what the folding
    * KNOWS — a row per fold, per corner, per face, and per crease (which paper moves, which
    * creases the fold turns, how deep the stack is), each already carrying its
    * fold's beat/dur. They are ordinary tables routed like any other, so what
