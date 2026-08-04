@@ -1427,6 +1427,7 @@ html, body {
 
 .edit-toolbar {
   flex-shrink: 0;
+  gap: 6px;
   padding: 5px 8px;
   border-top: 1px solid #0f3460;
   background: #12203c;
@@ -1434,7 +1435,8 @@ html, body {
 
 .add-row-btn,
 .add-col-btn,
-.col-confirm-btn {
+.col-confirm-btn,
+.table-io-btn {
   background: #16213e;
   color: #6fbf73;
   border: 1px solid #2f6b3a;
@@ -1450,6 +1452,18 @@ html, body {
 .col-confirm-btn:hover {
   color: #9be09e;
   border-color: #4a9a54;
+}
+
+/* Whole-table copy/replace aren't additive, so "+ row" keeps the toolbar's
+   one green affordance to itself. */
+.table-io-btn {
+  color: #8fa6c0;
+  border-color: #2a4a72;
+}
+
+.table-io-btn:hover {
+  color: #cfe0f0;
+  border-color: #3f6ca8;
 }
 
 .row-actions-head {

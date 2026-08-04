@@ -942,3 +942,47 @@ test('removing a post code row removes its val()-derived rows with it', () => {
   assert.equal(rows.length, 2, 'the cell and its derived row are both gone')
   assert.deepEqual(rows.map((r) => r.name), ['', 'px'])
 })
+
+// ── whole-table copy / replace ───────────────────────────────────────────────
+
+test('serializeTable / replaceTable move a whole table — columns and rows — over another', () => {
+  const store = createEditableTableStore()
+  store.ensure('kf', { beat: 'number', v: 'number' }, [{ beat: 1, v: 10 }, { beat: 2, v: 20 }])
+  store.createTable('t2')
+  store.addRow('t2')
+
+  assert.ok(store.replaceTable('t2', store.serializeTable('kf')!))
+  assert.deepEqual(store.get('t2')!.columns, store.get('kf')!.columns)
+  assert.deepEqual(store.get('t2')!.rows, [{ beat: 1, v: 10 }, { beat: 2, v: 20 }])
+
+  // The pasted rows are the user's, and the seed slots they displaced stay
+  // displaced — a re-seed can neither overwrite nor resurrect them.
+  assert.ok(store.replaceTable('kf', store.serializeTable('t2')!.replace('10', '99')))
+  assert.deepEqual(
+    store.ensure('kf', { beat: 'number', v: 'number' }, [{ beat: 1, v: 11 }, { beat: 2, v: 22 }]),
+    [{ beat: 1, v: 99 }, { beat: 2, v: 20 }],
+  )
+})
+
+test('replaceTable takes a bare row array over the current columns, and refuses anything else', () => {
+  const store = createEditableTableStore()
+  store.createTable('t1')
+  store.addColumn('t1', 'label', 'string')
+
+  assert.ok(store.replaceTable('t1', [{ beat: 3, label: 'a' }, { beat: 4 }]))
+  assert.deepEqual(store.get('t1')!.rows, [{ beat: 3, label: 'a' }, { beat: 4, label: '' }])
+
+  const before = store.serialize()
+  for (const junk of ['not json', '{"rows":7}', '[3]', JSON.stringify({ rows: [{}], columns: [] })]) {
+    assert.ok(!store.replaceTable('t1', junk), `refuses ${junk}`)
+  }
+  assert.ok(!store.replaceTable('nope', []), 'refuses an unknown table')
+  assert.equal(store.serialize(), before, 'a refused paste never touches the log')
+})
+
+test('copying a post table leaves its val()-derived rows out, so replacing re-derives them once', () => {
+  const store = createEditableTableStore()
+  store.ensure('post', POST_SCHEMA, [{ beat: 2, event: 'setCode', code: 'bloom(val("glow", 0.5))' }])
+  assert.ok(store.replaceTable('post', store.serializeTable('post')!))
+  assert.deepEqual(store.get('post')!.rows.map((r) => r.name), ['', 'glow'])
+})

@@ -612,6 +612,21 @@ function applyEvent(tables: Map<string, TableState>, e: StampedEvent): void {
       deriveVarRows(t)
       break
     }
+    case 'replace-table': {
+      const columns = eventColumns(e.columns)
+      // Wholesale replacement, so the pasted shape wins outright: it claims
+      // every column (a declared one the paste dropped is removed, as if by
+      // hand) and its rows are the user's, tombstoning the seed slots they
+      // displace exactly as deleting those rows would.
+      for (const meta of t.rowMeta) if (meta.code) t.removedSlots.add(meta.slot)
+      t.userColumns = columns
+      t.removedColumns = new Set((t.declared ?? []).map((c) => c.name).filter((n) => !columns.some((c) => c.name === n)))
+      const cols = effectiveColumns(t)
+      t.rows = eventRows(e.rows).map((r) => conformRow(r, cols))
+      t.rowMeta = t.rows.map(() => userMeta())
+      deriveVarRows(t)
+      break
+    }
     case 'add-column': {
       const col = e.col as string
       if (!col || effectiveColumns(t).some((c) => c.name === col)) break
@@ -754,6 +769,13 @@ export interface EditableTableStore {
   addRow(name: string): void
   removeRow(name: string, index: number): void
   duplicateRow(name: string, index: number): void
+  // One table's columns and rows as text — the clipboard form replaceTable
+  // reads back (null for an unknown table).
+  serializeTable(name: string): string | null
+  // Replace a table's columns and rows wholesale with that form's; a bare row
+  // array keeps the current columns. False on anything that isn't a table —
+  // a malformed paste must leave the log untouched.
+  replaceTable(name: string, json: string | unknown): boolean
   setCell(name: string, index: number, colName: string, value: unknown): void
   // Several cells of one row as a single event — one history entry, never
   // observed half-updated (e.g. a Run sets `code` and `seed` together).
@@ -1060,6 +1082,34 @@ export function createEditableTableStore({ src }: { src?: string } = {}): Editab
       const t = tables.get(name)
       if (!t || index < 0 || index >= t.rows.length) return
       append({ kind: 'duplicate-row', table: name, row: index })
+    },
+
+    serializeTable(name: string): string | null {
+      const t = view().get(name)
+      if (!t) return null
+      // val()-derived rows are left out: replaceTable re-derives them from the
+      // code rows that own them, so keeping them would double every one.
+      const rows = t.rows.filter((_r, i) => t.rowMeta[i].varName == null)
+      return JSON.stringify({ columns: effectiveColumns(t), rows }, null, 2)
+    },
+
+    replaceTable(name: string, json: string | unknown): boolean {
+      const t = tables.get(name)
+      if (!t) return false
+      let value: unknown = json
+      if (typeof value === 'string') {
+        try { value = JSON.parse(value) } catch { return false }
+      }
+      // A bare row array is the columns-less form: it keeps the current ones.
+      const data = (Array.isArray(value) ? { rows: value } : value ?? {}) as { columns?: unknown; rows?: unknown }
+      const rows = data.rows
+      if (!Array.isArray(rows) || rows.some((r) => !r || typeof r !== 'object')) return false
+      const columns = data.columns === undefined
+        ? effectiveColumns(t)
+        : eventColumns(data.columns).filter((c) => typeof c.name === 'string' && c.name !== '')
+      if (!columns.length) return false
+      append({ kind: 'replace-table', table: name, columns, rows })
+      return true
     },
 
     setCell(name: string, index: number, colName: string, value: unknown): void {

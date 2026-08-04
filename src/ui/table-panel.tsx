@@ -555,6 +555,34 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     return (label != null && props.host.dirty(label)) || store.hasPendingEdits()
   }
 
+  // --- whole-table clipboard ---------------------------------------------------
+  // Copy writes the open table's columns and rows out as text; replace reads
+  // that back over them — the round trip for bulk-editing a table elsewhere, or
+  // for filling a fresh one from another table (or another session).
+
+  async function copyTable(): Promise<void> {
+    const name = editableData()?.name
+    const text = name ? store.serializeTable(name) : null
+    if (text == null) return
+    try {
+      await navigator.clipboard.writeText(text)
+      props.host.setError(null, '')
+    } catch (err) {
+      props.host.setError(`Copy failed: ${(err as Error).message}`, '')
+    }
+  }
+
+  async function replaceTable(): Promise<void> {
+    const name = editableData()?.name
+    if (!name) return
+    try {
+      const ok = store.replaceTable(name, await navigator.clipboard.readText())
+      props.host.setError(ok ? null : 'The clipboard does not hold a table', '')
+    } catch (err) {
+      props.host.setError(`Replace failed: ${(err as Error).message}`, '')
+    }
+  }
+
   // --- scroll/autoscroll -----------------------------------------------------
   let scrollEl: HTMLDivElement | undefined
   let suppressScrollEvent = false
@@ -1478,6 +1506,20 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
               onClick={() => store.addRow(editableData()!.name)}
             >
               + row
+            </button>
+            <button
+              class="table-io-btn"
+              title="Copy this whole table — its columns and rows — to the clipboard"
+              onClick={() => void copyTable()}
+            >
+              copy table
+            </button>
+            <button
+              class="table-io-btn"
+              title="Replace this whole table with the copied one on the clipboard"
+              onClick={() => void replaceTable()}
+            >
+              replace table
             </button>
           </div>
         </Show>
