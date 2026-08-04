@@ -503,9 +503,9 @@ paper.spawn({ id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.
 //     faces -> pick the ones that move -> give them a colour -> three
 //
 // \`dur\`/\`ease\` are the ordinary colour-pulse columns: the blue lands as the
-// flap starts moving and decays back over the swing. Face numbers only mean
-// something inside their own fold — every fold cuts the paper and renumbers it,
-// which is exactly why the rows carry the fold's beat with them.
+// flap starts moving and decays back over the swing. A face number means the
+// same paper at every step, so \`face\` is what joins these rows to the paper
+// the renderer draws — and each carries its own fold's beat.
 paper.faces()
   .filter({ moving: true })
   .derive({ id: "crane", event: "color", color: 0x2f6fff, ease: "easeIn" })

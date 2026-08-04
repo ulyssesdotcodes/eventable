@@ -93,10 +93,10 @@ function buildTimelines(events: Row[]): Map<unknown, Row[]> {
 // the object — it must not reach the whole-object color, and vice versa.
 // One element's pulse at frame i. With `dur` it fades toward `to` — or, unset,
 // toward the object's own color — and RELEASES the element when it lands, so
-// the paint hands back to whatever the shape would have drawn. Without `dur`
-// it is a hard switch that holds: an element handle is not identity (for a
-// folding paper, face 3 is different paper after the next fold), so a paint
-// that never lets go bleeds onto the wrong element later.
+// the paint hands back to whatever the shape would have drawn. A pulse that
+// never let go would accumulate: paint one fold's moving faces on every fold
+// and the model ends up entirely painted. Without `dur` it is a hard switch
+// that holds, which is the way to say "this element stays this colour".
 function partPulseAt(colorEv: Row, objColor: number | null, i: number): number | null {
   const dur = colorEv.dur as number | undefined
   if (dur == null || dur <= 0) return colorEv.color as number | null

@@ -297,10 +297,10 @@ test('element colors share one array across frames that do not change', () => {
   assert.ok(arrays.size < rows.length / 2, `held frames reuse one array (${arrays.size} of ${rows.length})`)
 })
 
-// An element handle is not an identity — for a folding paper, face 3 is a
-// different piece of paper after the next fold. So a `dur` pulse must RELEASE
-// the element when it lands, or every fold's paint accumulates onto the next
-// fold's paper and the model ends up entirely painted.
+// A `dur` pulse is a fade that ENDS: it must release its element when it
+// lands, handing the paper back to whatever the shape would draw. Otherwise
+// painting each fold's moving faces accumulates, one fold's paint on top of
+// the last, and the model finishes entirely painted.
 test('an element pulse releases its element when the decay lands', () => {
   const baked = rasterizeRows([
     { id: 'p', event: 'create', beat: 1, shape: 'origami', color: 0x111111 },

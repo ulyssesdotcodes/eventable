@@ -1117,12 +1117,12 @@ export class OrigamiBuilder {
   /**
    * One row per (fold, vertex) — the corners the paper is folded about, in the
    * numbering the renderer draws with. Carries the fold's `beat`/`dur` plus
-   * `step`/`name` which fold, `vert` its number within that fold, `hinge`
+   * `step`/`name` which fold, `vert` which corner — the same corner at every
+   * step — `hinge`
    * whether it lies ON the fold line (which is exactly why the paper can turn
    * there without tearing), `moving` whether any face meeting there swings,
    * `faces` how many meet there, `cx`/`cy` where it is drawn, `sheetX`/`sheetY`
-   * where it sits on the unfolded square — the one coordinate that means the
-   * same thing in every fold.
+   * where it sits on the unfolded square, the one place it never moves.
    *
    * A scene "color" row carrying `vert` tints the paper at that corner, so a
    * gradient across a flap is a table:
@@ -1167,8 +1167,9 @@ export class OrigamiBuilder {
    *               tx: field("px"), ty: field("py"), tz: field("pz") })
    *     .outThree()
    *
-   * Face numbers mean nothing across folds: every fold cuts the paper and
-   * renumbers it. Group by `step`, never by `face`.
+   * A face number means the same paper at every step — the rows are stated in
+   * the numbering the renderer draws with — so `face` joins across folds and
+   * against a scene "color" row addressing that face.
    */
   faces(opts: { at?: number } = {}): Table {
     const p = this.program()
@@ -1207,8 +1208,9 @@ export class OrigamiBuilder {
    * and a triangle row names three of them. Every column is a number; there is
    * no geometry blob and nothing the renderer has to know how to run.
    *
-   * Elements are numbered per FOLD, because every fold re-splits the paper, so
-   * each lives only for its own fold and is replaced when the next one lands.
+   * There is ONE numbering for the whole folding — the last fold's, the finest
+   * — stated once and never replaced, so an element number means the same piece
+   * of paper from the first beat to the last.
    * Extra props (id, color, backColor, px/py/pz, …) merge over defaults.
    */
   spawn(props: Row = {}): Table {
