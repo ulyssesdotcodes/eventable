@@ -13,7 +13,7 @@
 import { rasterizeRows } from './rasterize.js'
 import { timelineSegments, placeBeat, type TimelineSegment } from './timeline.js'
 import { withLineage, carry, unionLineage, type Row } from './lineage.js'
-import { FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS } from './constants.js'
+import { FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS, DEFAULT_LOOP_BEATS } from './constants.js'
 import { compileFoldTable, foldElementRows, foldPointsAt, foldValueAt, type FoldTableProgram } from './fold-engine.js'
 import type { Schema } from './editable-tables.js'
 import { beatSecondsFromTaps } from './tap-log.js'
@@ -411,6 +411,19 @@ export function fnv1a(s: string): number {
     h = Math.imul(h, 16777619)
   }
   return h >>> 0
+}
+
+// The one PRNG: the runtime's per-view `rand`, and the seed-sensitive nodes
+// that roll their own (randomSegments). Deterministic from the run seed, which
+// is what keeps replay and multiplayer in step.
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0
+  return function () {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 // Content hash: op + canonical spec (+ run seed when seed-sensitive) + input
@@ -946,6 +959,66 @@ export class Table {
         })
       })
     }, false, [this._other(timeline)])
+  }
+
+  /**
+   * A timeline table (see schemas.timeline) that cuts THIS table's beat span
+   * into `count` random-length chunks and deals them back out in a random
+   * order — every chunk played exactly once, filling the loop. The retime for
+   * CONTINUOUS content (a folding, a simulation, a motion path), where only
+   * the overall length matters and any source beat is a usable in-between; a
+   * table of discrete hits scrambles less kindly, since a chunk boundary can
+   * land anywhere.
+   *
+   * Feed it to .retime(), or route it with .outTimeline() to scramble the
+   * whole scene:
+   *
+   *   const paper = origami().steps(table("origami"))
+   *   const fold = paper.spawn({ id: "crane" })
+   *   fold.retime(fold.randomSegments({ count: 6, reverse: 0.3 })).outThree()
+   *
+   * `count` how many chunks (default 8); `vary` how uneven their lengths are —
+   * 0 all equal, 1 anywhere from a sliver to double (default 0.5); `reverse`
+   * the chance a chunk runs backwards (default 0). Playback time is shared out
+   * in proportion, so with `loop` (default the GUI "beats" control) set to the
+   * span's own length every chunk plays at natural speed. The cut is re-rolled
+   * on every run — pass `seed` to pin one.
+   */
+  randomSegments(opts: { count?: number; vary?: number; reverse?: number; loop?: number; seed?: number } = {}): Table {
+    const { count = 8, vary = 0.5, reverse = 0, seed } = opts
+    const loop = opts.loop ?? this._ctx?.loopBeats?.() ?? DEFAULT_LOOP_BEATS
+    const spec = { count, vary, reverse, loop, seed }
+    return this._xf('randomSegments', spec, (ins) => {
+      // Beat 1 to the last beat any row reaches — the whole point of taking a
+      // table rather than a number: the chunking follows the content's length.
+      const span = ins[0].reduce((m, r) => typeof r.beat === 'number'
+        ? Math.max(m, r.beat + numOr(r.dur, 0)) : m, 1) - 1
+      const n = Math.max(1, Math.floor(count))
+      if (!(span > 0)) return []
+      // Each call site rolls its own stream (spec-mixed), so two different
+      // scrambles in one program don't come out identical.
+      const rand = mulberry32(((seed ?? this._ctx?.seed ?? 0) ^ fnv1a(stableStringify(spec))) >>> 0)
+      const v = Math.max(0, Math.min(1, vary))
+      const weights = Array.from({ length: n }, () => Math.max(0.05, 1 + (rand() * 2 - 1) * v))
+      const total = weights.reduce((a, b) => a + b, 0)
+      // Cut points on the source axis: chunk i is cuts[i]..cuts[i + 1].
+      const cuts = [1]
+      for (const w of weights) cuts.push(cuts[cuts.length - 1] + (w / total) * span)
+      const order = weights.map((_, i) => i)
+      for (let i = n - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1))
+        ;[order[i], order[j]] = [order[j], order[i]]
+      }
+      let beat = 1
+      return order.map((i) => {
+        const back = rand() < reverse
+        // Each row's window runs until the next one's beat — the last to the
+        // end of the pass, which is why `loop` must be the pass length.
+        const row: Row = { event: 'retime', beat, from: cuts[back ? i + 1 : i], to: cuts[back ? i : i + 1] }
+        beat += (weights[i] / total) * loop
+        return row
+      })
+    }, seed == null)
   }
 
   /** Animate this table's scene objects over time — see ThreeChain. */

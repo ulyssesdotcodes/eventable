@@ -351,6 +351,43 @@ test('.retime fills the real loop length, not a hardcoded 16-beat pass', () => {
   assert.deepEqual(beatsOf(16), [1, 9], 'a 16-beat pass fits two blocks')
 })
 
+// --- .randomSegments(): a scrambled retime sized to the table's own span -----
+
+test('randomSegments deals a table\'s whole span out once, out of order, filling the loop', () => {
+  // Source span: beat 1 to 9 (the last row's beat + dur) — the loop is set to
+  // match, so every chunk should play at natural speed.
+  const code = `
+    define("seg", () => rows([{ id: "a", beat: 1 }, { id: "b", beat: 5, dur: 4 }])
+      .randomSegments({ count: 5 }))
+  `
+  const seg = createRuntime({ loopBeats: () => 8 }).run(code, { seed: 42 }).views.get('seg')!.rows
+  assert.equal(seg.length, 5)
+
+  // The chunks partition the source span exactly once: sorted by source start
+  // they join end to end, from beat 1 to beat 9 with no gap or overlap.
+  const chunks = seg.map((r) => [r.from as number, r.to as number]).sort((a, b) => a[0] - b[0])
+  assert.deepEqual([chunks[0][0], chunks[4][1]], [1, 9])
+  for (let i = 1; i < chunks.length; i++) assert.equal(chunks[i][0], chunks[i - 1][1])
+  assert.notDeepEqual(seg.map((r) => r.from), chunks.map((c) => c[0]), 'dealt back out shuffled')
+
+  // Every chunk gets playback time in proportion to its own length, so with the
+  // loop as long as the span the source runs one-for-one inside each window.
+  for (const w of windowsFor(seg, 8)) {
+    const r = seg[w.row]
+    assert.ok(Math.abs(((r.to as number) - (r.from as number)) - (w.end - w.beat)) < 1e-9,
+      'chunk length = its playback window')
+  }
+})
+
+test('randomSegments re-rolls per run, and `seed` pins one', () => {
+  const rollOf = (opts: string, seed: number): unknown[] =>
+    createRuntime({ loopBeats: () => 8 })
+      .run(`define("seg", () => rows([{ beat: 1 }, { beat: 9 }]).randomSegments(${opts}))`, { seed })
+      .views.get('seg')!.rows.map((r) => r.from)
+  assert.notDeepEqual(rollOf('{ count: 4 }', 1), rollOf('{ count: 4 }', 2))
+  assert.deepEqual(rollOf('{ count: 4, seed: 7 }', 1), rollOf('{ count: 4, seed: 7 }', 2))
+})
+
 test('a user timeline table (editable, schemas.timeline) remaps other tables in a program', () => {
   const rt = createRuntime({ editableRows: (_name, _schema, seedRows) => seedRows ?? [] })
   const code = `
