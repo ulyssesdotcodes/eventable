@@ -331,7 +331,6 @@ function disposeLight(obj: LightObject): void {
 // edges are lines from the same positions.
 interface MeshObject {
   root: THREE.Group
-  fold: number
   // the mesh's geometry, compiled by the store from its element rows
   slab: MeshSlab | null
   frame: number
@@ -508,7 +507,7 @@ function makeMesh(row: Record<string, unknown>): MeshObject {
   root.add(new THREE.LineSegments(lineGeometry, line))
 
   const obj: MeshObject = {
-    root, fold: 0, slab: null, frame: 0,
+    root, slab: null, frame: 0,
     vertColor: undefined, faceColor: undefined, edgeColor: undefined,
     posAttr, linePosAttr, tintAttr, maskAttr, lineTintAttr, lineMaskAttr,
     front, back, line, geometry, lineGeometry,
