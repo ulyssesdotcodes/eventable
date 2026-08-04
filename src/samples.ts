@@ -215,12 +215,18 @@ editable("post", schemas.post)
 editable("retime", schemas.timeline)
 
 const paper = origami().steps(table("origami"))
-paper.spawn({ id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.356 })
-    // Uncomment to see only a couple folds. 
-  // Check out the "retime" table below and adjust the "from" 
+const crane = paper.spawn({ id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.356 })
+crane
+    // Uncomment to see only a couple folds.
+  // Check out the "retime" table below and adjust the "from"
   // and  "to" columns to change which folds are shown.
   // Change the event to "pingpong" to see the folds reverse as well
   // .retime(table("retime"))
+  // Or shuffle the whole folding instead: .randomSegments() writes the same
+  // kind of timeline table, cutting the paper's own span into random chunks
+  // and dealing them back out in a random order, one play each. Re-rolled
+  // every Run; \`reverse\` is the chance a chunk unfolds backwards.
+  // .retime(crane.randomSegments({ count: 6, reverse: 0.3 }))
   .outThree()
 
 // Hydra for post-processing. \`src(s0)\` is the rendered origami.
