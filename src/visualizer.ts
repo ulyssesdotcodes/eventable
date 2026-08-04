@@ -57,6 +57,24 @@ export function passOffset(max: number, loopFrames: number, pass: number): PassS
   return { pass: wrapped, loops, offset: wrapped * loopFrames }
 }
 
+// The last frame an index reaches — how far into the loop a track's content
+// runs, and so (via passOffset) how many passes it spans.
+const indexMax = (rows: Row[]): number => rows.reduce((m, r) => Math.max(m, r.index as number), 0)
+
+// How many passes a cooked program spans at this loop length: its longest
+// track's. An apply records it (see playback.ts's programPasses), which is what
+// lets the loop-epoch fold tell whether a re-cook still HAS the pass the
+// playhead is on — the only thing that restarts the sequences.
+export function contentPasses(cooked: CookedVisualRows, loopFrames: number): number {
+  const spans = [
+    cooked.scene?.maxFrame ?? 0,
+    indexMax(buildHydraIndex(cooked.hydraRows ?? [])),
+    indexMax(buildBaubleIndex(cooked.baubleRows ?? [])),
+    indexMax(buildPostIndex(cooked.postRows ?? [])),
+  ]
+  return spans.reduce((m, max) => Math.max(m, passOffset(max, loopFrames, 0).loops), 1)
+}
+
 export interface VisualizerFrame {
   // Fractional source frame — the playhead sweeps continuously between frames.
   srcFrameF: number
@@ -162,7 +180,7 @@ export function createHydraVisualizer(hydraAPI: HydraAPI, previewCode?: () => st
     kind: 'hydra',
     load(cooked): void {
       index = buildHydraIndex(cooked.hydraRows ?? [])
-      maxIndex = index.reduce((m, r) => Math.max(m, r.index as number), 0)
+      maxIndex = indexMax(index)
     },
     hasContent: () => index.length > 0,
     applyFrame({ srcFrameF, loopFrames, ctx, pass }): Row[] {
@@ -215,7 +233,7 @@ export function createBaubleVisualizer(baubleAPI: BaubleAPI): Visualizer {
     kind: 'bauble',
     load(cooked): void {
       index = buildBaubleIndex(cooked.baubleRows ?? [])
-      maxIndex = index.reduce((m, r) => Math.max(m, r.index as number), 0)
+      maxIndex = indexMax(index)
     },
     hasContent: () => index.length > 0,
     applyFrame({ srcFrameF, loopFrames, ctx, pass }): Row[] {
@@ -262,7 +280,7 @@ export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => strin
     kind: 'post',
     load(cooked): void {
       index = buildPostIndex(cooked.postRows ?? [])
-      maxIndex = index.reduce((m, r) => Math.max(m, r.index as number), 0)
+      maxIndex = indexMax(index)
       programmedLoop = null
     },
     hasContent: () => index.length > 0,

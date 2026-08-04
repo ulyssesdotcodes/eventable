@@ -40,7 +40,7 @@ import { createTapLog } from './tap-log.js'
 import { connectMultiplayer } from './multiplayer.js'
 import type { MultiplayerConnection, MultiplayerStatus } from './multiplayer.js'
 import { PRESENCE_LOG } from './room-core.js'
-import { loopEpochFromApplies, loopBeatsFromEvents, pausedMsBefore, transportStateFromEvents, playbackOrigin } from './playback.js'
+import { programPasses, loopBeatsFromEvents, pausedMsBefore, transportStateFromEvents, playbackOrigin } from './playback.js'
 import type { PlaybackAPI, PlaybackOptions } from './playback.js'
 import { getLineage, type Row } from './lineage.js'
 import type { PeerPresence } from './ui/table-panel.js'
@@ -717,7 +717,7 @@ function applyCooked(cooked: CookedResult): void {
   const activityEvents = editableStore.get(ACTIVITY_TABLE)?.events ?? []
   const loopBeats = loopBeatsFromEvents(activityEvents)
   if (loopBeats != null) playback.setLoopBeats(loopBeats)
-  playback.load({ ...cooked, loopEpoch: loopEpochFromApplies(activityEvents) })
+  playback.load({ ...cooked, activity: activityEvents })
 }
 
 // A tap changed the tempo. Nothing re-cooks — content sits on a fixed beat
@@ -839,8 +839,10 @@ async function evaluate(code: string, { setError, persist = true, seed = randomS
     // this apply, re-basing this replica from the very stamp its peers will.
     // A reactive evaluate commits nothing: the author's apply is already
     // merged, and onMerge has already made it our head. The seed rides the
-    // apply too — it's the replay unit scrubSession re-cooks from.
-    if (broadcast) editableStore.recordApply({ at: Date.now(), seed })
+    // apply too — it's the replay unit scrubSession re-cooks from — as does the
+    // pass count this run cooked, which is what tells the loop-epoch fold
+    // whether this apply dropped the pass being played.
+    if (broadcast) editableStore.recordApply({ at: Date.now(), seed, passes: programPasses(cooked, currentLoopBeats()) })
     syncSessionBar()
     applyCooked(cooked)
     if (persist) persistSession()

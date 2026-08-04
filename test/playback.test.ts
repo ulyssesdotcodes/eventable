@@ -16,7 +16,7 @@ test('wallAlignedTick: phase since the anchor, wrapped into [0, loopSeconds), 0 
 // injectable clock (see PlaybackClock in playback.ts) ------------------------
 
 import {
-  createPlaybackEngine, pausedMsBefore, transportStateFromEvents, playbackOrigin,
+  createPlaybackEngine, pausedMsBefore, transportStateFromEvents, playbackOrigin, programPasses,
   type PlaybackEngine, type TapControl,
 } from '../src/playback.js'
 import { createSceneVisualizer, createHydraVisualizer, type Visualizer } from '../src/visualizer.js'
@@ -422,15 +422,29 @@ test('wallAlignedLoop: completed loops since the anchor — the quotient to wall
 
 // --- loopEpochFromApplies — the one loop epoch from stamped apply pulses -----
 
-test('loopEpochFromApplies keeps the newest apply stamp, ignoring unstamped and non-apply events', () => {
-  assert.equal(loopEpochFromApplies([
+test('loopEpochFromApplies moves only for an apply that dropped the pass being played', () => {
+  // A fake grid of one pass per second, standing in for the engine's own.
+  const fold = (events: Row[]): number => loopEpochFromApplies(events, (a, b) => Math.max(0, Math.floor((b - a) / 1000)))
+
+  assert.equal(fold([
     { kind: 'peer-join', at: 1 },
     { kind: 'session-start', at: 500 },
-    { kind: 'apply', at: 1000 },
-    { kind: 'apply' }, // legacy pulse, no stamp
-    { kind: 'apply', at: 5000 },
-  ]), 5000)
-  assert.equal(loopEpochFromApplies([]), 0, 'the Unix epoch until an apply is stamped')
+    { kind: 'apply', at: 1000, passes: 4 }, // the session's first apply anchors the count
+    { kind: 'apply', at: 3000, passes: 4 }, // played pass 2, which a 4-pass program has
+    { kind: 'apply', at: 4000, passes: 4 }, // played pass 3, ditto
+  ]), 1000, 'a run of edits that keeps the program the same length never restarts')
+
+  assert.equal(fold([
+    { kind: 'apply', at: 1000, passes: 4 },
+    { kind: 'apply', at: 2000, passes: 2 },
+  ]), 1000, 'a shorter program that still has the pass being played (1) keeps counting')
+
+  assert.equal(fold([
+    { kind: 'apply', at: 1000, passes: 4 },
+    { kind: 'apply', at: 4000, passes: 2 }, // played pass 3; a 2-pass program has no such pass
+  ]), 4000, 'dropping the pass being played restarts the sequences from that apply')
+
+  assert.equal(fold([{ kind: 'peer-join', at: 1 }, { kind: 'apply' }]), 0, 'unstamped and non-apply events never anchor it')
 })
 
 // --- loopBeatsFromEvents — the loop length folded off the activity table -----
@@ -492,37 +506,44 @@ test('a hydra event past the loop plays once the wall-aligned pass reaches it', 
   assert.equal(sketches.at(-1), 'a.out(o0)', 'the sequence wraps to pass 0')
 })
 
-test('multi-pass tracks share one pass 0: they advance and re-base together', () => {
+test('multi-pass tracks share one pass 0: they advance together, and only a shrunken program restarts them', () => {
   const time = fakeTime(0)
   const engine = createPlaybackEngine(
     [createSceneVisualizer(fakeScene()), createHydraVisualizer(fakeHydra())],
     { clock: time.clock },
   )
   engine.setLoopBeats(2)
-  // Both tracks put an event on beat 3 — one past the 2-beat loop, so each
-  // spans two passes.
-  const apply = (loopEpoch: number): void => {
-    engine.load({
-      scene: buildFrameIndex(rasterizeRows([sceneCreate(), { id: 's', event: 'update', beat: 3, px: 5 }], 2)),
-      hydraRows: [{ event: 'setCode', code: 'a', beat: 1 }, { event: 'setCode', code: 'b', beat: 3 }],
+  const activity: Row[] = []
+  // Both tracks put their last event on `lastBeat`, so both span the same
+  // number of passes of the 2-beat loop (beat 7 → four, beat 3 → two).
+  const apply = (at: number, lastBeat: number): void => {
+    const rows = {
+      scene: buildFrameIndex(rasterizeRows([sceneCreate(), { id: 's', event: 'update', beat: lastBeat, px: 5 }], 2)),
+      hydraRows: [{ event: 'setCode', code: 'a', beat: 1 }, { event: 'setCode', code: 'b', beat: lastBeat }],
       timelineRows: [],
-      loopEpoch,
-    })
+    }
+    activity.push({ kind: 'apply', at, passes: programPasses(rows, 2) })
+    engine.load({ ...rows, activity })
   }
   const passes = () => engine.viewState().passes
 
-  apply(0)
+  apply(0, 7)
   engine.toggle()
-  assert.deepEqual(passes().scene, { pass: 0, loops: 2 })
-  assert.deepEqual(passes().hydra, { pass: 0, loops: 2 })
-  time.advance(2 * DEFAULT_BEAT_SECONDS * 1000) // one full loop
+  assert.deepEqual(passes().scene, { pass: 0, loops: 4 })
+  assert.deepEqual(passes().hydra, { pass: 0, loops: 4 })
+  time.advance(3 * 2 * DEFAULT_BEAT_SECONDS * 1000) // three full loops
   time.frame()
-  assert.deepEqual(passes().scene, { pass: 1, loops: 2 })
-  assert.deepEqual(passes().hydra, { pass: 1, loops: 2 }, 'both tracks reach pass 1 on the same loop')
-  // A re-cook re-bases every track at pass 0 at once. Per-kind epochs used to
-  // re-base only the kinds that cook had changed, leaving the rest a pass
-  // ahead of them for good — one track on 1/2 while another sat on 2/2.
-  apply(time.clock.epochNow())
+  assert.deepEqual(passes().scene, { pass: 3, loops: 4 })
+  assert.deepEqual(passes().hydra, { pass: 3, loops: 4 }, 'both tracks reach pass 3 on the same loop')
+  // Re-applying a program that still has pass 3 leaves the piece playing: a
+  // run of edits must not snap the sequences back to pass 0 every Apply.
+  apply(time.clock.epochNow(), 7)
+  assert.deepEqual(passes().scene, { pass: 3, loops: 4 })
+  assert.deepEqual(passes().hydra, { pass: 3, loops: 4 })
+  // A cook with no pass 3 restarts EVERY track at once. Per-kind epochs used
+  // to re-base only the kinds that cook had changed, leaving the rest a pass
+  // ahead of them for good — one track on 1/4 while another sat on 2/4.
+  apply(time.clock.epochNow(), 3)
   assert.deepEqual(passes().scene, { pass: 0, loops: 2 })
   assert.deepEqual(passes().hydra, { pass: 0, loops: 2 })
 })
