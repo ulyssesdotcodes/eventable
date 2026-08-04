@@ -79,7 +79,6 @@ define("scene", () => table("three").rasterize(4/30))
   assert.equal(cooked.views.get('base')!.length, 4)
   assert.ok(cooked.scene.objects.length > 0, 'the scene store came through')
   assert.ok(getLineage(cooked.views.get('scene')!.rows[0]).length > 0, 'lineage survives the boundary')
-  assert.ok(cooked.sigs.scene.length > 0, 'the change-detection signature rides along')
 })
 
 test('editable() serves the snapshot when present, else conformed seeds, and reports declarations', () => {

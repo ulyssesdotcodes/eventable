@@ -7,22 +7,9 @@ import { buildFrameIndex, type FrameStore } from './rasterize.js'
 import { hydraRows } from './hydra.js'
 import { baubleRows } from './bauble.js'
 import { postRows, buildPostIndex, postStateFrames, postFrameAt } from './post.js'
-import { hashOf, outViewName, type GraphSpec, type Table } from './dsl.js'
+import { outViewName, type GraphSpec, type Table } from './dsl.js'
 import type { Row } from './lineage.js'
 import type { RunOptions, RuntimeResult } from './runtime.js'
-
-// Change-detection signatures, one per cooked output — the source view's graph
-// hash (the same hash the materialize memo trusts for "unchanged subgraph →
-// same rows"), tagged with which derivation path produced the output. Comparing
-// these replaces serializing the dense output rows, which scaled with row count
-// times the shared fold program's size.
-export interface CookedSigs {
-  scene: string
-  timeline: string
-  hydra: string
-  bauble: string
-  post: string
-}
 
 export interface CookedResult {
   views: Map<string, Table>
@@ -33,7 +20,6 @@ export interface CookedResult {
   hydraRows: Row[]
   baubleRows: Row[]
   postRows: Row[]
-  sigs: CookedSigs
 }
 
 // The slice of createRuntime's return value cookProgram needs.
@@ -66,13 +52,5 @@ export function cookProgram(runtime: Runtime, code: string, seed: number, dataCa
   // the user as a cook error — instead of failing silently at frame time.
   const postIndex = buildPostIndex(postSketchRows)
   for (const f of postStateFrames(postIndex)) postFrameAt(postIndex, f)
-  const sig = (t: Table | undefined, tag = 'v'): string => (t ? tag + hashOf(t).toString(36) : '')
-  const sigs: CookedSigs = {
-    scene: scene ? sig(scene) : sig(three, 'r'),
-    timeline: sig(timeline),
-    hydra: hydra ? sig(hydra) : sig(three, 'h'),
-    bauble: sig(bauble),
-    post: sig(post),
-  }
-  return { views: result.views, graphs: result.graphs, scene: sceneStore, timelineRows, hydraRows: hydraSketchRows, baubleRows: baubleSketchRows, postRows: postSketchRows, sigs }
+  return { views: result.views, graphs: result.graphs, scene: sceneStore, timelineRows, hydraRows: hydraSketchRows, baubleRows: baubleSketchRows, postRows: postSketchRows }
 }

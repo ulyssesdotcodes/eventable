@@ -25,19 +25,6 @@ test('cookProgram resolves the scene cache and is deterministic per seed', () =>
   )
 })
 
-test('cooked sigs detect change per output without touching the dense rows', () => {
-  // the signature is the source view's graph hash — comparing it replaces
-  // serializing megabytes of rasterized output (which once overflowed V8's
-  // max string length via the shared fold program on every frame row)
-  const a = cookProgram(createRuntime(), PROG(8), 123)
-  const b = cookProgram(createRuntime(), PROG(8), 123)
-  assert.ok(a.sigs.scene.length > 0)
-  assert.deepEqual(a.sigs, b.sigs, 'same code + seed signs identically across runtimes (multiplayer replicas agree)')
-  const c = cookProgram(createRuntime(), PROG(9), 123)
-  assert.notEqual(c.sigs.scene, a.sigs.scene, 'a scene-affecting edit changes the scene sig')
-  assert.equal(c.sigs.hydra, a.sigs.hydra, 'outputs whose subgraph is untouched keep their sig')
-})
-
 test('cookProgram falls back to rasterizing the three table when there is no scene view', () => {
   const rt = createRuntime()
   const code = `
