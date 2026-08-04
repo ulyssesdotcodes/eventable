@@ -7,7 +7,7 @@ import { activeLineage } from './lineage.js'
 import type { EvalCtx } from './dsl.js'
 import { FPS, FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS, DEFAULT_LOOP_BEATS, beatsToFrames } from './constants.js'
 import type { Row } from './lineage.js'
-import { contentPasses, type CookedVisualRows, type PassState, type Visualizer, type VisualizerKind } from './visualizer.js'
+import { contentPasses, passCycle, type CookedVisualRows, type PassState, type Visualizer, type VisualizerKind } from './visualizer.js'
 import { beatSecondsFromTaps } from './tap-log.js'
 
 export interface TapControl {
@@ -33,8 +33,8 @@ export function wallAlignedTick(nowMs: number, anchorMs: number, loopSeconds: nu
 
 // Which pass of the loop "now" falls in on the same wall-aligned grid.
 // Multi-loop sequences place content by the DIFFERENCE between this value now
-// and at the content's loop epoch, so a re-cook restarts a sequence at pass 0
-// while the phase within the loop stays put.
+// and the base passBaseFrom folded, so the phase within the loop stays put
+// whatever moves the base.
 export function wallAlignedLoop(nowMs: number, anchorMs: number, loopSeconds: number): number {
   if (loopSeconds <= 0) return 0
   return Math.floor((nowMs - anchorMs) / 1000 / loopSeconds)
@@ -124,36 +124,60 @@ export function loopBeatsFromEvents(events: Row[]): number | null {
   return out
 }
 
-// Fold the activity event stream into the loop epoch — the instant every
-// multi-pass sequence counts its passes from. ONE epoch for every kind on
-// purpose: a per-kind epoch let two multi-pass tracks count from different
-// origins and sit a pass apart forever.
+// Fold the activity and tap logs into the pass BASE: the wall-aligned loop
+// index every multi-pass sequence counts its passes from, so the pass playing
+// is `loopIndex(now) - base`. ONE base for every kind on purpose — per-kind
+// epochs let two multi-pass tracks count from different origins and sit a pass
+// apart forever — and a fold rather than engine state, so every replica (late
+// joiners included) lands on the same pass with no extra sync message.
 //
-// It moves only on an apply that DROPPED the pass the playhead was on — the
-// cook it brought in spans fewer passes than that. An apply that still has
-// that pass leaves it alone, so a run of edits keeps the piece playing instead
-// of snapping back to pass 0 on every Apply; the first apply always anchors
-// it, since a session has to start somewhere. Each apply carries the pass
-// count it cooked (see programPasses) and its author's absolute clock, so
-// every replica — late joiners included — folds the same epoch off the log.
-// `passesBetween` is the engine's own wall-aligned pass distance.
-export function loopEpochFromApplies(events: Row[], passesBetween: (fromMs: number, toMs: number) => number): number {
-  let epoch = 0
-  let span = 0
-  for (const e of events ?? []) {
-    if (e.kind !== 'apply' || typeof e.at !== 'number') continue
-    // Legacy applies (recorded before the column) read as single-pass, which
-    // keeps the fold on the session's first apply rather than guessing.
-    const passes = typeof e.passes === 'number' && e.passes >= 1 ? Math.floor(e.passes) : 1
-    if (span === 0 || passesBetween(epoch, e.at) % span >= passes) epoch = e.at
-    span = passes
+// Two things move it, walked in wall-clock order:
+//   - An apply whose cook has FEWER passes than the one being played: that
+//     pass is gone, so the sequences restart from it. An apply that still has
+//     the pass leaves the base alone — a run of edits shouldn't restart the
+//     piece — and the session's first apply always anchors it. Each apply
+//     records the pass count it cooked (see programPasses); legacy applies
+//     from before the column read as single-pass.
+//   - A tap: the beat grid moves under the playhead, so the base is re-derived
+//     ON THE NEW GRID at the SAME pass. Tapping re-phases the piece, it never
+//     rewinds it — tap during pass 3 of 4 and pass 3 is still what plays.
+// Both stamp their author's absolute clock, which is the axis this walks.
+export function passBaseFrom(events: Row[], taps: Row[], loopBeats: number, musical: (wallMs: number) => number): number {
+  const grid = (anchorMs: number, beatSeconds: number) =>
+    (wallMs: number): number => wallAlignedLoop(musical(wallMs), musical(anchorMs), loopBeats * beatSeconds)
+  // A tap moves the grid from the second press on — that is when the taps
+  // establish a tempo and "beat 0" adopts the first press (see TapLog.anchor).
+  // Before any of that the grid is the session origin at the default tempo.
+  const steps: { at: number; grid?: (wallMs: number) => number; passes?: number }[] = []
+  for (let i = 1; i < taps.length; i++) {
+    steps.push({ at: taps[i].time as number, grid: grid(taps[0].time as number, beatSecondsFromTaps(taps.slice(0, i + 1))!) })
   }
-  return epoch
+  for (const e of events ?? []) {
+    if (e.kind === 'apply' && typeof e.at === 'number') {
+      steps.push({ at: e.at, passes: typeof e.passes === 'number' && e.passes >= 1 ? Math.floor(e.passes) : 1 })
+    }
+  }
+  steps.sort((a, b) => a.at - b.at)
+
+  let loopIndex = grid(playbackOrigin(events, null), DEFAULT_BEAT_SECONDS)
+  let base = 0
+  let span = 0
+  for (const s of steps) {
+    const pass = loopIndex(s.at) - base
+    if (s.grid) {
+      loopIndex = s.grid
+      base = loopIndex(s.at) - pass
+      continue
+    }
+    if (span === 0 || pass % span >= s.passes!) base = loopIndex(s.at)
+    span = s.passes!
+  }
+  return base
 }
 
 // How many passes a cooked program spans at a loop length: its longest track's
 // content, or the timeline's own pass axis. Recorded on every apply for the
-// fold above.
+// fold above, and what every track repeats inside (see passCycle).
 export function programPasses(cooked: LoadedRows, loopBeats: number): number {
   return Math.max(
     contentPasses(cooked, beatsToFrames(loopBeats)),
@@ -244,8 +268,8 @@ export function playbackOrigin(events: Row[], tapAnchorMs: number | null): numbe
 // doesn't render). replay's CookedResult is structurally assignable.
 export type LoadedRows = CookedVisualRows & {
   timelineRows: Row[]
-  // The activity log the loop epoch is folded off (see loopEpochFromApplies);
-  // absent leaves the epoch where it is.
+  // The activity log the pass base is folded off (see passBaseFrom); absent
+  // leaves the base where it is.
   activity?: Row[]
 }
 
@@ -294,7 +318,7 @@ export function createPlaybackEngine(
   const raf = clock?.raf ?? ((cb: () => void): void => { requestAnimationFrame(cb) })
 
   // Wall→musical: every wall instant the wall-aligned math touches goes through
-  // this first (wallAlignedPhase/passesSince below), so a resume continues from
+  // this first (wallAlignedPhase/loopIndexAt below), so a resume continues from
   // the paused musical moment instead of the paused span reappearing as a jump.
   const musical = (wallMs: number): number => wallMs - (pausedMsBeforeCb?.(wallMs) ?? 0)
 
@@ -306,15 +330,19 @@ export function createPlaybackEngine(
   let startTime: number | null = null
   let anchorBeatSec = DEFAULT_BEAT_SECONDS
   let pausedBeat = 0
-  // The live timeline rows, kept so a loop-beats change can rebuild the warp:
-  // a timeline's pass length is now the GUI loop-beats, not its own extent.
-  let timelineRows: Row[] = []
+  // The program on screen, kept so a loop-beats or tempo change can redo what
+  // depends on it without a re-cook: the warp (a timeline's pass length is the
+  // GUI loop-beats, not its own extent), the pass span, and the pass base.
+  let loaded: LoadedRows | null = null
   let timeline: Timeline = buildTimeline([])
-  // Absolute instant ALL pass counting is based on (see loopEpochFromApplies).
-  // The timeline warp and every visualizer count from this one instant, so
-  // tracks spanning several passes are always on the same one. 0 (the Unix
-  // epoch) until an apply anchors it.
-  let loopEpoch = 0
+  // The wall-aligned loop index ALL pass counting is based on (see
+  // passBaseFrom) — the pass playing is loopIndexAt(now) - passBase. The
+  // timeline warp and every visualizer count off this one number, so tracks
+  // spanning several passes are always on the same pass.
+  let passBase = 0
+  // How many passes the program spans — its longest track's. Every track
+  // repeats inside this rather than against it (see passCycle).
+  let span = 1
   let maxBeats = 0 // loop length in beats
   let isScrubbing = false
   let scrubPos = 0
@@ -362,11 +390,12 @@ export function createPlaybackEngine(
   }
 
   // Which pass of the timeline (the extended PLAYBACK axis, before the warp)
-  // is current. Timeline.sourceBeatAt re-derives the same modulo internally,
-  // so passing this pre-modulo'd value through it is a no-op — computing it
-  // once here is what lets viewState() surface it too.
+  // is current — the piece's pass wrapped by the warp's own cycle, exactly as
+  // a visualizer wraps it by its content's. A warp shorter than the piece and
+  // not dividing it therefore runs out on its last pass, where the playback
+  // beats it doesn't reach play unwarped.
   function timelinePassNow(): number {
-    return timeline.loops > 1 ? passesSince(loopEpoch) % timeline.loops : 0
+    return timeline.loops > 1 ? passNow() % passCycle(timeline.loops, span) : 0
   }
 
   // Source beat shown at playhead beat `pos` (0-based elapsed beats): the
@@ -390,20 +419,20 @@ export function createPlaybackEngine(
     // Always present so time()/loop() bindings resolve even with no midi/slider
     // stream; the clock is the source position, so scrubbing scrubs it. loop()
     // counts whole passes since the playback origin (the activity log's
-    // session-start, via tapControl.anchor) — passesSince from the origin is
-    // that count, and it rides the same wall-aligned/pause-shifted grid as the
-    // multi-loop pass math, so synced clients and replays agree. Fixed for the
-    // frame, so it's computed once here rather than per binding.
-    const loopNow = passesSince(tapControl?.anchor?.() ?? 0)
+    // session-start, via tapControl.anchor), on the same wall-aligned/
+    // pause-shifted grid as the multi-loop pass math, so synced clients and
+    // replays agree. Fixed for the frame, so it's computed once here rather
+    // than per binding.
+    const loopNow = passesBetween(tapControl?.anchor?.() ?? 0, epochNow())
     const ctx: EvalCtx = { ...midiCtx, ...sliderCtx, time: () => srcFrameF / FPS, loop: () => loopNow }
     const states: Row[] = []
     const loopFrames = beatsToFrames(loopBeats)
     const bpm = tappedBpm() ?? 60 / DEFAULT_BEAT_SECONDS
     // Counted ONCE for the whole frame: every kind wraps this same number by
-    // its own pass count, so no two multi-pass tracks can disagree about which
-    // pass it is.
-    const pass = passesSince(loopEpoch)
-    for (const v of visualizers) states.push(...v.applyFrame({ srcFrameF, loopFrames, ctx, pass, bpm }))
+    // its own cycle, so no two multi-pass tracks can disagree about which pass
+    // it is.
+    const pass = passNow()
+    for (const v of visualizers) states.push(...v.applyFrame({ srcFrameF, loopFrames, ctx, pass, span, bpm }))
     // Graphed/table views key their rows by `beat`, so report the source beat.
     onTick?.(pos, activeLineage(states), srcBeat)
   }
@@ -433,19 +462,31 @@ export function createPlaybackEngine(
     return wallAlignedTick(musical(epochNow()), anchorMs, maxBeats * bs) / bs
   }
 
-  // Whole wall-aligned loops between two instants, with no per-wrap counter, so
-  // every clock-synced client agrees. The time half of multi-loop playback; the
-  // content half lives in each visualizer, which wraps the count by its own
-  // pass total.
-  function passesBetween(fromMs: number, toMs: number): number {
-    const anchorMs = musical(tapControl?.anchor?.() ?? 0)
-    const loopSec = maxBeats * beatSeconds()
-    return Math.max(0, wallAlignedLoop(musical(toMs), anchorMs, loopSec) - wallAlignedLoop(musical(fromMs), anchorMs, loopSec))
+  // An instant's wall-aligned loop index on the CURRENT beat grid — the same
+  // grid passBaseFrom's last step leaves off on, which is what makes the folded
+  // base comparable to it. No per-wrap counter, so every clock-synced client
+  // agrees.
+  function loopIndexAt(wallMs: number): number {
+    return wallAlignedLoop(musical(wallMs), musical(tapControl?.anchor?.() ?? 0), maxBeats * beatSeconds())
   }
 
-  // Which pass of a multi-loop sequence to show right now.
-  function passesSince(epochMs: number): number {
-    return passesBetween(epochMs, epochNow())
+  // Whole wall-aligned loops between two instants.
+  function passesBetween(fromMs: number, toMs: number): number {
+    return Math.max(0, loopIndexAt(toMs) - loopIndexAt(fromMs))
+  }
+
+  // Which pass of the piece is playing. The time half of multi-loop playback;
+  // the content half lives in each visualizer, which wraps this by its own
+  // cycle.
+  function passNow(): number {
+    return Math.max(0, loopIndexAt(epochNow()) - passBase)
+  }
+
+  // Re-derive the pass base and the pass span from the logs. Runs whenever
+  // something they depend on moves — a re-cook, a tap, a loop-length change.
+  function recomputePasses(): void {
+    span = loaded ? programPasses(loaded, loopBeats) : 1
+    if (loaded?.activity) passBase = passBaseFrom(loaded.activity, tapControl?.rows() ?? [], maxBeats, musical)
   }
 
   // The 1-indexed source beat on screen — wrapped and timeline-mapped exactly
@@ -488,24 +529,27 @@ export function createPlaybackEngine(
     }
   }
 
-  // Swap in a freshly cooked cache without moving the playhead. The loop epoch
-  // is re-folded off the activity log — it only moves for an apply that dropped
-  // the pass being played, so an ordinary edit leaves the sequences running.
-  // recomputeMax first: the fold measures in loops of maxBeats.
+  // Swap in a freshly cooked cache without moving the playhead. The pass base
+  // and span are re-folded off the logs — the base only moves for an apply
+  // that dropped the pass being played, so an ordinary edit leaves the
+  // sequences running. recomputeMax first: the fold counts loops of maxBeats.
   function load(cooked: LoadedRows): void {
     for (const v of visualizers) v.load(cooked)
-    timelineRows = cooked.timelineRows ?? []
-    timeline = buildTimeline(timelineRows, loopBeats)
+    loaded = cooked
+    timeline = buildTimeline(cooked.timelineRows ?? [], loopBeats)
     recomputeMax()
-    if (cooked.activity) loopEpoch = loopEpochFromApplies(cooked.activity, passesBetween)
+    recomputePasses()
     retimeTo(currentTime())
   }
 
   // Tap tempo changed. Content placement is tempo-independent, so nothing
   // re-cooks — just re-anchor the beat clock (snapping to the wall-aligned
-  // phase while playing) and refresh the loop length.
+  // phase while playing) and refresh the loop length. Re-folding carries the
+  // pass being played onto the new grid, so a tap re-phases the piece rather
+  // than rewinding it.
   function retempo(): void {
     recomputeMax()
+    recomputePasses()
     const aligned = state === 'playing' ? wallAlignedPhase() : null
     retimeTo(aligned ?? currentTime())
   }
@@ -538,9 +582,11 @@ export function createPlaybackEngine(
     }
     loopBeats = n
     onLoopBeats?.(n)
-    // The pass length feeds the timeline warp, so a new loop length rebuilds it.
-    timeline = buildTimeline(timelineRows, loopBeats)
+    // The pass length feeds the timeline warp and every track's pass count, so
+    // a new loop length rebuilds the warp and re-folds the passes.
+    timeline = buildTimeline(loaded?.timelineRows ?? [], loopBeats)
     recomputeMax()
+    recomputePasses()
     retimeTo(currentTime())
   }
 
