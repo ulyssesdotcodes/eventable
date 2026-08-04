@@ -461,18 +461,21 @@ test('loopBeatsFromEvents keeps the newest set-loop-beats, ignoring other events
   assert.equal(loopBeatsFromEvents([]), null)
 })
 
-test('the pending-edit preview runs the editor buffer against the applied frame, leaving the output alone', () => {
+test('the behind-editor preview runs the edited cell against the applied frame, leaving the output alone', () => {
   const time = fakeTime(0)
   const hydra = fakeHydra()
   const applied: (string | null)[] = []
   hydra.setSketch = (s?: { code: string } | null) => { applied.push(s?.code ?? null) }
   let pending: string | null = null
-  const engine = createPlaybackEngine([createHydraVisualizer(hydra, () => pending)], { clock: time.clock })
+  const engine = createPlaybackEngine(
+    [createHydraVisualizer(hydra, { code: () => pending, onError: () => {} })],
+    { clock: time.clock },
+  )
   engine.load({ scene: buildFrameIndex([]), timelineRows: [], hydraRows: [
     { event: 'setCode', code: 'osc(1)', beat: 1 },
     { event: 'setVariable', name: 'freq', value: 7, beat: 1 },
   ] })
-  // Paused: typing moves no playhead, so refresh() is what lands the preview.
+  // Paused: applying moves no playhead, so refresh() is what lands the preview.
   engine.toggle()
   engine.toggle()
   pending = 'osc(2).out(o0)'
@@ -480,6 +483,26 @@ test('the pending-edit preview runs the editor buffer against the applied frame,
   assert.equal(hydra.previews.at(-1)?.code, 'osc(2).out(o0)')
   assert.equal(hydra.previews.at(-1)?.vars.freq, 7, 'the preview sees the frame’s folded variables')
   assert.equal(applied.at(-1), 'osc(1).out(o0)', 'the visible output still shows the applied sketch')
+})
+
+test('a preview that throws is reported, not raised — the frame still applies', () => {
+  const time = fakeTime(0)
+  const hydra = fakeHydra()
+  const applied: (string | null)[] = []
+  hydra.setSketch = (s?: { code: string } | null) => { applied.push(s?.code ?? null) }
+  // Everything on the preview path — the fold, and the GPU compile behind
+  // setPreview — runs inside applyFrame, where a throw would kill the whole
+  // render loop.
+  hydra.setPreview = () => { throw new Error('regl: context lost') }
+  const errors: unknown[] = []
+  const engine = createPlaybackEngine(
+    [createHydraVisualizer(hydra, { code: () => 'osc(2).out(o0)', onError: (e) => errors.push(e) })],
+    { clock: time.clock },
+  )
+  engine.load({ scene: buildFrameIndex([]), timelineRows: [], hydraRows: HYDRA_ROWS })
+  engine.refresh()
+  assert.equal((errors[0] as Error).message, 'regl: context lost')
+  assert.equal(applied.at(-1), 'osc().out(o0)', 'the applied sketch is drawn regardless')
 })
 
 // --- beat-derived passes: content past the loop's end plays in later passes --

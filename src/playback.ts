@@ -271,8 +271,8 @@ export interface PlaybackAPI {
   // back out of activity events.
   setLoopBeats(n: number): void
   // Re-render the frame already on screen, for a change that alters what it
-  // draws without moving the playhead — the editor's pending-edit preview,
-  // which must land while paused too.
+  // draws without moving the playhead — the behind-editor preview, which must
+  // land while paused too.
   refresh(): void
 }
 

@@ -165,13 +165,31 @@ export function createSceneVisualizer(sceneAPI: SceneAPI): Visualizer {
   }
 }
 
+// The behind-editor preview. `code` is the open hydra/post cell's applied
+// sketch, folded back into the program in place by main.ts (null when no such
+// cell is open); the scene API draws it against this frame's variables and
+// clock. Both the fold and the preview's own GPU compile can throw, and
+// neither may escape applyFrame — an uncaught throw there kills the render loop
+// and takes the page with it — so they go to `onError` instead.
+export interface PreviewHook {
+  code(): string | null
+  onError(err: unknown): void
+}
+
+function drawPreview(preview: PreviewHook | undefined, set: (code: string | null) => void): void {
+  if (!preview) return
+  try {
+    set(preview.code())
+  } catch (err) {
+    preview.onError(err)
+  }
+}
+
 // The hydra layer: the sampled sketch is absolute (setSketch replaces the
 // whole program), so there is no reconciliation state to clear. tick() drives
 // hydra's clock from the source position, so scrubbing scrubs the sketch.
-// `previewCode` is the open hydra cell's uncommitted sketch, folded in place by
-// main.ts (null when there's no such cell): the scene API previews it against
-// this frame's variables and clock. The post visualizer takes the same hook.
-export function createHydraVisualizer(hydraAPI: HydraAPI, previewCode?: () => string | null): Visualizer {
+// The post visualizer takes the same preview hook.
+export function createHydraVisualizer(hydraAPI: HydraAPI, preview?: PreviewHook): Visualizer {
   let index: Row[] = buildHydraIndex([])
   let maxIndex = 0
   let current: PassState = { pass: 0, loops: 1 }
@@ -208,7 +226,7 @@ export function createHydraVisualizer(hydraAPI: HydraAPI, previewCode?: () => st
       const vars = withCtx(sketch?.vars ?? {})
       hydraAPI.setSketch(sketch ? { ...sketch, vars } : null)
       hydraAPI.tick(frameF / FPS)
-      if (previewCode) hydraAPI.setPreview(previewCode(), vars)
+      drawPreview(preview, (code) => hydraAPI.setPreview(code, vars))
       return []
     },
     clear(): void {
@@ -265,7 +283,7 @@ export function createBaubleVisualizer(baubleAPI: BaubleAPI): Visualizer {
 // once loopFrames is known), so clear() must not tear it down. applyFrame folds
 // to a precompiled state and writes the frame's live-uniform values;
 // three-scene's animate loop drives the actual render.
-export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => string | null): Visualizer {
+export function createPostVisualizer(postAPI: PostAPI, preview?: PreviewHook): Visualizer {
   let index: Row[] = buildPostIndex([])
   let maxIndex = 0
   let current: PassState = { pass: 0, loops: 1 }
@@ -306,7 +324,7 @@ export function createPostVisualizer(postAPI: PostAPI, previewCode?: () => strin
       const midi = ctx?.midi ? { $midi: ctx.midi } : {}
       const props = { ...(sliders ? { sliders } : {}), ...midi, ...vars, ...clock }
       postAPI.setFrame(frame, props)
-      if (previewCode) postAPI.setPreview(previewCode(), props)
+      drawPreview(preview, (code) => postAPI.setPreview(code, props))
       return []
     },
     clear(): void {

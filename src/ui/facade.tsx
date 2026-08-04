@@ -8,7 +8,7 @@ import { For, Show, createEffect, onCleanup, onMount, createSignal } from 'solid
 import { highlightInto } from './cm-editor.js'
 import type { EditorHost, EditTarget } from '../editor-host.js'
 
-// Canvases the pending-edit preview draws into — one per language, since each
+// Canvases the behind-editor preview draws into — one per language, since each
 // is a GPU surface of its own. They obey the same one-instance rule the editor
 // view does: created once, detached, then reparented behind whichever surface
 // is live (a WebGL/WebGPU context does not survive being recreated). main.ts
