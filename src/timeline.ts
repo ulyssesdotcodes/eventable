@@ -191,7 +191,8 @@ function compile(timelineRows: Row[], loopBeats: number = DEFAULT_LOOP_BEATS): {
   return { segments, span: lb, loops }
 }
 
-// The compiled segments alone — what Table.retime warps content through.
+// The compiled segments alone — what Table.retime warps content through, by
+// moving event rows (placeBeat) or by reading geometry at sourceAt.
 export function timelineSegments(timelineRows: Row[], loopBeats: number = DEFAULT_LOOP_BEATS): TimelineSegment[] {
   return compile(timelineRows, loopBeats).segments
 }

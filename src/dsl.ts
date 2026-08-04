@@ -911,10 +911,15 @@ export class Table {
    * spacing, and rows no event plays are dropped. Rows without a numeric
    * `beat` — and every row when the timeline has no events — pass through
    * unchanged. e.g. table("melody").retime(table("warp")).rasterize().
-   * An origami folding retimes the same way: warp the beat-keyed fold
-   * keyframes of paper.sequence() (keep the spawn row unmapped) to loop or
-   * stretch subsections of the folding —
-   * paper.spawn().concat(paper.sequence().retime(table("warp"))).
+   *
+   * A MESH and its geometry retime differently, because they are a baked
+   * animation rather than a set of events: their rows keep their own beats
+   * and are READ at the warped time instead of being moved to it. So a
+   * vertex needs no keyframe inside the window — it is interpolated at
+   * whatever source beat the window shows — and the whole paper resolves to
+   * one source beat, which is what stops its faces sliding out of step with
+   * each other. Retime a folding by warping the paper itself:
+   * paper.spawn().retime(table("warp")).
    */
   retime(timeline: Table | Row[] | null | undefined): Table {
     // In the spec, not just the closure: the pass length changes where rows
@@ -1222,38 +1227,6 @@ export class OrigamiBuilder {
       },
       ...foldElementRows(program, { id: this._id }),
     ], this._ctx)
-  }
-
-  /**
-   * Fold schedule → update keyframes driving `fold`. With no argument, uses
-   * the beat/dur timings from the steps() rows; override with rows
-   * { step?, beat, dur? } to retime.
-   */
-  sequence(steps?: Table | Row[] | null, opts: { id?: unknown } = {}): Table {
-    const id = opts.id ?? this._id
-    const program = this.program()
-    let timed = program.steps.map((s) => ({ t0: s.t0, t1: s.t1, to: s.to, name: s.name }))
-    const overrides = steps instanceof Table ? steps.rows : steps
-    if (overrides) {
-      const byName = new Map(timed.map((s) => [s.name, s]))
-      overrides.forEach((r, i) => {
-        const target = r.step != null ? byName.get(String(r.step)) : timed[i]
-        if (!target) return
-        const at = r.beat
-        if (at != null) {
-          const dur = r.dur != null ? Math.max(Number(r.dur), 1 / FRAMES_PER_BEAT) : target.t1 - target.t0
-          target.t0 = Number(at)
-          target.t1 = Number(at) + dur
-        }
-      })
-      timed = [...timed].sort((a, b) => a.t0 - b.t0)
-    }
-    const out: Row[] = []
-    timed.forEach((s, k) => {
-      out.push({ id, event: 'update', beat: s.t0, fold: k })
-      out.push({ id, event: 'update', beat: s.t1, fold: k + s.to })
-    })
-    return new Table(out, this._ctx)
   }
 
   /** The fold value at a beat under the table's own schedule. */
@@ -1844,8 +1817,8 @@ export type DSLSurface = Easings & {
   /**
    * Folding paper: origami() is a bare sheet. Chain .steps(table) to fold it
    * by instructions (one fold per row — see schemas.origami), then
-   * .spawn({ id, color, … }) for the create row and .sequence() for beat-timed
-   * fold keyframes. .folds(), .verts(), .faces() and .edges() are what the folding
+   * .spawn({ id, color, … }) for the paper itself — its mesh and every vertex,
+   * face and crease of it. .folds(), .verts(), .faces() and .edges() are what the folding
    * KNOWS — a row per fold, per corner, per face, and per crease (which paper moves, which
    * creases the fold turns, how deep the stack is), each already carrying its
    * fold's beat/dur. They are ordinary tables routed like any other, so what

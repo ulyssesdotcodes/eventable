@@ -1388,8 +1388,9 @@ export interface ElementRowOpts {
  *
  * That fixed topology is what makes an element number mean the same piece of
  * paper for the whole folding, and what lets .retime() run the fold backwards:
- * every animated quantity is a plain value on a keyframe track, and values warp
- * cleanly where lifetimes do not.
+ * with one numbering from the first beat to the last, a retimed paper is just
+ * this animation READ at another time — nothing has to be moved, so nothing
+ * can arrive out of step with anything else.
  */
 export const foldElementRows = (
   program: FoldTableProgram, opts: ElementRowOpts,

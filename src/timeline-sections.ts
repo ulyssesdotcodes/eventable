@@ -3,8 +3,10 @@
 // out; src/ui/timeline-pane.tsx renders them). Pure: no DOM, no store.
 //
 // Three shapes. An 'events' band is a cooked out view — the rows playback will
-// actually consume for that consumer kind, any .retime() already baked in by
-// the cook — drawn as handles. A 'channel' band is long-format automation
+// actually consume for that consumer kind, any .retime() of them already baked
+// in by the cook — drawn as handles. (A mesh's geometry is warped rather than
+// moved, and is filtered out of the band anyway; see sceneEvents.)
+// A 'channel' band is long-format automation
 // (recorded sliders, recorded midi, post's setVariable keyframes) drawn as one
 // trace per id via graph-panel's pivotChannels. The 'timeline' band is the
 // warp itself, the one section backed by live editable store rows.

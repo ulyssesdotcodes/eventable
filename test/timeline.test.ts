@@ -303,29 +303,32 @@ test('retime carries each source row\'s lineage onto every placed copy', () => {
   for (const r of out) assert.deepEqual(getLineage(r), [{ table: 'melody', index: 0 }])
 })
 
-test('retime loops a subsection of an origami fold sequence', () => {
+test('retime loops a subsection of an origami folding', () => {
   const dsl = createDSL(null)
   const paper = dsl.origami().steps([
     { step: 'diag', p1: '0,0', p2: '1,1', move: '0.667,0.333', beat: 1, dur: 2 },
     { step: 'collapse', p1: '0,0.5', p2: '1,0.5', move: '0.333,0.167', kind: 'reverse', beat: 4, dur: 2 },
   ])
-  const spawn = paper.spawn({ id: 'sheet' })
   // First fold plays straight; the second fold's window (source 4..7) loops
   // three times — the sheet folds shut, eases back open, folds shut again.
-  const warp = [
+  const scene = buildFrameIndex(paper.spawn({ id: 'sheet' }).retime([
     { event: 'retime', beat: 1 },
     { event: 'loop', beat: 4, from: 4, to: 7 },
-  ]
-  const scene = spawn.concat(paper.sequence().retime(warp)).rasterize(13)
-  const foldAt = (b: number): number => {
-    const row = scene.rows.find((r) => r.frame === Math.round((b - 1) * FRAMES_PER_BEAT) && r.id === 'sheet')!
-    return row.fold as number
+  ]).rows, 13)
+  const poseAt = (beat: number): number[] => {
+    const frame = beatToFrame(beat)
+    const mesh = sampleFrame(scene, frame).find((r) => r.slab)!
+    return elementRowsAt(mesh.slab as MeshSlab, mesh.id, mesh.frame as number)
+      .filter((r) => typeof r.vert === 'number')
+      .flatMap((r) => [r.px as number, r.py as number, r.pz as number])
   }
-  assert.equal(foldAt(3), 1, 'the first fold lands on the straight clock')
-  assert.equal(foldAt(6), 2, 'the second fold lands in the first cycle')
-  assert.equal(foldAt(8), 1.5, 'mid-swing inside a repeat')
-  assert.equal(foldAt(9), 2, 'landed again in the second cycle')
-  assert.equal(foldAt(12), 2, 'and in the third')
+  const apart = (a: number[], b: number[]): number =>
+    Math.max(...a.map((v, i) => Math.abs(v - b[i])))
+  // the same source beat of the looped window, one cycle apart, is the same paper
+  assert.equal(apart(poseAt(6), poseAt(9)), 0, 'a cycle later is the same pose')
+  assert.equal(apart(poseAt(6), poseAt(12)), 0, 'and two cycles later')
+  // and the window really does move between those landings
+  assert.ok(apart(poseAt(6), poseAt(8)) > 0.1, 'mid-swing inside a repeat is elsewhere')
 })
 
 test('retime with an empty timeline is a no-op', () => {
