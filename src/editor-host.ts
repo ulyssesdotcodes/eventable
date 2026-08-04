@@ -18,9 +18,10 @@ export interface EditTarget {
   // target whose Apply commits more than its own text (pending grid edits, the
   // whole program) overrides it.
   isDirty?(text: string, baseline: string): boolean
-  // Folds the pending buffer back into the running program, for the sketch
-  // drawn behind this target while it is promoted. Only hydra/post code cells
-  // have one — see main.ts's previewCode and ui/facade.tsx's previewMounts.
+  // Folds this cell's committed text back into the running program, for the
+  // sketch drawn behind the target while it is promoted. Only hydra/post code
+  // cells have one — see main.ts's previewHook and ui/facade.tsx's
+  // previewMounts.
   preview?(text: string): string | null
   // The row's identifying cells (`beat 3`, `setCode`, `o0`) — a surface
   // detached from the row (the overlay, the phone popover) has to say which

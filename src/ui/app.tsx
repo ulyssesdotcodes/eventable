@@ -54,7 +54,7 @@ export interface CanvasMounts {
   threeCanvas: HTMLCanvasElement
   baubleCanvas: HTMLCanvasElement
   hydraCanvas: HTMLCanvasElement
-  // Behind the promoted code facade: the open hydra/post cell's pending code.
+  // Behind the promoted code facade: the open hydra/post cell's applied code.
   // Unlike the rest, these live outside the layout — ui/facade.tsx owns them
   // and reparents them into whichever surface is live.
   preview: PreviewMounts

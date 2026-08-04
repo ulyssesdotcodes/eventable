@@ -892,8 +892,8 @@ html, body {
   display: none;
 }
 
-/* ── Pending-edit preview ── */
-/* The promoted hydra/post cell's uncommitted code, drawn behind the code it
+/* ── Behind-editor preview ── */
+/* The promoted hydra/post cell's applied code, drawn behind the code it
    comes from: one canvas per language, reparented into whichever surface is
    live (ui/facade.tsx) the way the CodeMirror view itself is. Negative z-index
    puts it under the head and the text without lifting either, so the surface

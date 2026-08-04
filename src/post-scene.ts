@@ -36,9 +36,9 @@ export interface PostAPI {
   // avoid. The visualizer re-programs when it changes.
   setProgram(index: Row[], loopFrames: number): void
   setFrame(frame: PostFrame | null, props: Record<string, unknown>): void
-  // The chain text being edited (null when no post cell is open), drawn to
-  // initPost's `preview` canvas. Half-typed text that fails to compile leaves
-  // the last good preview up.
+  // The open post cell's applied chain (null when no such cell is open), drawn
+  // to initPost's `preview` canvas. Throws what that chain throws — the caller
+  // owns reporting it.
   setPreview(code: string | null, props: Record<string, unknown>): void
   render(): boolean
   resize(): void
@@ -390,10 +390,10 @@ export function initPost(
     return { pipeline: new THREE.RenderPipeline(into, graph.node), graph, warmed: false }
   }
 
-  // Pending-edit preview (see setPreview): a second renderer drawing straight
+  // Behind-editor preview (see setPreview): a second renderer drawing straight
   // to the editor's canvas. It can't borrow the main target and copy — a WebGPU
   // canvas snapshot lags a frame, so the mirror shows the real output rather
-  // than the pending chain. Its one state stays out of `states`, so a per-edit
+  // than the previewed chain. Its one state stays out of `states`, so a per-Apply
   // rebuild can't accumulate pipelines.
   let preview: { code: string; state: State | null } | null = null
   let previewRenderer: THREE.WebGPURenderer | null = null
@@ -508,13 +508,12 @@ export function initPost(
       const into = previewTarget()
       if (!into) return
       if (preview?.code !== code) {
-        let state = preview?.state ?? null
-        try {
-          const next = buildState(evalPostCode(code), into, previewSceneColor)
-          state?.pipeline.dispose()
-          state = next
-        } catch { /* half-typed chain — hold the last good preview */ }
-        preview = { code, state }
+        preview?.state?.pipeline.dispose()
+        // The code goes in before the build: a chain that won't build throws on
+        // out to the caller, which reports it on the cell (see visualizer.ts's
+        // drawPreview), and must not be retried every frame.
+        preview = { code, state: null }
+        preview.state = buildState(evalPostCode(code), into, previewSceneColor)
       }
       if (!preview.state) return
       beatUniform.value = typeof props.beat === 'number' ? props.beat : 0

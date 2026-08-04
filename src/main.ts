@@ -9,7 +9,7 @@ import { particleRows, hasSpawner, particleParamsAt, type ParticleParamName } fr
 import { initBauble } from './bauble-scene.js'
 import { initPost } from './post-scene.js'
 import { createSceneVisualizer, createHydraVisualizer, createBaubleVisualizer, createPostVisualizer } from './visualizer.js'
-import type { PassState, VisualizerKind } from './visualizer.js'
+import type { PassState, PreviewHook, VisualizerKind } from './visualizer.js'
 import { isFoldTable } from './fold-engine.js'
 import { sectionsFor, type TimelineSection } from './timeline-sections.js'
 import { mountApp } from './ui/app.js'
@@ -144,18 +144,49 @@ let currentTable: string | null = null
 // only when on this same cell (see refreshPresenceUI).
 let localCell = ''
 
-// The promoted hydra/post cell, previewed behind its own code as you type (see
-// EditTarget.preview): the uncommitted text goes back into its table and folds
-// like any other row, so a fragment cell (an `add` chunk) previews as the
-// running sketch it joins — the same fold the row's ⓘ popover shows.
-let preview: { lang: 'hydra' | 'post'; fold: (text: string) => string | null; text: string } | null = null
-// A keystroke must not reach the GPU: each change recompiles a sketch (hydra)
-// or a whole TSL pipeline (post).
-const PREVIEW_DEBOUNCE_MS = 150
-let previewTimer: ReturnType<typeof setTimeout> | undefined
+// The promoted hydra/post cell, previewed behind its own code (see
+// EditTarget.preview): the cell's text goes back into its table and folds like
+// any other row, so a fragment cell (an `add` chunk) previews as the running
+// sketch it joins — the same fold the row's ⓘ popover shows.
+//
+// It follows the APPLIED text (host.committed(), advanced by each Apply), not
+// the buffer: a keystroke must not reach the GPU, since every change recompiles
+// a sketch (hydra) or a whole TSL pipeline (post). `code` is the last fold,
+// re-taken when that text changes and when a cook lands (applyCooked clears
+// `text` to force it).
+let preview: {
+  lang: 'hydra' | 'post'
+  fold: (text: string) => string | null
+  text: string | null
+  code: string | null
+  error: string | null
+} | null = null
 
-const previewCode = (lang: 'hydra' | 'post'): string | null =>
-  preview?.lang === lang ? preview.fold(preview.text) : null
+// Runs inside the render loop, so nothing here may throw at its caller: a fold
+// that blows up on the row — or a preview that won't compile on the GPU — lands
+// on the promoted cell's error slot instead, and `error` keeps that verdict
+// until the previewed code itself changes. The scene APIs each hold the code
+// they last took, so broken code is attempted once, not once a frame — which is
+// also why the verdict has to be remembered rather than re-derived.
+const previewHook = (lang: 'hydra' | 'post'): PreviewHook => ({
+  code(): string | null {
+    const p = preview
+    if (p?.lang !== lang) return null
+    const text = host.committed() ?? ''
+    if (text !== p.text) {
+      p.text = text
+      const folded = p.fold(text) // may throw — the last good fold stays up
+      if (folded !== p.code) p.error = null
+      p.code = folded
+    }
+    return p.code
+  },
+  onError(err): void {
+    if (!preview) return
+    preview.error = `preview: ${(err as Error).message}`
+    host.setError(preview.error)
+  },
+})
 
 // THE one editor: a detached CodeMirror the host reparents into whichever
 // facade/overlay currently owns editing (ui/facade.tsx). No docked pane, no
@@ -174,23 +205,14 @@ const cm = createCmEditor({
     if (cellChanged) schedulePresenceRefresh()
   },
   // Announce the in-progress buffer (throttled in presence.ts) so peers can
-  // mirror it before it is ever Run, and feed the same text to the preview
-  // behind the code.
-  onEdit: (cell, code) => {
-    presence?.setLiveCode(cell, code)
-    const target = preview
-    if (!target) return
-    clearTimeout(previewTimer)
-    // Writes to the captured target, so a late timer after a demote lands on
-    // the object nothing reads any more.
-    previewTimer = setTimeout(() => { target.text = code; playback.refresh() }, PREVIEW_DEBOUNCE_MS)
-  },
+  // mirror it before it is ever Run.
+  onEdit: (cell, code) => presence?.setLiveCode(cell, code),
 })
 // Escaping a facade hands keyboard focus back to the table it came from.
 const host = createEditorHost(cm, {
   onPromote: (t) => {
     preview = t.preview && (t.lang === 'hydra' || t.lang === 'post')
-      ? { lang: t.lang, fold: t.preview, text: t.text }
+      ? { lang: t.lang, fold: t.preview, text: null, code: null, error: null }
       : null
     // Promotion is what puts a preview on screen, and a paused playhead draws
     // no frames of its own — so it needs this nudge to appear.
@@ -262,7 +284,7 @@ function cellTarget(table: string, rowIndex: number, col: string, value: string)
     text: value,
     context: rowContext(data?.rows[rowIndex], data?.columns, col),
     // Only hydra and post have something to draw; the fold is the one the row's
-    // ⓘ popover shows, with the pending text spliced back into its row.
+    // ⓘ popover shows, with the applied text spliced back into its row.
     preview: lang !== 'hydra' && lang !== 'post' ? undefined : (text) => {
       const rows = editableStore.get(table)?.rows
       if (!rows) return null
@@ -717,7 +739,14 @@ function applyCooked(cooked: CookedResult): void {
   const activityEvents = editableStore.get(ACTIVITY_TABLE)?.events ?? []
   const loopBeats = loopBeatsFromEvents(activityEvents)
   if (loopBeats != null) playback.setLoopBeats(loopBeats)
+  // A landed cook is what moves the preview, not the Apply that started it:
+  // this is past evaluate's all-clear, so a preview that fails here still has
+  // its message on screen afterwards. load() draws the frame that re-folds it.
+  if (preview) preview.text = null
   playback.load({ ...cooked, activity: activityEvents })
+  // That all-clear wiped the cell's error slot, which the preview shares — a
+  // row whose own sketch is still broken has to say so again.
+  if (preview?.error != null) host.setError(preview.error)
 }
 
 // A tap changed the tempo. Nothing re-cooks — content sits on a fixed beat
@@ -1353,8 +1382,8 @@ const hydraAPI = initHydra(mounts.hydraCanvas, mounts.threeCanvas, [mounts.baubl
 const playbackController = createPlaybackController(
   [
     createSceneVisualizer(sceneAPI),
-    createPostVisualizer(postAPI, () => previewCode('post')),
-    createHydraVisualizer(hydraAPI, () => previewCode('hydra')),
+    createPostVisualizer(postAPI, previewHook('post')),
+    createHydraVisualizer(hydraAPI, previewHook('hydra')),
     createBaubleVisualizer(baubleAPI),
   ],
   playbackOptions,

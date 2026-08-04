@@ -13,8 +13,9 @@ import type { HydraFrame } from './hydra.js'
 export interface HydraAPI {
   setSketch(frame: HydraFrame | null): void
   tick(timeSeconds: number): void
-  // The sketch text being edited (null when no hydra cell is open), run on
-  // initHydra's `preview` canvas by a second hydra reading the same sources.
+  // The open hydra cell's applied sketch (null when no such cell is open), run
+  // on initHydra's `preview` canvas by a second hydra reading the same sources.
+  // Throws what that sketch throws — the caller owns reporting it.
   setPreview(code: string | null, vars: Record<string, unknown>): void
   reset(): void
   // Force the regl-refresh/redraw sequence a real window resize triggers —
@@ -88,9 +89,12 @@ export function initHydra(
       const fn = new Function(...scopeKeys, code)
       fn(...scopeValues)
     } catch (err) {
-      // Only the applied sketch: the preview instance compiles half-typed text
-      // by design (post-scene setPreview does the same).
-      if (preview) console.error('hydra sketch error:', err)
+      // A preview canvas means this is the main instance, whose broken sketch
+      // the cook has already reported. The second hydra behind the editor has
+      // none of its own — it throws instead, so the cell being previewed can
+      // show what its code did (see visualizer.ts's drawPreview).
+      if (!preview) throw err
+      console.error('hydra sketch error:', err)
     }
   }
 
