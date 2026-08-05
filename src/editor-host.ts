@@ -1,8 +1,9 @@
 // Which of the many editable surfaces owns the app's single CodeMirror view.
 // N code facades are on screen; at most one is *promoted* — the view is
 // reparented into its mount and loaded with its text. Demoting commits a dirty
-// buffer the way the grid's inline inputs commit on blur; Escape demotes
-// without committing, which is what leaving a cell has always meant.
+// buffer the way the grid's inline inputs commit on blur; dismissing an "="
+// overlay with Escape demotes without committing, which is what leaving a cell
+// has always meant.
 
 import { createSignal, type Accessor } from 'solid-js'
 import type { CodeLanguage } from './editable-tables.js'
@@ -118,8 +119,8 @@ export function createEditorHost(
     // A promote is an explicit "edit this" click, so typing must insert
     // immediately — vim's normal mode would eat the first keystrokes as
     // commands (and with them, any autocompletion). Expr cells append at the
-    // line end, the quick-edit spot; Escape still steps insert → normal →
-    // demote.
+    // line end, the quick-edit spot; there Escape steps insert → normal →
+    // dismiss.
     cm.enterInsert(next.lang === 'expr')
     onPromote?.(next)
   }
@@ -128,11 +129,14 @@ export function createEditorHost(
     label: () => promoted() ?? '',
     lang: () => target()?.lang ?? 'dsl',
     commit,
-    // Vim owns Escape (leave insert mode); only treat it as "demote" once vim
-    // is out of insert mode (or off), so a code cell's Escape doesn't swallow
-    // the modal exit vim users expect.
+    // Vim owns Escape in a code buffer — it is the modal exit (insert →
+    // normal, visual → normal, cancel a pending operator), pressed constantly
+    // and never meant as "give the view back". Only an "=" overlay leaves on
+    // Escape: it is a quick edit anchored to its cell, and dismissing it is
+    // what Escape means there — once vim is out of insert mode (or off).
     escape: () => {
-      if (!target() || cm.vimInsertActive()) return false
+      const t = target()
+      if (!t || t.lang !== 'expr' || cm.vimInsertActive()) return false
       demote(false)
       return true
     },

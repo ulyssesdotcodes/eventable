@@ -99,8 +99,8 @@ function TokenBar(props: { host: EditorHost }) {
 
 // The live view's chrome, shared by the overlay and the mobile popover: header,
 // the mount the view is reparented into, the touch token bar and the error slot.
-// Promotes on mount and closes when something else takes the view (Escape, or
-// another facade).
+// Promotes on mount and closes when something else takes the view (an Escape
+// dismissing an "=" overlay, or another facade).
 function PromotedSurface(props: { host: EditorHost; target: EditTarget; onClose: () => void }) {
   let mount!: HTMLDivElement
   let surface!: HTMLDivElement

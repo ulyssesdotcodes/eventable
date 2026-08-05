@@ -170,7 +170,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   let settingsBtn: HTMLButtonElement | undefined
 
   // Hand the controller a way to pull keyboard focus back onto the grid — used
-  // after committing an inline edit and when a code cell's editor is escaped.
+  // after committing an inline edit and when an editor hands the view back.
   const refocusGrid = (): void => { scrollEl?.focus() }
   props.registerGridFocus(refocusGrid)
 
@@ -500,8 +500,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
   // single row *is* the program) is opening its editor, so promote it rather
   // than leaving a four-line preview to click. Only when the tab has exactly
   // one — with several, which one to open would be a guess. Keyed on the tab
-  // alone, so an Escape stays escaped until the performer comes back. Not on a
-  // phone, where promoting means a full-screen popover over the table.
+  // alone, so a cell the performer left stays left until they come back. Not
+  // on a phone, where promoting means a full-screen popover over the table.
   createEffect(on(current, () => {
     if (isMobile()) return
     requestAnimationFrame(() => {
