@@ -274,6 +274,26 @@ test('rotate emits one row per value, cycling the pattern and letting each value
   ])
 })
 
+test('origami(model): every built-in folds, brings its own pose, and fits the beats asked for', async () => {
+  const { origami } = createDSL(null)
+  const { ORIGAMI_MODELS } = await import('../src/origami-models.js')
+  for (const name of Object.keys(ORIGAMI_MODELS) as (keyof typeof ORIGAMI_MODELS)[]) {
+    const paper = origami(name, { beats: 16 })
+    const steps = paper.program().steps
+    assert.ok(steps.length > 0, `${name} folds`)
+    // interchangeable: whichever model is named, the folding fills one 16-beat
+    // pass — beats are 1-indexed, so it lands where the next pass begins
+    assert.ok(Math.abs(steps[steps.length - 1].t1 - 17) < 1e-6, `${name} spans 16 beats`)
+    // the model's pose rides along under the caller's own props
+    const create = paper.spawn({ id: 'p', rz: 0 }).rows[0]
+    assert.equal(create.backColor, ORIGAMI_MODELS[name].pose.backColor)
+    assert.equal(create.rz, 0, 'a stated prop overrules the pose')
+  }
+  // its own timing when no beats are asked for, and an unknown model says so
+  assert.notEqual(origami('lily').program().steps.at(-1)!.t1, 17)
+  assert.throws(() => origami('heron' as 'lily'), /no model "heron"/)
+})
+
 test('schemas: canonical table schemas ride the DSL surface, typed and frozen', async () => {
   const { schemas } = createDSL(null)
   const { SCHEMAS } = await import('../src/dsl.js')

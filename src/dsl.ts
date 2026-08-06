@@ -15,6 +15,7 @@ import { timelineSegments, placeBeat, type TimelineSegment } from './timeline.js
 import { withLineage, carry, unionLineage, type Row } from './lineage.js'
 import { FRAMES_PER_BEAT, DEFAULT_BEAT_SECONDS, DEFAULT_LOOP_BEATS } from './constants.js'
 import { compileFoldTable, foldElementRows, foldPointsAt, foldValueAt, type FoldTableProgram } from './fold-engine.js'
+import { ORIGAMI_MODELS, fitFoldBeats, type OrigamiModel } from './origami-models.js'
 import type { Schema } from './editable-tables.js'
 import { beatSecondsFromTaps } from './tap-log.js'
 import { primitiveGeometry, pointsFromGeometry, geometryFromPoints } from './three-points.js'
@@ -1146,18 +1147,20 @@ class PhysicsBuilder {
 export class OrigamiBuilder {
   private _size: number
   private _ctx: DSLContext | null
+  private _pose: Row
   private _id: unknown = 'paper'
   private _rows: Row[] = []
   private _compiled: FoldTableProgram | null = null
 
-  constructor(size: number, ctx: DSLContext | null) {
+  constructor(size: number, ctx: DSLContext | null, pose: Row = {}) {
     this._size = size
     this._ctx = ctx
+    this._pose = pose
   }
 
   /** Fold the sheet: one row per fold (see schemas.origami for the columns), applied in order. */
   steps(steps: Table | Row[]): OrigamiBuilder {
-    const next = new OrigamiBuilder(this._size, this._ctx)
+    const next = new OrigamiBuilder(this._size, this._ctx, this._pose)
     next._id = this._id
     next._rows = [...this._rows, ...rowsOf(steps)]
     return next
@@ -1284,21 +1287,24 @@ export class OrigamiBuilder {
    * There is ONE numbering for the whole folding — the last fold's, the finest
    * — stated once and never replaced, so an element number means the same piece
    * of paper from the first beat to the last.
-   * Extra props (id, color, backColor, px/py/pz, …) merge over defaults.
+   * Extra props (id, color, backColor, px/py/pz, …) merge over defaults — and
+   * over a built-in model's own pose, so origami("crane").spawn({ id: "p" })
+   * stands the crane up but spawn({ id: "p", rz: 0 }) still overrules it.
    */
   spawn(props: Row = {}): Table {
     const program = this.program()
-    this._id = props.id ?? this._id
+    const pose = { ...this._pose, ...props }
+    this._id = pose.id ?? this._id
     // Turn-overs rotate about the axis the VIEWER sees as vertical: the scene
     // rotates the whole object by rz, so undo it here — before baking, since
     // the bake resolves the turn-over into the vertex positions.
-    const rz = typeof props.rz === 'number' ? props.rz : 0
+    const rz = typeof pose.rz === 'number' ? pose.rz : 0
     program.flipAxis = [Math.sin(rz), Math.cos(rz)]
     return new Table([
       {
         id: this._id, event: 'create', beat: 1, shape: 'mesh',
         px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0, color: 0xd94f2a,
-        ...props,
+        ...pose,
       },
       ...foldElementRows(program, { id: this._id }),
     ], this._ctx)
@@ -1313,11 +1319,37 @@ export class OrigamiBuilder {
 export interface OrigamiFactory {
   /** A bare square sheet (displayed spanning [-size, size]², default size 1) — fold it with .steps(table). */
   (opts?: { size?: number }): OrigamiBuilder
+  /**
+   * A built-in model, already folded: "crane", "cicada", "lotus" or "lily" —
+   * the fold tables the origami examples use, each with the pose that shows it
+   * off (its two colours, and the rotation that model wants — a crane stands
+   * up off its diagonal, a flower tips back to be looked into). .spawn() lays
+   * that pose UNDER its own props, so the model is one word to change:
+   *
+   *   origami("crane", { beats: 16 }).spawn({ id: "paper" }).outThree()
+   *
+   * `beats` rescales the whole folding to that many beats — the crane takes 52
+   * of its own, the lily 12 — which is what makes the models interchangeable
+   * mid-set; leave it off to keep the model's own timing. Chain .steps() to
+   * fold on from where the model finishes.
+   */
+  (model: OrigamiModel, opts?: { size?: number; beats?: number }): OrigamiBuilder
 }
 
 function makeOrigami(ctx: DSLContext | null): OrigamiFactory {
-  return ((opts: { size?: number } = {}) =>
-    new OrigamiBuilder(opts.size ?? 1, ctx)) as OrigamiFactory
+  return ((
+    first?: OrigamiModel | { size?: number; beats?: number },
+    rest?: { size?: number; beats?: number },
+  ) => {
+    const opts = (typeof first === 'string' ? rest : first) ?? {}
+    if (typeof first !== 'string') return new OrigamiBuilder(opts.size ?? 1, ctx)
+    const model = ORIGAMI_MODELS[first]
+    if (!model) {
+      throw new Error(`origami: no model "${first}" (try ${Object.keys(ORIGAMI_MODELS).join(', ')})`)
+    }
+    return new OrigamiBuilder(opts.size ?? 1, ctx, model.pose)
+      .steps(opts.beats == null ? model.steps : fitFoldBeats(model.steps, opts.beats))
+  }) as OrigamiFactory
 }
 
 class MathBuilder {
@@ -1890,7 +1922,11 @@ export type DSLSurface = Easings & {
   t: ThreeNamespace
   physics(source: Table | Row[]): PhysicsBuilder
   /**
-   * Folding paper: origami() is a bare sheet. Chain .steps(table) to fold it
+   * Folding paper: origami() is a bare sheet, origami("crane") one of the
+   * built-in models — "crane", "cicada", "lotus", "lily" — already folded and
+   * carrying its own pose, so a whole model swaps by its name:
+   *   origami("lotus", { beats: 16 }).spawn({ id: "paper" }).outThree()
+   * Chain .steps(table) to fold a sheet (or fold on past a model)
    * by instructions (one fold per row — see schemas.origami), then
    * .spawn({ id, color, … }) for the paper itself — its mesh and every vertex,
    * face and crease of it. .folds(), .verts(), .faces() and .edges() are what the folding
