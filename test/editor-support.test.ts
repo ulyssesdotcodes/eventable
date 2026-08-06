@@ -81,27 +81,29 @@ test('editor host: one target holds the view, and taking it commits what the las
   assert.equal(state.inserts, 2, 'every promote enters insert mode — a click means "type here", and vim normal mode would eat the first keystrokes')
 })
 
-test('editor host: committing re-baselines, Escape leaves without committing', () => {
+test('editor host: committing re-baselines; Escape keeps a code buffer, dismisses an "=" overlay', () => {
   const { cm, state, ctx, type } = fakeCm()
   const commits: string[] = []
   const host = createEditorHost(cm)
-  host.promote({ label: 'a', lang: 'dsl', text: 'one', onCommit: (t) => commits.push(t) })
+  host.promote({ label: 'a', lang: 'dsl', text: 'one', onCommit: (t) => commits.push(`a:${t}`) })
 
   type('edited')
   host.commit()
   host.commit()
-  assert.deepEqual(commits, ['edited'], 'the committed text is the value now — nothing left to apply')
+  assert.deepEqual(commits, ['a:edited'], 'the committed text is the value now — nothing left to apply')
   assert.equal(host.dirty('a'), false)
 
-  type('unsaved')
   state.vimInsert = true
   assert.equal(ctx().escape(), false, 'vim owns Escape while in insert mode')
+  state.vimInsert = false
+  assert.equal(ctx().escape(), false, 'and in normal mode too — Escape in a code buffer belongs to vim, not to the host')
   assert.equal(host.promoted(), 'a')
 
-  state.vimInsert = false
-  assert.equal(ctx().escape(), true)
+  host.promote({ label: 'b', lang: 'expr', text: 'two', onCommit: (t) => commits.push(`b:${t}`) })
+  type('unsaved')
+  assert.equal(ctx().escape(), true, 'an "=" overlay is a quick edit — Escape dismisses it')
   assert.equal(host.promoted(), null)
-  assert.deepEqual(commits, ['edited'], 'leaving a cell discards, as it always has')
+  assert.deepEqual(commits, ['a:edited'], 'leaving a cell discards, as it always has')
 })
 
 test('programText: joins the code table rows in storage order, dropping blanks', () => {
