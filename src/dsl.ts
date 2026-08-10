@@ -1734,12 +1734,25 @@ export interface ThreeNamespace {
    * lower tint), "directional" (the default — a sun; px/py/pz the direction it
    * comes from, tx/ty/tz the target), "point" (an omni bulb at px/py/pz,
    * `distance`/`decay` falloff), or "spot" (a cone px/py/pz → tx/ty/tz,
-   * `angle`/`penumbra` shape). `color` and `intensity` apply to all. Adding any
-   * light switches the scene's default lights off. Concat into a scene and
-   * rasterize — intensity/position/color are numeric keyframe tracks, so they
-   * animate on the beat timeline like any other field.
+   * `angle`/`penumbra` shape). `color` and `intensity` apply to all. The per-kind
+   * helpers — t.ambientLight(), t.directionalLight(), t.pointLight(),
+   * t.spotLight(), t.hemisphereLight() — are this row with `kind` (and a
+   * matching default id) already filled in. Adding any light switches the
+   * scene's default lights off. Concat into a scene and rasterize —
+   * intensity/position/color are numeric keyframe tracks, so they animate on
+   * the beat timeline like any other field.
    */
   light(props?: Row): Table
+  /** A flat fill light — kind "ambient", id defaults to "ambientLight". Every surface gets `color` × `intensity` from every angle: it lifts the blacks, it can't shape anything. Pair it with a directional key. */
+  ambientLight(props?: Row): Table
+  /** A sun — kind "directional", id defaults to "directionalLight". Parallel rays arriving from px/py/pz (a direction, so its length doesn't dim it) aimed at tx/ty/tz. The workhorse key light. */
+  directionalLight(props?: Row): Table
+  /** An omni bulb at px/py/pz — kind "point", id defaults to "pointLight". `distance` is where it fades to nothing (0 = never), `decay` the falloff exponent (2 = physical). */
+  pointLight(props?: Row): Table
+  /** A cone from px/py/pz aimed at tx/ty/tz — kind "spot", id defaults to "spotLight". `angle` is the cone's half-angle in radians, `penumbra` (0–1) how soft its edge, `distance`/`decay` the falloff. */
+  spotLight(props?: Row): Table
+  /** A sky/ground fill — kind "hemisphere", id defaults to "hemisphereLight". `color` comes from above, `groundColor` from below, blended by each surface's normal; a warmer ambient(). */
+  hemisphereLight(props?: Row): Table
   /** The generic form behind box()/sphere()/… — a create row for any shape string, including shapes without a named helper. */
   object(shape: string, props?: Row): Table
   /**
@@ -1912,7 +1925,9 @@ export type DSLSurface = Easings & {
   grid(cols: number, rowsN: number, opts?: { spacing?: number; y?: number }): Table
   /**
    * The three.js helpers, grouped: scene-primitive create rows (box, sphere,
-   * cylinder, cone, torus, text, light, and the generic object), the points ⇄
+   * cylinder, cone, torus, text, the lights — light, ambientLight,
+   * directionalLight, pointLight, spotLight, hemisphereLight — and the generic
+   * object), the points ⇄
    * geometry samplers, the camera keyframer, and the translate/scale/rotate
    * modifiers that shift a scene table's create rows. Call as three.box(…) —
    * or via the shorthand `t`: t.box(…).
@@ -1984,6 +1999,13 @@ export function createDSL(ctx: DSLContext | null): DSLSurface {
   const asTable = (x: Table | Row[] | null | undefined): Table =>
     x instanceof Table ? x : new Table(x ?? [], ctx)
 
+  // A light isn't a mesh, so it skips sceneObject's px/py/pz:0 defaults —
+  // leaving position unset lets the renderer apply the kind's own default.
+  // Each per-kind helper defaults its id to its own name so two lights concat
+  // into a scene without colliding.
+  const lightHelper = (kind: string, id: string) => (props: Row = {}): Table =>
+    new Table([{ id, event: 'create', beat: 1, shape: 'light', kind, ...props }], ctx)
+
   const three: ThreeNamespace = {
     box: (props: Row = {}) => sceneObject('box', props, ctx),
     sphere: (props: Row = {}) => sceneObject('sphere', props, ctx),
@@ -1991,11 +2013,12 @@ export function createDSL(ctx: DSLContext | null): DSLSurface {
     cone: (props: Row = {}) => sceneObject('cone', props, ctx),
     torus: (props: Row = {}) => sceneObject('torus', props, ctx),
     text: (props: Row = {}) => sceneObject('text', props, ctx),
-    // A light isn't a mesh, so it skips sceneObject's px/py/pz:0 defaults —
-    // leaving position unset lets the renderer apply the kind's own default.
-    light: (props: Row = {}) => new Table([{
-      id: 'light', event: 'create', beat: 1, shape: 'light', kind: 'directional', ...props,
-    }], ctx),
+    light: lightHelper('directional', 'light'),
+    ambientLight: lightHelper('ambient', 'ambientLight'),
+    directionalLight: lightHelper('directional', 'directionalLight'),
+    pointLight: lightHelper('point', 'pointLight'),
+    spotLight: lightHelper('spot', 'spotLight'),
+    hemisphereLight: lightHelper('hemisphere', 'hemisphereLight'),
     object: (shape: string, props: Row = {}) => sceneObject(shape, props, ctx),
     points: (shape: string, props: Row = {}): Table => {
       const { segments, ...dims } = props
