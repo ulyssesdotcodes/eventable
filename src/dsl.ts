@@ -948,8 +948,11 @@ export class Table {
    *   paper.spawn({ id: "crane" }).retime(warp).outThree()
    *   paint.retime(other).outThree()
    *
-   * A pulse with a `dur` is continuous, so moving it can only place its START:
-   * a warp that cuts mid-fold drops or misplaces it. Warp that one.
+   * Which paint holds is a step function of SOURCE time, though, and moving
+   * its edges only rebuilds that where the warp keeps the order — a stretch,
+   * a hold, a speed. A warp that REORDERS (randomSegments) sends the paint
+   * and its release row to scattered playback beats, and the colour then holds
+   * across everything between them. Warp that one with the paper.
    */
   retime(timeline: Table | Row[] | null | undefined): Table {
     // In the spec, not just the closure: the pass length changes where rows
@@ -1241,11 +1244,17 @@ export class OrigamiBuilder {
    * displayed, `sheetX`/`sheetY` its centre on the unfolded square.
    *
    * Because a scene row carrying `face` addresses that face, colouring is an
-   * ordinary table pipeline, quite separate from spawning the paper:
+   * ordinary table pipeline, quite separate from spawning the paper. A colour
+   * row is a hard SWITCH that holds, so paint lasting only as long as the
+   * swing is two rows — one to paint, one at `beat + dur` handing the face
+   * back (`color: null` = unpainted):
    *
-   *   paper.faces().filter({ moving: true })
-   *     .derive({ id: "crane", event: "color", color: 0x2f6fff, ease: "easeOut" })
-   *     .outThree()
+   *   paper.faces().filter({ moving: true }).emit([
+   *     { id: "crane", event: "color", face: expr.field("face"),
+   *       beat: expr.field("beat"), color: 0x2f6fff },
+   *     { id: "crane", event: "color", face: expr.field("face"),
+   *       beat: expr.field("beat").add(expr.field("dur")), color: null },
+   *   ]).outThree()
    *
    * `at` samples where each face IS at that fraction of its own fold (0 as it
    * starts, 1 where it lands), adding `px`/`py`/`pz` — the paper's own frame,

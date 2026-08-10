@@ -577,13 +577,22 @@ paper.spawn({ id: "crane", color: 0xf4efe2, backColor: 0xd94f2a, pz: 1.2, rz: 2.
 //
 //     faces -> pick the ones that move -> give them a colour -> three
 //
-// \`dur\`/\`ease\` are the ordinary colour-pulse columns: the blue lands as the
-// flap starts moving and decays back over the swing. A face number means the
-// same paper at every step, so \`face\` is what joins these rows to the paper
-// the renderer draws — and each carries its own fold's beat.
+// A colour row is a hard SWITCH that holds, not a pulse with a length — so
+// paint that lasts only as long as the swing is TWO rows: one that paints as
+// the flap starts moving, one at \`beat + dur\` that hands the face back
+// (\`color: null\` = unpainted, so the paper's own colour shows again). Being
+// two instants rather than one stretch is what lets a .retime() move them —
+// a warp can cut anywhere, and only an instant survives being moved.
+// A face number means the same paper at every step, so \`face\` is what joins
+// these rows to the paper the renderer draws.
 paper.faces()
   .filter({ moving: true })
-  .derive({ id: "crane", event: "color", color: 0x2f6fff, ease: "easeIn" })
+  .emit([
+    { id: "crane", event: "color", face: expr.field("face"),
+      beat: expr.field("beat"), color: 0x2f6fff },
+    { id: "crane", event: "color", face: expr.field("face"),
+      beat: expr.field("beat").add(expr.field("dur")), color: null },
+  ])
   .save("swinging")
   .outThree()
 
@@ -593,7 +602,12 @@ paper.faces()
 // crosses, and a reverse fold opens a spine crease nowhere near it.
 paper.edges()
   .filter({ folds: true })
-  .derive({ id: "crane", event: "color", color: 0x2f6fff, ease: "easeIn" })
+  .emit([
+    { id: "crane", event: "color", edge: expr.field("edge"),
+      beat: expr.field("beat"), color: 0x2f6fff },
+    { id: "crane", event: "color", edge: expr.field("edge"),
+      beat: expr.field("beat").add(expr.field("dur")), color: null },
+  ])
   .outThree()
 
 // One row per fold drives the post chain the same way: a glow that pulses
@@ -623,7 +637,8 @@ rows([{ beat: 1, event: "setCode", code: "bloom((p) => p.glow, 0.5, 0.7)" },
 //
 // Things to try with what the folding knows (the "swinging" tab shows the
 // rows being painted with):
-//   - Change 0x2f6fff, or drop \`ease\` for a hard switch that stays put.
+//   - Change 0x2f6fff, or drop the second row: each face keeps its colour
+//     from the moment it swings, so the crane paints itself in as it folds.
 //   - Colour by thickness instead of motion — the deep stacks glow:
 //       paper.faces().derive({ color: field("plies").gt(20)
 //         .cond(0xff8800, 0x223344) })
