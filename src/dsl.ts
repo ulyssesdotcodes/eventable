@@ -1766,14 +1766,23 @@ export interface ThreeNamespace {
   /** A table of points → a BufferGeometry, reading position (and normal, when every row has nx/ny/nz) from px/py/pz (nx/ny/nz). The inverse of points(). */
   geometry(points: Table | Row[]): BufferGeometry
   /**
-   * Camera moves as beat-timed keyframes: one row per keyframe
-   * { beat?, px, py, pz, tx, ty, tz, fov? }. px/py/pz place the eye, tx/ty/tz
-   * the look-at target (default origin), fov the vertical field of view in
-   * degrees. The first row becomes the camera's create row, the rest updates,
-   * so it rides events → rasterize and interpolates like any object — concat
-   * it into your "three" table, then rasterize.
+   * Camera moves as beat-timed keyframes: any table (or plain rows), one row
+   * per keyframe { beat?, px, py, pz, tx, ty, tz, fov? }. px/py/pz place the
+   * eye, tx/ty/tz the look-at target (default origin), fov the vertical field
+   * of view in degrees. The first row becomes the camera's create row, the rest
+   * updates, so it rides events → rasterize and interpolates like any object —
+   * concat it into your "three" table, then rasterize. Any table will do, so a
+   * camera path is computed, named, and edited in its own tab like any other
+   * data: t.camera(table("orbit")).
+   *
+   * Fields take Expr, baked per row the way map(template) does — so
+   * t.camera([{ pz: expr.slider("dolly", 2, 12) }]) leaves a live binding the
+   * scene resolves each frame. Numbers glide between keyframes; an Expr HOLDS
+   * until the next keyframe naming its field, so a live field wants the same
+   * one on every row. `beat` is the exception that must stay a plain number
+   * (it's when the keyframe lands) — a live one falls back to 1.
    */
-  camera(keyframes: Row[] | null | undefined): Table
+  camera(keyframes: Table | Row[] | null | undefined): Table
   /**
    * Shift every scene object in `table` by (x, y, z) world units — adds to
    * px/py/pz on each create row (and any keyframe that already carries a
@@ -2030,16 +2039,17 @@ export function createDSL(ctx: DSLContext | null): DSLSurface {
     geometry: (points: Table | Row[]): BufferGeometry =>
       geometryFromPoints(rowsOf(points)),
     // The first keyframe seeds a full default pose so a partial first row is
-    // still well-defined.
-    camera: (keyframes: Row[] | null | undefined): Table => new Table(
-      (keyframes ?? []).map((k, i) => {
-        const beat = typeof k.beat === 'number' ? k.beat : 1
+    // still well-defined. Each row doubles as its own template, so an Expr in
+    // it bakes against that row — a streaming one staying a binding the scene
+    // resolves per frame.
+    camera: (keyframes: Table | Row[] | null | undefined): Table =>
+      asTable(keyframes).map((k, i) => {
+        const row = buildRow(k, k, i)
+        const beat = typeof row.beat === 'number' ? row.beat : 1
         return i === 0
-          ? { px: 0, py: 0, pz: 5, tx: 0, ty: 0, tz: 0, ...k, id: 'camera', shape: 'camera', event: 'create', beat }
-          : { ...k, id: 'camera', shape: 'camera', event: 'update', beat }
+          ? { px: 0, py: 0, pz: 5, tx: 0, ty: 0, tz: 0, ...row, id: 'camera', shape: 'camera', event: 'create', beat }
+          : { ...row, id: 'camera', shape: 'camera', event: 'update', beat }
       }),
-      ctx,
-    ),
     translate: (table: Table | Row[], x = 0, y = 0, z = 0): Table =>
       asTable(table).map((r) => modRow(r, [
         ['px', 0, (v) => v + x], ['py', 0, (v) => v + y], ['pz', 0, (v) => v + z],
