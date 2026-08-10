@@ -65,6 +65,24 @@ test('.three completes the scene animators', () => {
   for (const m of ['rotate', 'scale', 'move']) assert.ok(res.entries.some((e) => e.name === m), `expected animator ${m}`)
 })
 
+test('a scene builder completes its own props, each documented', () => {
+  // The builders take typed props (not a bare Row), so a "{" inside the call
+  // offers that shape's fields — the size fields it reads, the shared scene
+  // fields, and for a light its own kind/intensity/….
+  const mesh = namesAt('t.sphere({ ')
+  for (const f of ['r', 'h', 'px', 'color', 'id']) assert.ok(mesh.includes(f), `expected scene field ${f}`)
+  const light = namesAt('t.pointLight({ ')
+  for (const f of ['kind', 'intensity', 'distance', 'groundColor']) {
+    assert.ok(light.includes(f), `expected light field ${f}`)
+  }
+  // `kind` is the union, so its string literals complete too.
+  const kinds = namesAt('t.light({ kind: "')
+  for (const k of ['ambient', 'hemisphere']) assert.ok(kinds.includes(k), `expected light kind ${k}`)
+
+  const d = svc.detailsAt('t.sphere({ ', 't.sphere({ '.length, 'r')
+  assert.ok(d && d.docs.length > 0, 'a prop carries its hover doc')
+})
+
 test('globals include the DSL surface, console, and the ES library', () => {
   const names = namesAt('exp', 3)
   for (const g of ['expr', 'define', 'three', 't', 'console', 'Math']) assert.ok(names.includes(g), `expected global ${g}`)

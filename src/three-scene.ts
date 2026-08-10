@@ -6,6 +6,7 @@ import { TextGeometry } from 'three/addons/geometries/TextGeometry.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import helvetiker from 'three/examples/fonts/helvetiker_regular.typeface.json'
 import { geometryDims, primitiveGeometry, type GeometryDims } from './three-points.js'
+import { LIGHT_KINDS, type LightKind } from './shapes.js'
 import type { PostAPI } from './post-scene.js'
 import type { MeshSlab } from './rasterize.js'
 
@@ -187,10 +188,6 @@ export function cameraPose(row: Record<string, unknown>): CameraPose {
 // events → rasterize like any object (so intensity/position/color animate as
 // keyframe tracks). The user-facing field docs live on the DSL surface (dsl.ts).
 // `kind` chooses the THREE.Light subclass; the rest resolve here.
-
-export type LightKind = 'ambient' | 'directional' | 'point' | 'spot' | 'hemisphere'
-
-const LIGHT_KINDS = new Set<LightKind>(['ambient', 'directional', 'point', 'spot', 'hemisphere'])
 
 export interface LightParams {
   kind: LightKind
