@@ -1888,6 +1888,13 @@ html, body {
   min-height: 100%;
 }
 
+/* Capped at the pane rather than merely stretched to it: with a definite
+   height the editor stops growing to fit the document, so CodeMirror's own
+   scroller is what a caret move scrolls, not the whole pane. */
+.editor-list-wrap:has(> .editor-list > .row-card:only-child) {
+  height: 100%;
+}
+
 .editor-list:has(> .row-card:only-child),
 .editor-list > .row-card:only-child,
 .editor-list > .row-card:only-child > .code-facade {
@@ -1900,10 +1907,16 @@ html, body {
   flex-direction: column;
 }
 
+/* Below a usable editor height the card holds its floor and the pane goes back
+   to scrolling — nothing else would, now that the wrap is capped. */
+.editor-list > .row-card:only-child:has(> .facade-live) {
+  min-height: 180px;
+}
+
 .editor-list > .row-card:only-child > .facade-live .editor-mount {
   flex: 1;
   height: auto;
-  min-height: 180px;
+  min-height: 0;
 }
 
 .row-card {
