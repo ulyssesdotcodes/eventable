@@ -934,14 +934,22 @@ export class Table {
    * each other. Retime a folding by warping the paper itself:
    * paper.spawn().retime(table("warp")).
    *
-   * That extends to the "color" rows addressed to a warped mesh: they belong
-   * to the same baked animation, so they are read at the warped time along
-   * with the geometry. Leave them UNretimed — retiming moves them onto
-   * playback time and the mesh's own warp then applies a second time:
+   * PAINT — the "color" rows addressed to a mesh — is a channel of its own,
+   * and which clock it runs on is what you retime it with. Warp it WITH the
+   * paper (concat first, so the mesh's warp rides the colour rows too) and it
+   * is welded to the folding, read at the same source beat the geometry is —
+   * what you want when the colour marks the fold:
+   *
+   *   paper.spawn({ id: "crane" }).concat(paint).retime(warp).outThree()
+   *
+   * Retime it separately and it stays a set of EVENTS, moved onto playback
+   * time like any other — free to run on its own clock, or none:
    *
    *   paper.spawn({ id: "crane" }).retime(warp).outThree()
-   *   paper.faces().filter({ moving: true })              // no .retime() here
-   *     .derive({ id: "crane", event: "color", color: 0x2f6fff }).outThree()
+   *   paint.retime(other).outThree()
+   *
+   * A pulse with a `dur` is continuous, so moving it can only place its START:
+   * a warp that cuts mid-fold drops or misplaces it. Warp that one.
    */
   retime(timeline: Table | Row[] | null | undefined): Table {
     // In the spec, not just the closure: the pass length changes where rows

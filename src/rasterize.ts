@@ -282,6 +282,10 @@ interface ObjectTracks {
   // "at whatever source beat 25 happens to show". The warp decides which pose
   // an object wears, not whether it is there.
   diesPlay?: number
+  // Same for PAINT (see PAINT): colour events that were not warped were MOVED
+  // to playback time by .retime() like any other event, so they are read there
+  // — warping them again would apply the map twice.
+  paintPlay?: true
 }
 
 export interface FrameStore {
@@ -424,6 +428,15 @@ function buildSlab(elements: ObjectTracks[]): MeshSlab | null {
 // than one per render.
 const INTERP_FIELDS = new Set(['px', 'py', 'pz', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'])
 
+// Paint is its own channel, separate from the baked animation it lands on:
+// these four columns come only from a create row's base colour and from colour
+// EVENTS (see sampleColor / gatherParts), never from keyframed motion. Events
+// are what .retime() MOVES, so on a warped object they are read at playback
+// time while its geometry is read at the warped one — retiming a colour table
+// through the same warp then lands each row's paint on the playback beat that
+// shows the very fold it came from, face numbering and all.
+const PAINT = new Set(['color', 'vertColor', 'faceColor', 'edgeColor'])
+
 const pushRun = (cols: Record<string, Track>, key: string, frame: number, value: unknown): void => {
   let t = cols[key]
   if (!t) { t = { at: [], val: [] }; cols[key] = t }
@@ -550,6 +563,7 @@ export function buildFrameStore(
   eventRows: Row[] | null | undefined, maxBeats?: number,
 ): FrameStore {
   const events = (eventRows ?? []).map(toFrameEvent)
+  const timelines = buildTimelines(events)
   // Bake out to the largest event frame, or at least the last frame a
   // `maxBeats` loop samples (its span EXCLUSIVE — frame span belongs to the
   // next pass, and pad frames reaching it would spuriously add one). How the
@@ -558,17 +572,23 @@ export function buildFrameStore(
   // warp's out-range instead, which is what the extent has to cover. Take the
   // source extent of one and playback wraps into passes that replay the whole
   // window again, once per pass of source it never actually reaches.
-  const extentOf = (e: Row): number => {
-    const warp = getWarp(e)
-    if (!warp?.length) return (e.frame as number) ?? 0
-    return beatToFrame(warp.reduce((m, seg) => Math.max(m, seg.p1), 0)) - 1
+  // Measured per OBJECT, not per event, because the warp belongs to the object:
+  // it also covers that object's events carrying no warp of their own — a
+  // `color` row addressed to a warped mesh rides the same source clock as the
+  // geometry it paints, and is read through the warp with it. (An event with no
+  // `id` forms no object and keeps its own frame.)
+  const extentOf = (evs: Row[]): number => {
+    const warp = evs.map(getWarp).find(Boolean)
+    if (warp?.length) return beatToFrame(warp.reduce((m, seg) => Math.max(m, seg.p1), 0)) - 1
+    return evs.reduce((m, e) => Math.max(m, (e.frame as number) ?? 0), 0)
   }
   const maxFrame = Math.max(
     maxBeats != null ? Math.max(0, beatsToFrames(maxBeats) - 1) : 0,
-    events.reduce((m, e) => Math.max(m, extentOf(e)), 0),
+    extentOf(events.filter((e) => e.id == null)),
+    [...timelines.values()].reduce((m, evs) => Math.max(m, extentOf(evs)), 0),
   )
   const objects: ObjectTracks[] = []
-  for (const evs of buildTimelines(events).values()) {
+  for (const evs of timelines.values()) {
     const keyed = keyframeObject(evs, maxFrame)
     if (keyed) { objects.push(keyed); continue }
     const warp = evs.map(getWarp).find(Boolean)
@@ -584,9 +604,14 @@ export function buildFrameStore(
     const extent = warp
       ? Math.max(maxFrame, beatToFrame(warp.reduce((m, s) => Math.max(m, s.s0, s.s1), 0)))
       : maxFrame
+    // Colour events that carry no warp were moved to playback time by
+    // .retime(), so that is where they are read from — unless they were warped
+    // along with the mesh, which puts them back on its source clock.
+    const paintPlay = warp != null && !evs.some((e) => e.event === 'color' && getWarp(e))
     const o: ObjectTracks = {
       id: evs[0].id, born: -1, dies: warp ? Infinity : maxFrame + 1, cols: {}, lineage: [],
       ...(warp ? { warp } : {}),
+      ...(paintPlay ? { paintPlay: true as const } : {}),
     }
     const seenSource = new Set<Row>()
     let parts: Record<PartKind, (number | null)[]> = { vert: [], face: [], edge: [] }
@@ -689,11 +714,15 @@ function rowAt(o: ObjectTracks, playFrame: number): Row | null {
     : playFrame
   const f0 = Math.floor(frameFloat)
   if (f0 < o.born || f0 >= o.dies) return null
-  const frac = frameFloat - f0
   const row: Row = {}
   for (const k in o.cols) {
     const t = o.cols[k]
-    const hit = runAt(t, f0)
+    // Paint rides playback time on a warped object (see PAINT); everything
+    // else is the baked animation, read at the source time the warp picked.
+    const readAt = o.paintPlay && PAINT.has(k) ? playFrame : frameFloat
+    const i0 = Math.floor(readAt)
+    const frac = readAt - i0
+    const hit = runAt(t, i0)
     if (!hit) continue
     let v = hit.v
     if (t.keyed) {
@@ -704,14 +733,14 @@ function rowAt(o: ObjectTracks, playFrame: number): Row | null {
         const span = t.at[j] - t.at[hit.i]
         const ease = t.ease?.[j]
         if (span > 0 && ease !== 'step') {
-          const raw = Math.min(1, Math.max(0, (frameFloat - t.at[hit.i]) / span))
+          const raw = Math.min(1, Math.max(0, (readAt - t.at[hit.i]) / span))
           const fn = easeFnOf(ease)
           v = v + (nx - v) * (fn ? fn(raw) : raw)
         }
       }
     } else if (frac > 0 && INTERP_FIELDS.has(k) && typeof v === 'number') {
       // densified: the next whole frame's value, if a run starts on it
-      const nx = t.at[hit.i + 1] === f0 + 1 ? t.val[hit.i + 1] : v
+      const nx = t.at[hit.i + 1] === i0 + 1 ? t.val[hit.i + 1] : v
       if (typeof nx === 'number' && nx !== v) v = v + (nx - v) * frac
     }
     row[k] = v
