@@ -933,6 +933,15 @@ export class Table {
    * one source beat, which is what stops its faces sliding out of step with
    * each other. Retime a folding by warping the paper itself:
    * paper.spawn().retime(table("warp")).
+   *
+   * That extends to the "color" rows addressed to a warped mesh: they belong
+   * to the same baked animation, so they are read at the warped time along
+   * with the geometry. Leave them UNretimed — retiming moves them onto
+   * playback time and the mesh's own warp then applies a second time:
+   *
+   *   paper.spawn({ id: "crane" }).retime(warp).outThree()
+   *   paper.faces().filter({ moving: true })              // no .retime() here
+   *     .derive({ id: "crane", event: "color", color: 0x2f6fff }).outThree()
    */
   retime(timeline: Table | Row[] | null | undefined): Table {
     // In the spec, not just the closure: the pass length changes where rows

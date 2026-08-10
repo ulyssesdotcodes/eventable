@@ -6,7 +6,7 @@ import { FRAMES_PER_BEAT } from '../src/constants.js'
 import { withLineage, getLineage } from '../src/lineage.js'
 import { createRuntime } from '../src/runtime.js'
 import { cookProgram } from '../src/replay.js'
-import { buildFrameIndex, sampleFrame, elementRowsAt, type MeshSlab } from '../src/rasterize.js'
+import { buildFrameIndex, sampleFrame, elementRowsAt, type MeshSlab, type FrameIndex } from '../src/rasterize.js'
 import { SAMPLES } from '../src/samples.js'
 import { conformRow, schemaColumns, type ColumnType } from '../src/editable-tables.js'
 import { outViewName } from '../src/dsl.js'
@@ -329,6 +329,43 @@ test('retime loops a subsection of an origami folding', () => {
   assert.equal(apart(poseAt(6), poseAt(12)), 0, 'and two cycles later')
   // and the window really does move between those landings
   assert.ok(apart(poseAt(6), poseAt(8)) > 0.1, 'mid-swing inside a repeat is elsewhere')
+})
+
+// A colour event puts its object on the densified bake path, which used to bake
+// its tracks — and bound its life — on the PLAYBACK axis, while rowAt reads a
+// warped object at a SOURCE frame. Source content past the loop's own length
+// fell outside both, so a coloured retimed paper vanished entirely (no object,
+// hence no geometry: a black scene) or froze on its last baked frame.
+test('a retimed mesh that also carries colour events shows the unretimed paper at the mapped beat', () => {
+  const program = (retime: string): string => `
+    const paper = origami().steps(rows([
+      { step: "diag", p1: "0,0", p2: "1,1", move: "0.667,0.333", beat: 1, dur: 2 },
+      { step: "collapse", p1: "0,0.5", p2: "1,0.5", move: "0.333,0.167", kind: "reverse", beat: 9, dur: 2 },
+    ]))
+    paper.spawn({ id: "sheet" })${retime}.outThree()
+    paper.faces().filter({ moving: true })
+      .derive({ id: "sheet", event: "color", color: 0x2f6fff }).outThree()
+  `
+  const storeOf = (retime: string, loopBeats: number): FrameIndex =>
+    buildFrameIndex(createRuntime({ loopBeats: () => loopBeats })
+      .run(program(retime), { seed: 1 }).views.get(outViewName('three'))!.rows, loopBeats)
+  const meshAt = (store: FrameIndex, beat: number): Row | undefined =>
+    sampleFrame(store, beatToFrame(beat)).find((r) => r.slab)
+
+  // A 4-beat loop showing source beats 9..13 — the second fold, which starts
+  // well past the loop's own length — against the paper played straight.
+  const warped = storeOf('.retime(rows([{ event: "retime", beat: 1, from: 9, to: 13 }]))', 4)
+  const plain = storeOf('', 16)
+  const seen = new Set<string>()
+  for (const [play, source] of [[1, 9], [2, 10], [3, 11], [4, 12]]) {
+    const shown = meshAt(warped, play)
+    assert.ok(shown, `playback beat ${play} still draws the paper`)
+    assert.ok(shown.faceColor, 'the paper is coloured')
+    assert.deepEqual(shown.faceColor, meshAt(plain, source)!.faceColor,
+      `and shows the source's colours at beat ${source}`)
+    seen.add(JSON.stringify(shown.faceColor))
+  }
+  assert.ok(seen.size > 1, 'the colours really do move over the fold')
 })
 
 test('retime with an empty timeline is a no-op', () => {

@@ -572,16 +572,28 @@ export function buildFrameStore(
     const keyed = keyframeObject(evs, maxFrame)
     if (keyed) { objects.push(keyed); continue }
     const warp = evs.map(getWarp).find(Boolean)
+    // A warped object is READ at a source frame (see rowAt), and its own event
+    // frames are source frames — so bake its tracks and bound its life on THAT
+    // axis. The store's `maxFrame` is the playback extent, a different and
+    // usually shorter one: a warp showing part of a 53-beat folding over a
+    // 16-beat loop would leave every source beat past the 16th unbaked and out
+    // of `dies`, and an object that answers null renders as nothing at all.
+    // Same reasoning as keyframeObject's `dies` — this path just never had it.
+    // The source frames a warp can ask for are its segments' `s0`/`s1`, the
+    // mirror of the `p1` the store's own extent is taken from above.
+    const extent = warp
+      ? Math.max(maxFrame, beatToFrame(warp.reduce((m, s) => Math.max(m, s.s0, s.s1), 0)))
+      : maxFrame
     const o: ObjectTracks = {
-      id: evs[0].id, born: -1, dies: maxFrame + 1, cols: {}, lineage: [],
+      id: evs[0].id, born: -1, dies: warp ? Infinity : maxFrame + 1, cols: {}, lineage: [],
       ...(warp ? { warp } : {}),
     }
     const seenSource = new Set<Row>()
     let parts: Record<PartKind, (number | null)[]> = { vert: [], face: [], edge: [] }
-    for (let frame = 0; frame <= maxFrame; frame++) {
-      const s = sampleObject(evs, frame, maxFrame)
+    for (let frame = 0; frame <= extent; frame++) {
+      const s = sampleObject(evs, frame, extent)
       if (!s) {
-        if (o.born >= 0 && o.dies > maxFrame) o.dies = frame
+        if (o.born >= 0 && o.dies > extent) o.dies = frame
         continue
       }
       if (o.born < 0) o.born = frame
