@@ -451,10 +451,11 @@ t.camera([
     name: "Lights",
     table: "lights",
     code: `// eventable — lighting the scene from the DSL
-// A \`t.light(...)\` is just another scene object: no mesh, it adds a three.js
-// light. The moment you add one, the scene's default lights switch off, so the
-// program owns the lighting. Being ordinary keyframe tracks, a light's color,
-// intensity and position animate on the beat timeline like anything else.
+// A \`t.pointLight(...)\` is just another scene object: no mesh, it adds a
+// three.js light. The moment you add one, the scene's default lights switch
+// off, so the program owns the lighting. Being ordinary keyframe tracks, a
+// light's color, intensity and position animate on the beat timeline like
+// anything else.
 // Press "Run" (or Cmd/Ctrl-Enter), then hit Play under the scene.
 
 // 1. Something to light: a row of pale spheres to catch the colored lights,
@@ -464,14 +465,14 @@ grid(5, 1, { spacing: 0.9 }).map((c, i) => ({
   color: 0xdddddd, r: 0.35, px: c.px, py: 0, pz: 0, rx: 0, ry: 0, rz: 0,
 })).outThree()
 
-// 2. The static lights. \`kind\` picks the type:
-//    - a dim "ambient" fill so nothing is pure black,
-//    - a cool "directional" key from the upper left for shape,
+// 2. The static lights — one helper per kind (or t.light({ kind: "..." })):
+//    - t.ambientLight: a dim flat fill so nothing is pure black,
+//    - t.directionalLight: a cool key from the upper left for shape,
 //    plus a camera pulled back to frame the row. color is a hex number; give
 //    each light a distinct id. Named "lights" for its own tab in the panel.
 table("lights",
-  t.light({ id: "fill", kind: "ambient", color: 0x222233, intensity: 1 })
-    .concat(t.light({ id: "key", kind: "directional", color: 0x88aaff, intensity: 1.5, px: -3, py: 4, pz: 2 }))
+  t.ambientLight({ id: "fill", color: 0x222233, intensity: 1 })
+    .concat(t.directionalLight({ id: "key", color: 0x88aaff, intensity: 1.5, px: -3, py: 4, pz: 2 }))
     .concat(t.camera([
       { beat: 1, px: 0, py: 1.5, pz: 6, tx: 0, ty: 0, tz: 0 },
     ]))
@@ -479,18 +480,17 @@ table("lights",
 
 // 3. A moving colored point light: one create row plus update keyframes for
 //    px/pz (a circle) and intensity (brightest at the front of the loop). It's
-//    a plain "light" row, so it interpolates like any object. Everything
+//    an ordinary scene row, so it interpolates like any object. Everything
 //    routed with .outThree() — spheres, lights, bulb — combines beat-sorted
 //    into the one "three (system)" scene table, and playback bakes the
 //    per-frame cache automatically.
-rows([
-  { id: "bulb", event: "create", beat: 1, shape: "light", kind: "point",
-    color: 0xff6b6b, intensity: 5, distance: 12, px: 0, py: 1.5, pz: 2 },
-  { id: "bulb", event: "update", beat: 3, px: 3,  pz: 0, intensity: 2 },
-  { id: "bulb", event: "update", beat: 5, px: 0,  pz: -2, intensity: 5 },
-  { id: "bulb", event: "update", beat: 7, px: -3, pz: 0, intensity: 2 },
-  { id: "bulb", event: "update", beat: 9, px: 0,  pz: 2, intensity: 5 },
-]).outThree()
+t.pointLight({ id: "bulb", color: 0xff6b6b, intensity: 5, distance: 12, px: 0, py: 1.5, pz: 2 })
+  .concat(rows([
+    { id: "bulb", event: "update", beat: 3, px: 3,  pz: 0, intensity: 2 },
+    { id: "bulb", event: "update", beat: 5, px: 0,  pz: -2, intensity: 5 },
+    { id: "bulb", event: "update", beat: 7, px: -3, pz: 0, intensity: 2 },
+    { id: "bulb", event: "update", beat: 9, px: 0,  pz: 2, intensity: 5 },
+  ])).outThree()
 `,
   },
   {

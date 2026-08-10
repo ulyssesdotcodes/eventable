@@ -248,6 +248,20 @@ test('light builds a "light" create row without forcing a position', () => {
   assert.equal(row.intensity, 4)
 })
 
+test('the per-kind light helpers fill in kind and a distinct default id', () => {
+  const { three } = createDSL(null)
+  assert.deepEqual(three.ambientLight({ intensity: 2 }).rows[0], {
+    id: 'ambientLight', event: 'create', beat: 1, shape: 'light', kind: 'ambient', intensity: 2,
+  })
+  // Distinct ids so two lights concat into one scene without colliding.
+  const kinds = three.directionalLight().concat(three.pointLight())
+    .concat(three.spotLight()).concat(three.hemisphereLight())
+  assert.deepEqual(kinds.rows.map((r) => [r.id, r.kind]), [
+    ['directionalLight', 'directional'], ['pointLight', 'point'],
+    ['spotLight', 'spot'], ['hemisphereLight', 'hemisphere'],
+  ])
+})
+
 test('three.translate/scale/rotate modify a scene table\'s create rows', () => {
   const { three } = createDSL(null)
   const base = three.box({ id: 'a', px: 1 })
