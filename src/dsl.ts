@@ -712,6 +712,34 @@ export class Table {
       }), false)
   }
 
+  /**
+   * Rebuild each row as one or two event rows placed off its own `beat`/`dur`,
+   * keeping the timing and discarding the rest — emit() for tables that are
+   * already beat-shaped, like .folds(). `beatRow` lands on the row's `beat`;
+   * `durRow`, when given, lands `dur` beats away, scaled by `durMult` (the
+   * default 1 = the end of the row's span, -1 = as far BEFORE the beat, 0.5 =
+   * halfway in). Both are emit() templates, so Expr values still read the
+   * source row — value: field("plies").mul(0.2) — and a `beat` of their own
+   * overrides the placement. A row with no numeric `beat` starts at 1, one
+   * with no `dur` puts both rows on the same beat.
+   *
+   *   // blur snaps on with every fold, then eases off ahead of the next one
+   *   paper.folds().beatMap(
+   *     { event: "setVariable", name: "blur", value: 8, ease: "step" },
+   *     { event: "setVariable", name: "blur", value: 0, ease: "easeInOut" },
+   *     -1,
+   *   ).outPost()
+   */
+  beatMap(beatRow: Template, durRow?: Template | null, durMult: number = 1): Table {
+    return this._xf('beatMap', { beatRow, durRow, durMult }, (ins) =>
+      ins[0].flatMap((r, i) => {
+        const beat = numOr(r.beat, 1)
+        const out: Row[] = [{ beat, ...buildRow(beatRow, r, i) }]
+        if (durRow) out.push({ beat: beat + numOr(r.dur, 0) * durMult, ...buildRow(durRow, r, i) })
+        return spread(out, carry(r))
+      }), false)
+  }
+
   concat(other: Table | Row[] | null | undefined): Table {
     return this._xf('concat', {}, (ins) => [...ins[0], ...ins[1]].map(recarry), false, [this._other(other)])
   }
