@@ -3,6 +3,7 @@
 // verbose. A sample's `tables` seeds its editable tables' rows, so the code
 // declares only the schema.
 import type { Row } from './lineage.js'
+import { ORIGAMI_MODELS, fitFoldBeats } from './origami-models.js'
 
 export interface Sample {
   name: string
@@ -239,30 +240,7 @@ editable("hydra", schemas.hydra,
 
 `,
   tables: {
-    origami: [
-      { step: "diag", p1: "0,0", p2: "1,1", move: "0.667,0.333", beat: 1, dur: 2 },
-      { step: "overcollapse1", kind: "turn", beat: 3, dur: 1 },
-      { step: "collapse1", p1: "0,0.5", p2: "1,0.5", move: "0.333,0.167", kind: "reverse", beat: 4, dur: 2 },
-      { step: "overcollapse2", kind: "turn", beat: 6, dur: 1 },
-      { step: "collapse2", p1: "0.5,0", p2: "0.5,1", move: "0.833,0.667", kind: "reverse", beat: 7, dur: 2 },
-      { step: "collapse3", p1: "0,1", p2: "0.4142135624,0", move: "0.667,0.069036", kind: "reverse", beat: 10, dur: 2 },
-      { step: "collapse4", p1: "0,1", p2: "1,0.5857864376", move: "0.930964,0.667", kind: "reverse", beat: 13, dur: 2 },
-      { step: "flatten", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.930964,0.333", beat: 16, dur: 2 },
-      { step: "overtuck1", kind: "turn", beat: 18, dur: 1 },
-      { step: "tuck1", p1: "0,1", p2: "0.4142135624,0", move: "0.069036,0.667", kind: "reverse", beat: 19, dur: 2 },
-      { step: "tuck2", p1: "0,1", p2: "1,0.5857864376", move: "0.667,0.930964", kind: "reverse", beat: 22, dur: 2 },
-      { step: "overkite1", kind: "turn", beat: 24, dur: 1 },
-      { step: "kite1", p1: "0,1", p2: "0.6681786379,0", move: "0.525373,0.274808", pick: 1, beat: 25, dur: 2 },
-      { step: "kite2", p1: "0,1", p2: "1,0.3318213621", move: "0.897812,0.667", beat: 28, dur: 2 },
-      { step: "overturn", kind: "turn", beat: 30, dur: 1 },
-      { step: "turn", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.333,0.930964", beat: 31, dur: 2 },
-      { step: "kite3", p1: "0,1", p2: "1,0.3318213621", move: "0.667,0.897812", pick: 1, beat: 34, dur: 2 },
-      { step: "kite4", p1: "0,1", p2: "0.6681786379,0", move: "0.208238,0.583899", pick: 1, beat: 37, dur: 2 },
-      { step: "neck", p1: "0.1345593806,0", p2: "0.4733251916,1", move: "0.906033,0.694263", kind: "reverse", beat: 40, dur: 2 },
-      { step: "tail", p1: "0,0.5266748083", p2: "1,0.8654406193", move: "0.246505,0.203815", kind: "reverse", beat: 43, dur: 2 },
-      { step: "head", p1: "0,0.1274716613", p2: "1,0.8431274379", move: "0.096435,0.080352", kind: "reverse", beat: 46, dur: 2 },
-      { step: "wings", p1: "0,0.1414213562", p2: "0.8585786438,1", move: "0.858,0.377;0.377,0.858", beat: 49, dur: 4, to: 0.5 },
-    ],
+    origami: ORIGAMI_MODELS.crane.steps,
     retime: [
       { event: "retime", from: 1, to: 1 },
       { beat: 1, event: "retime", from: 15, to: 23, outFrom: 1, outTo: 16 },
@@ -323,22 +301,8 @@ lily.retime(segments).outThree()
 //     GLOBAL playback instead, scrambling every table in the scene at once.
 `,
     tables: {
-      origami: [
-        // blintz: fold all four corners to the centre
-        { step: "overbl1", kind: "turn", beat: 1, dur: 0.5 },
-        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 2, dur: 1.2 },
-        { step: "overbl2", kind: "turn", beat: 3.5, dur: 0.5 },
-        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 4.5, dur: 1.2 },
-        { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 6, dur: 1.2 },
-        { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 7.5, dur: 1.2 },
-        // pull each corner-point back out past the rim into a petal
-        { step: "overpetSW", kind: "turn", beat: 9, dur: 0.5 },
-        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 10, dur: 1.2 },
-        { step: "overpetSE", kind: "turn", beat: 11.5, dur: 0.5 },
-        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 12.5, dur: 1.2 },
-        { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 14, dur: 1.2 },
-        { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 15.5, dur: 1.2 },
-      ],
+      // the lily's own folds, rescaled to end just as the 16-beat loop does
+      origami: fitFoldBeats(ORIGAMI_MODELS.lily.steps, 16),
     },
   },
   {
@@ -494,6 +458,55 @@ rows([
 `,
   },
   {
+    name: "Origami Models",
+    code: `// eventable — Origami Models: a whole model in one word
+// origami("crane") is a built-in model, already folded: the same fold table
+// the Origami Crane example keeps in a panel, plus the pose that shows that
+// model off — its two colours and the rotation it wants (a crane stands up off
+// the diagonal it started on; a flower tips back so you look into it). So the
+// model is a single word, and changing it swaps the folding, the colours and
+// the pose together — which is the point: you can do it mid-set, between
+// passes of the loop. Press "Run" (or Cmd/Ctrl-Enter), then hit Play.
+
+// The models are "crane", "cicada", "lotus" and "lily". Change this one
+// string and press Run again — everything below follows it.
+const model = "lotus"
+
+// \`beats\` rescales the model's own schedule to fill that many beats. The crane
+// folds across 52 beats of its own and the lily across 12, so this is what
+// makes them interchangeable: whichever is named, the paper starts flat on
+// beat 1 and lands finished just as the 16-beat loop comes round. Leave it off
+// to keep the model's own timing.
+const paper = origami(model, { beats: 16 })
+
+// .spawn() lays the model's pose UNDER its own props, so an \`id\` is all this
+// needs — anything stated here overrules the model (see below).
+paper.spawn({ id: "paper" }).outThree()
+
+// What hangs off the folding follows the swap too, because it is read back off
+// the paper rather than written out by hand: one glow pulse per fold, however
+// many folds the named model has and wherever they land.
+rows([{ beat: 1, event: "setCode", code: "bloom((p) => p.glow, 0.5, 0.7)" },
+      { beat: 1, event: "setVariable", name: "glow", value: 0 }])
+  .concat(paper.folds().derive({ event: "pulse", name: "glow", value: 0.9, ease: "easeOut" }))
+  .outPost()
+
+// Things to try:
+//   - Swap "lotus" for "crane", "cicada" or "lily": same 16 beats, same glow.
+//   - Hold one pose across the swap, so only the paper changes:
+//     .spawn({ id: "paper", rx: -0.3, rz: 0 }) — your props win over the pose.
+//   - Same for the colours: spawn({ id: "paper", color: 0x101010,
+//     backColor: 0xffcc00 }) keeps your palette whichever model is named.
+//   - Fold on past the model: .steps(table("extra")) after origami(model, …)
+//     adds your own rows to the end (Origami Crane has the columns).
+//   - Two models at once — origami("lily").spawn({ id: "a", px: -1.3 }) and
+//     origami("cicada").spawn({ id: "b", px: 1.3 }), each .outThree().
+//   - Scramble the folding: name the spawn — const p = paper.spawn({ id:
+//     "paper" }) — then p.retime(p.randomSegments({ count: 6 })).outThree(),
+//     as the Random Segments example does.
+`,
+  },
+  {
     name: "Origami Crane",
     table: "origami",
     code: `// eventable — Origami Crane: a table of fold steps, solved exactly
@@ -646,37 +659,7 @@ rows([{ beat: 1, event: "setCode", code: "bloom((p) => p.glow, 0.5, 0.7)" },
 //       paper.folds().graph("plies")
 `,
     tables: {
-      origami: [
-        // in half along the diagonal
-        { step: "diag", p1: "0,0", p2: "1,1", move: "0.667,0.333", beat: 1, dur: 2 },
-        // collapse into the square base: four inside reverse folds
-        { step: "overcollapse1", kind: "turn", beat: 3, dur: 1 },
-        { step: "collapse1", p1: "0,0.5", p2: "1,0.5", move: "0.333,0.167", kind: "reverse", beat: 4, dur: 2 },
-        { step: "overcollapse2", kind: "turn", beat: 6, dur: 1 },
-        { step: "collapse2", p1: "0.5,0", p2: "0.5,1", move: "0.833,0.667", kind: "reverse", beat: 7, dur: 2 },
-        { step: "collapse3", p1: "0,1", p2: "0.4142135624,0", move: "0.667,0.069036", kind: "reverse", beat: 10, dur: 2 },
-        { step: "collapse4", p1: "0,1", p2: "1,0.5857864376", move: "0.930964,0.667", kind: "reverse", beat: 13, dur: 2 },
-        // flatten the stray flap, then tuck the side corners in
-        { step: "flatten", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.930964,0.333", beat: 16, dur: 2 },
-        { step: "overtuck1", kind: "turn", beat: 18, dur: 1 },
-        { step: "tuck1", p1: "0,1", p2: "0.4142135624,0", move: "0.069036,0.667", kind: "reverse", beat: 19, dur: 2 },
-        { step: "tuck2", p1: "0,1", p2: "1,0.5857864376", move: "0.667,0.930964", kind: "reverse", beat: 22, dur: 2 },
-        // kite folds onto the centre line, front then (after turning a flap
-        // like a page) back — this thins the points into neck and tail
-        { step: "overkite1", kind: "turn", beat: 24, dur: 1 },
-        { step: "kite1", p1: "0,1", p2: "0.6681786379,0", move: "0.525373,0.274808", pick: 1, beat: 25, dur: 2 },
-        { step: "kite2", p1: "0,1", p2: "1,0.3318213621", move: "0.897812,0.667", beat: 28, dur: 2 },
-        { step: "overturn", kind: "turn", beat: 30, dur: 1 },
-        { step: "turn", p1: "0,0.2928932188", p2: "0.7071067812,1", move: "0.333,0.930964", beat: 31, dur: 2 },
-        { step: "kite3", p1: "0,1", p2: "1,0.3318213621", move: "0.667,0.897812", pick: 1, beat: 34, dur: 2 },
-        { step: "kite4", p1: "0,1", p2: "0.6681786379,0", move: "0.208238,0.583899", pick: 1, beat: 37, dur: 2 },
-        // swing the points up: neck, tail, then the head, all reverse folds
-        { step: "neck", p1: "0.1345593806,0", p2: "0.4733251916,1", move: "0.906033,0.694263", kind: "reverse", beat: 40, dur: 2 },
-        { step: "tail", p1: "0,0.5266748083", p2: "1,0.8654406193", move: "0.246505,0.203815", kind: "reverse", beat: 43, dur: 2 },
-        { step: "head", p1: "0,0.1274716613", p2: "1,0.8431274379", move: "0.096435,0.080352", kind: "reverse", beat: 46, dur: 2 },
-        // both wings at once — front sheet and back sheet — held half-raised
-        { step: "wings", p1: "0,0.1414213562", p2: "0.8585786438,1", move: "0.858,0.377;0.377,0.858", beat: 49, dur: 4, to: 0.5 },
-      ],
+      origami: ORIGAMI_MODELS.crane.steps,
     },
   },
   {
@@ -709,30 +692,7 @@ paper.spawn({ id: "cicada", color: 0xf4efe2, backColor: 0x79b356, pz: 1.2, rz: -
 //   - Delete both tuck rows for the wide-bodied cicada variant.
 `,
     tables: {
-      origami: [
-        // in half along the diagonal: the triangle, point down
-        { step: "half", p1: "0,0", p2: "1,1", move: "0.667,0.333", beat: 1, dur: 2 },
-        // both corners up to the top point
-        { step: "overcornerL", kind: "turn", beat: 3, dur: 1 },
-        { step: "cornerL", p1: "0,0.5", p2: "1,0.5", move: "0.1,0.3;0.3,0.1", beat: 4, dur: 2 },
-        { step: "overcornerR", kind: "turn", beat: 6, dur: 1 },
-        { step: "cornerR", p1: "0.5,0", p2: "0.5,1", move: "0.6,0.8;0.8,0.6", beat: 7, dur: 2 },
-        // wings: sweep each tip back down so they point away from each
-        // other and stick out past the triangle's edges
-        { step: "overwingL", kind: "turn", beat: 9, dur: 1 },
-        { step: "wingL", p1: "0.19885,0.598479", p2: "1.001892,0.99618", move: "0.03,0.12;0.12,0.03", beat: 10, dur: 2 },
-        { step: "overwingR", kind: "turn", beat: 12, dur: 1 },
-        { step: "wingR", p1: "0.401521,0.80115", p2: "0.00382,-0.001892", move: "0.88,0.97;0.97,0.88", beat: 13, dur: 2 },
-        // the head: one layer down over the wings, the second stops short —
-        // that little gap is the cicada's stripe
-        { step: "head1", p1: "-0.19,0.59", p2: "0.41,1.19", move: "0.97,0.03", beat: 16, dur: 2 },
-        { step: "overhead2", kind: "turn", beat: 18, dur: 1 },
-        { step: "head2", p1: "-0.24,0.64", p2: "0.36,1.24", move: "0.03,0.97", beat: 19, dur: 2 },
-        // narrow the body: fold the side corners behind
-        { step: "tuckL", p1: "0.09,0.59", p2: "0.39,0.29", move: "0.05,0.55", beat: 22, dur: 2 },
-        { step: "overtuckR", kind: "turn", beat: 24, dur: 1 },
-        { step: "tuckR", p1: "0.41,0.91", p2: "0.71,0.61", move: "0.45,0.95", beat: 25, dur: 2 },
-      ],
+      origami: ORIGAMI_MODELS.cicada.steps,
     },
   },
   {
@@ -765,28 +725,7 @@ paper.spawn({ id: "lotus", color: 0xfff2d6, backColor: 0xe0518a, pz: 1.2, rx: -0
 //   - Recolor the bloom: set backColor above to 0xf6b73a for a golden lotus.
 `,
     tables: {
-      origami: [
-        // blintz: fold all four corners to the centre
-        { step: "overbl1", kind: "turn", beat: 1, dur: 0.5 },
-        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 2, dur: 0.9 },
-        { step: "overbl2", kind: "turn", beat: 3, dur: 0.5 },
-        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 4, dur: 0.9 },
-        { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 5, dur: 0.9 },
-        { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 6, dur: 0.9 },
-        // fold each corner-point back out past the rim: four petals
-        { step: "overpetSW", kind: "turn", beat: 7, dur: 0.5 },
-        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 8, dur: 0.9 },
-        { step: "overpetSE", kind: "turn", beat: 9, dur: 0.5 },
-        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 10, dur: 0.9 },
-        { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 11, dur: 0.9 },
-        { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 12, dur: 0.9 },
-        // fold each petal's tip back for a rounded, two-tone petal
-        { step: "overtSW", kind: "turn", beat: 13, dur: 0.5 },
-        { step: "tSW", p1: "0.42,0", p2: "0,0.42", move: "0.01,0.01", beat: 14, dur: 0.9 },
-        { step: "tSE", p1: "0.58,0", p2: "1,0.42", move: "0.99,0.01", beat: 15, dur: 0.9 },
-        { step: "tNE", p1: "1,0.58", p2: "0.58,1", move: "0.99,0.99", beat: 16, dur: 0.9 },
-        { step: "tNW", p1: "0,0.58", p2: "0.42,1", move: "0.01,0.99", beat: 17, dur: 0.9 },
-      ],
+      origami: ORIGAMI_MODELS.lotus.steps,
     },
   },
   {
@@ -818,22 +757,7 @@ paper.spawn({ id: "lily", color: 0xf0eeff, backColor: 0x7a3fc0, pz: 1.2, rx: -0.
 //     nearly edge-on.
 `,
     tables: {
-      origami: [
-        // blintz: fold all four corners to the centre
-        { step: "overbl1", kind: "turn", beat: 1, dur: 0.5 },
-        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 2, dur: 0.9 },
-        { step: "overbl2", kind: "turn", beat: 3, dur: 0.5 },
-        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 4, dur: 0.9 },
-        { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 5, dur: 0.9 },
-        { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 6, dur: 0.9 },
-        // pull each corner-point back out past the rim into a petal
-        { step: "overpetSW", kind: "turn", beat: 7, dur: 0.5 },
-        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 8, dur: 0.9 },
-        { step: "overpetSE", kind: "turn", beat: 9, dur: 0.5 },
-        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 10, dur: 0.9 },
-        { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 11, dur: 0.9 },
-        { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 12, dur: 0.9 },
-      ],
+      origami: ORIGAMI_MODELS.lily.steps,
     },
   },
   {
@@ -886,40 +810,8 @@ lotus.spawn({ id: "flowerA", color: 0xfff2d6, backColor: 0xe0518a, ...pose })
 //   - Widen "beats" under the scene to 48 to watch the whole cycle in one pass.
 `,
     tables: {
-      lotus: [
-        // blintz: fold all four corners to the centre
-        { step: "overbl1", kind: "turn", beat: 1, dur: 0.5 },
-        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 2, dur: 0.9 },
-        { step: "overbl2", kind: "turn", beat: 3, dur: 0.5 },
-        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 4, dur: 0.9 },
-        { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 5, dur: 0.9 },
-        { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 6, dur: 0.9 },
-        { step: "overpetSW", kind: "turn", beat: 7, dur: 0.5 },
-        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 8, dur: 0.9 },
-        { step: "overpetSE", kind: "turn", beat: 9, dur: 0.5 },
-        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 10, dur: 0.9 },
-        { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 11, dur: 0.9 },
-        { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 12, dur: 0.9 },
-        { step: "overtSW", kind: "turn", beat: 13, dur: 0.5 },
-        { step: "tSW", p1: "0.42,0", p2: "0,0.42", move: "0.01,0.01", beat: 14, dur: 0.9 },
-        { step: "tSE", p1: "0.58,0", p2: "1,0.42", move: "0.99,0.01", beat: 15, dur: 0.9 },
-        { step: "tNE", p1: "1,0.58", p2: "0.58,1", move: "0.99,0.99", beat: 16, dur: 0.9 },
-        { step: "tNW", p1: "0,0.58", p2: "0.42,1", move: "0.01,0.99", beat: 17, dur: 0.9 },
-      ],
-      lily: [
-        { step: "overbl1", kind: "turn", beat: 1, dur: 0.5 },
-        { step: "bl1", p1: "0.5,0", p2: "0,0.5", move: "0.05,0.05", beat: 2, dur: 0.9 },
-        { step: "overbl2", kind: "turn", beat: 3, dur: 0.5 },
-        { step: "bl2", p1: "0.5,0", p2: "1,0.5", move: "0.95,0.05", beat: 4, dur: 0.9 },
-        { step: "bl3", p1: "1,0.5", p2: "0.5,1", move: "0.95,0.95", beat: 5, dur: 0.9 },
-        { step: "bl4", p1: "0.5,1", p2: "0,0.5", move: "0.05,0.95", beat: 6, dur: 0.9 },
-        { step: "overpetSW", kind: "turn", beat: 7, dur: 0.5 },
-        { step: "petSW", p1: "0.65,0", p2: "0,0.65", move: "0.03,0.03", beat: 8, dur: 0.9 },
-        { step: "overpetSE", kind: "turn", beat: 9, dur: 0.5 },
-        { step: "petSE", p1: "0.35,0", p2: "1,0.65", move: "0.97,0.03", beat: 10, dur: 0.9 },
-        { step: "petNE", p1: "1,0.35", p2: "0.35,1", move: "0.97,0.97", beat: 11, dur: 0.9 },
-        { step: "petNW", p1: "0,0.35", p2: "0.65,1", move: "0.03,0.97", beat: 12, dur: 0.9 },
-      ],
+      lotus: ORIGAMI_MODELS.lotus.steps,
+      lily: ORIGAMI_MODELS.lily.steps,
     },
   },
   {
