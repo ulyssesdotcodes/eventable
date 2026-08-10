@@ -264,7 +264,9 @@ export function initPost(
           return t.vec4(t.vec3(input.rgb).add(n.sub(0.5).mul(intensity)), 1)
         }
         case 'rgbsplit': {
-          const q = beatUniform.mul(8).floor().fract().mul(0.03).add(0.005)
+          // Hash the eighth-beat INDEX, so the offset jumps from step to step
+          // instead of sweeping within one — the stutter is the whole op.
+          const q = live(liveInit(op, 0)).mul(hash2(t.vec2(beatUniform.mul(8).floor(), 0)).x)
           const tex = t.convertToTexture(input)
           const uvN = t.uv()
           return t.vec4(tex.sample(uvN.add(t.vec2(q, 0))).r, tex.sample(uvN).g, tex.sample(uvN.sub(t.vec2(q, 0))).b, 1)

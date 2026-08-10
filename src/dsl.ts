@@ -19,6 +19,7 @@ import { ORIGAMI_MODELS, fitFoldBeats, type OrigamiModel } from './origami-model
 import type { Schema } from './editable-tables.js'
 import { beatSecondsFromTaps } from './tap-log.js'
 import { primitiveGeometry, pointsFromGeometry, geometryFromPoints } from './three-points.js'
+import type { LightKind } from './shapes.js'
 import type { BufferGeometry } from 'three'
 
 // ── Expr: a serializable, chainable expression over a row ────────────────────
@@ -1291,7 +1292,7 @@ export class OrigamiBuilder {
    * over a built-in model's own pose, so origami("crane").spawn({ id: "p" })
    * stands the crane up but spawn({ id: "p", rz: 0 }) still overrules it.
    */
-  spawn(props: Row = {}): Table {
+  spawn(props: SceneProps = {}): Table {
     const program = this.program()
     const pose = { ...this._pose, ...props }
     this._id = pose.id ?? this._id
@@ -1707,6 +1708,93 @@ function parseCSV(text: string): Row[] {
   })
 }
 
+// ── Scene props ─────────────────────────────────────────────────────────────
+// What the three.js builders below accept: the scene fields the renderer
+// actually reads, named and documented so the editor completes them inside the
+// call — t.sphere({ r: 0.5, color: 0x4a9eff }). Every props type stays
+// open-ended, because a scene row is an ordinary table row and may carry
+// whatever else your program reads.
+
+/** A scene value: a constant, or an Expr resolved per frame — px: expr.slider("x"), ry: expr.time().mul(0.5). */
+export type SceneNum = number | Expr
+
+/** The fields every scene object shares. */
+export interface SceneProps {
+  /** The object's handle — what a later "update"/"color"/"destroy" row addresses. Defaults to the builder's own name. */
+  id?: string
+  /** Which kind of row this is. Every builder makes a "create"; the rest address an object that already exists. */
+  event?: 'create' | 'update' | 'color' | 'destroy'
+  /** The beat it lands on, 1-indexed (default 1). */
+  beat?: number
+  /** Position in world units. */
+  px?: SceneNum; py?: SceneNum; pz?: SceneNum
+  /** Rotation in radians. */
+  rx?: SceneNum; ry?: SceneNum; rz?: SceneNum
+  /** Scale, 1 = the shape's own size. */
+  sx?: SceneNum; sy?: SceneNum; sz?: SceneNum
+  /** Color as a 0xRRGGBB number. */
+  color?: SceneNum
+  /** Mute the row without deleting it. */
+  disabled?: boolean
+  [field: string]: unknown
+}
+
+/** The size fields a primitive reads — each shape uses the ones that apply and ignores the rest (defaults in shapes.ts). */
+export interface ShapeDims {
+  /** Box half-extents (default 0.25 each), so the default box is 0.5 across. */
+  hx?: SceneNum; hy?: SceneNum; hz?: SceneNum
+  /** Radius — sphere, cylinder, cone, torus (default 0.3). */
+  r?: SceneNum
+  /** Half-height — cylinder, cone; drawn 2·h tall (default 0.3). */
+  h?: SceneNum
+  [field: string]: unknown
+}
+
+/** A mesh primitive's create row: the shared scene fields plus its size. */
+export interface MeshProps extends SceneProps, ShapeDims {}
+
+/** An extruded-text create row. */
+export interface TextProps extends SceneProps {
+  /** The string to extrude; "\n" splits it into lines. */
+  text?: string
+  /** Cap height per line in world units (default 0.5). */
+  size?: SceneNum
+}
+
+/** A light's create row — which fields past `color`/`intensity` apply depends on `kind` (see t.light()). */
+export interface LightProps extends SceneProps {
+  /** Which light this is: "ambient", "directional" (the default), "point", "spot" or "hemisphere". The per-kind builders fill it in. */
+  kind?: LightKind
+  /** Brightness (default 1). */
+  intensity?: SceneNum
+  /** What a directional or spot light aims at (default the origin). */
+  tx?: SceneNum; ty?: SceneNum; tz?: SceneNum
+  /** Range of a point or spot light — where it fades to nothing, 0 = never (default 0). */
+  distance?: SceneNum
+  /** Falloff exponent of a point or spot light, 2 = physical (default 2). */
+  decay?: SceneNum
+  /** A spot's cone half-angle in radians (default π/3). */
+  angle?: SceneNum
+  /** How soft a spot's edge is, 0–1 (default 0). */
+  penumbra?: SceneNum
+  /** The lower tint of a hemisphere light (default 0x444444). */
+  groundColor?: SceneNum
+}
+
+/** One camera keyframe: the eye at px/py/pz, looking at tx/ty/tz, on `beat`. */
+export interface CameraProps extends SceneProps {
+  /** The look-at target (default the origin). */
+  tx?: SceneNum; ty?: SceneNum; tz?: SceneNum
+  /** Vertical field of view in degrees (default 60). */
+  fov?: SceneNum
+}
+
+/** points(): a primitive's size, plus how densely to sample it. */
+export interface PointsProps extends ShapeDims {
+  /** Sample density — omit to match the segment counts the renderer itself draws. */
+  segments?: number
+}
+
 /**
  * The three.js helper namespace, reachable as either `three` or the shorthand
  * `t`. Scene-primitive builders (box, sphere, …) each return a one-row Table
@@ -1716,17 +1804,17 @@ function parseCSV(text: string): Row[] {
  */
 export interface ThreeNamespace {
   /** One "create" row for a box (beat 1, origin, id defaults to the shape name) — set only the fields you care about, then concat into a scene and rasterize. Size: hx/hy/hz half-extents. */
-  box(props?: Row): Table
+  box(props?: MeshProps): Table
   /** One "create" row for a sphere (beat 1, origin, id defaults to the shape name). Size: r. */
-  sphere(props?: Row): Table
+  sphere(props?: MeshProps): Table
   /** One "create" row for a cylinder (beat 1, origin, id defaults to the shape name). Size: r + h (half-height). */
-  cylinder(props?: Row): Table
+  cylinder(props?: MeshProps): Table
   /** One "create" row for a cone (beat 1, origin, id defaults to the shape name). Size: r + h (half-height). */
-  cone(props?: Row): Table
+  cone(props?: MeshProps): Table
   /** One "create" row for a torus (beat 1, origin, id defaults to the shape name). Size: r. */
-  torus(props?: Row): Table
+  torus(props?: MeshProps): Table
   /** One "create" row of extruded 3D text (beat 1, origin, id defaults to "text"). Fields: text + size (cap height per line). */
-  text(props?: Row): Table
+  text(props?: TextProps): Table
   /**
    * One "create" row for a light (shape "light", beat 1, id defaults to
    * "light") — no mesh, it adds a three.js light. `kind` picks the type:
@@ -1742,19 +1830,19 @@ export interface ThreeNamespace {
    * intensity/position/color are numeric keyframe tracks, so they animate on
    * the beat timeline like any other field.
    */
-  light(props?: Row): Table
+  light(props?: LightProps): Table
   /** A flat fill light — kind "ambient", id defaults to "ambientLight". Every surface gets `color` × `intensity` from every angle: it lifts the blacks, it can't shape anything. Pair it with a directional key. */
-  ambientLight(props?: Row): Table
+  ambientLight(props?: LightProps): Table
   /** A sun — kind "directional", id defaults to "directionalLight". Parallel rays arriving from px/py/pz (a direction, so its length doesn't dim it) aimed at tx/ty/tz. The workhorse key light. */
-  directionalLight(props?: Row): Table
+  directionalLight(props?: LightProps): Table
   /** An omni bulb at px/py/pz — kind "point", id defaults to "pointLight". `distance` is where it fades to nothing (0 = never), `decay` the falloff exponent (2 = physical). */
-  pointLight(props?: Row): Table
+  pointLight(props?: LightProps): Table
   /** A cone from px/py/pz aimed at tx/ty/tz — kind "spot", id defaults to "spotLight". `angle` is the cone's half-angle in radians, `penumbra` (0–1) how soft its edge, `distance`/`decay` the falloff. */
-  spotLight(props?: Row): Table
+  spotLight(props?: LightProps): Table
   /** A sky/ground fill — kind "hemisphere", id defaults to "hemisphereLight". `color` comes from above, `groundColor` from below, blended by each surface's normal; a warmer ambient(). */
-  hemisphereLight(props?: Row): Table
+  hemisphereLight(props?: LightProps): Table
   /** The generic form behind box()/sphere()/… — a create row for any shape string, including shapes without a named helper. */
-  object(shape: string, props?: Row): Table
+  object(shape: string, props?: MeshProps): Table
   /**
    * A three.js primitive → a table of its points: one row per vertex
    * { i, px, py, pz, nx, ny, nz } (position + surface normal in local space),
@@ -1762,7 +1850,7 @@ export interface ThreeNamespace {
    * hx/hy/hz | r | h fields. Pass `segments` for a denser cloud. Plain
    * numbers, so the rows chain like any table.
    */
-  points(shape: string, props?: Row): Table
+  points(shape: string, props?: PointsProps): Table
   /** A table of points → a BufferGeometry, reading position (and normal, when every row has nx/ny/nz) from px/py/pz (nx/ny/nz). The inverse of points(). */
   geometry(points: Table | Row[]): BufferGeometry
   /**
@@ -1782,7 +1870,7 @@ export interface ThreeNamespace {
    * one on every row. `beat` is the exception that must stay a plain number
    * (it's when the keyframe lands) — a live one falls back to 1.
    */
-  camera(keyframes: Table | Row[] | null | undefined): Table
+  camera(keyframes: Table | CameraProps[] | null | undefined): Table
   /**
    * Shift every scene object in `table` by (x, y, z) world units — adds to
    * px/py/pz on each create row (and any keyframe that already carries a

@@ -191,7 +191,11 @@ export const POST_OPS: Record<string, OpSpec> = {
     args: [{ name: 'intensity', arg: 'live', default: 0.3 }],
     doc: 'Film grain seeded by the beat clock (deterministic; scrubs and pauses with the timeline). `intensity` is live.',
   },
-  rgbsplit: { kind: 'fx', args: [], doc: 'Beat-quantized channel-strobe: offsets the R/B channels in steps locked to the beat clock.' },
+  rgbsplit: {
+    kind: 'fx',
+    args: [{ name: 'distance', arg: 'live', default: 0.03 }],
+    doc: 'Beat-quantized channel-strobe: jumps the R/B channels apart in steps locked to the beat clock, up to `distance` in UV space (live) — the stuttering cousin of rgbshift.',
+  },
 }
 
 // A live arg carries either a constant (lowered to a uniform holding it) or a
