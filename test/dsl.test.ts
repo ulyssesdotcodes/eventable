@@ -38,6 +38,22 @@ test('flatMap fans rows out through the index and full row array, dropping nulls
   assert.deepEqual(out.rows, [{ v: 9 }, { v: 90 }, { v: 2 }])
 })
 
+test('beatMap rebuilds rows off their own beat/dur, keeping only the templates', () => {
+  const base = t([{ beat: 3, dur: 2, step: 0, name: 'valley' }, { beat: 9, step: 1 }, { step: 2 }])
+  const out = base.beatMap(
+    { event: 'setVariable', name: 'blur', value: 8 },
+    { event: 'setVariable', name: 'blur', value: field('step') },
+    -1,
+  )
+  assert.deepEqual(out.rows.map((r) => [r.beat, r.value]),
+    [[3, 8], [1, 0], [9, 8], [9, 1], [1, 8], [1, 2]],
+    'durMult places the dur row; a missing dur is 0 and a missing beat is 1')
+  assert.deepEqual(out.rows[0], { beat: 3, event: 'setVariable', name: 'blur', value: 8 },
+    'the source row is discarded — only the template and the beat survive')
+  assert.deepEqual(base.beatMap({ event: 'pulse' }).rows.map((r) => r.beat), [3, 9, 1],
+    'one row each without a durRow')
+})
+
 test('concat accepts a Table or a bare array', () => {
   const a = t([{ v: 1 }])
   assert.deepEqual(a.concat(t([{ v: 2 }])).rows, [{ v: 1 }, { v: 2 }])
