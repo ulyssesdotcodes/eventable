@@ -1720,6 +1720,29 @@ function sceneObject(shape: string, props: Row, ctx: DSLContext | null): Table {
   }], ctx)
 }
 
+// ── Event rows ───────────────────────────────────────────────────────────────
+// "setVariable" and "setCode" are the same row wherever they appear — hydra,
+// post, bauble, and (setVariable) particles — so one pair of builders serves
+// them all; only which extra columns bite differs, and those ride in `props`.
+
+/** The columns an event row carries besides its own — the last argument of setVariable()/setCode(). */
+export interface EventProps {
+  /** The beat it lands on, 1-indexed (default 1). Leave it off in an emit()/beatMap() template, where the source row's own timing places the row. */
+  beat?: number
+  /** post: how the segment INTO this keyframe is shaped — blank/'step' jumps on the beat, a named ease glides from the previous row of the same name. */
+  ease?: 'step' | 'linear' | 'easeIn' | 'easeOut' | 'easeInOut'
+  /** hydra: which output the row drives (default o0) — each output's events fold independently. */
+  out?: 'o0' | 'o1' | 'o2' | 'o3'
+  /** Mute the row without deleting it. */
+  disabled?: boolean
+  [field: string]: unknown
+}
+
+// `beat` leads, the column order every event table reads in — and is left OUT
+// when unset, so a template row doesn't override emit()/beatMap()'s placement.
+const eventRow = (fields: Row, { beat, ...rest }: EventProps): Row =>
+  beat === undefined ? { ...fields, ...rest } : { beat, ...fields, ...rest }
+
 function parseCSV(text: string): Row[] {
   const lines = String(text).trim().split(/\r?\n/).filter((l) => l.length)
   if (!lines.length) return []
@@ -2044,6 +2067,36 @@ export type DSLSurface = Easings & {
    * base pattern with a longer array of overrides merged on top.
    */
   rotate(rows: Row[] | null | undefined, values: Row[] | null | undefined): Table
+  /**
+   * One "setVariable" ROW — the same row in every event table that has live
+   * inputs, so it reads the same whichever one you route it to: hydra (a
+   * per-frame props value the sketch reads, no recompile), post (a keyframe
+   * track, `props.ease` shaping the segment into this one), bauble (a
+   * `(def name value)` compiled ahead of the sketch) and particles (a sim
+   * parameter). `props` carries the rest of the columns — `beat` (1-indexed),
+   * post's `ease`, hydra's `out`, `disabled`.
+   *
+   *   rows([setCode("bloom((p) => p.glow)"), setVariable("glow", 0.35)]).outPost()
+   *
+   * Omit `beat` inside an emit()/beatMap() template and the source row's own
+   * timing places it; an Expr `value` bakes against that source row there
+   * (in a plain rows([…]) list, pass a literal):
+   *
+   *   paper.folds().beatMap(setVariable("blur", 8, { ease: "step" }),
+   *                         setVariable("blur", 0, { ease: "easeInOut" }), -1).outPost()
+   */
+  setVariable(name: string, value: number | string | Expr, props?: EventProps): Row
+  /**
+   * One "setCode" ROW — the same row in hydra, post and bauble: `code`
+   * replaces that view's whole sketch from this beat on. Only the language
+   * differs (a hydra chain / a post chain / a Janet shape expression), and in
+   * hydra the terminal `.out()` comes from `props.out` (default o0), so the
+   * code needn't write its own. `props` carries `beat` (1-indexed), `out` and
+   * `disabled`.
+   *
+   *   rows([setCode("osc(20, 0.1, 1.2)"), setCode("noise(3)", { beat: 9 })]).outHydra()
+   */
+  setCode(code: string, props?: EventProps): Row
   csv(text: string): Table
   data(url: string): Table
   json(data: Row[] | string | unknown): Table
@@ -2200,6 +2253,10 @@ export function createDSL(ctx: DSLContext | null): DSLSurface {
         ctx,
       )
     },
+    setVariable: (name: string, value: number | string | Expr, props: EventProps = {}): Row =>
+      eventRow({ event: 'setVariable', name, value }, props),
+    setCode: (code: string, props: EventProps = {}): Row =>
+      eventRow({ event: 'setCode', code }, props),
     csv: (text: string) => new Table(parseCSV(text), ctx),
     data: (url: string) => new Table(parseCSV(ctx?.getData?.(url) ?? ''), ctx),
     json: (data: Row[] | string | unknown) => new Table(

@@ -23,7 +23,7 @@ interface FnSection {
 const FN_SECTIONS: FnSection[] = [
   {
     title: 'Builders',
-    blurb: 'Top-level functions that make a Table to start a chain from.',
+    blurb: 'Top-level functions that make a Table to start a chain from — plus setVariable/setCode, which make a single event row to put in one.',
     docs: DSL_BUILTIN_DOCS,
   },
   {

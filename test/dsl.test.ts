@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Table, createDSL, field, resolveBindings } from '../src/dsl.js'
+import { isHydraRow } from '../src/hydra.js'
+import { isPostRow } from '../src/post.js'
+import { isBaubleRow } from '../src/bauble.js'
+import { isParticleRow } from '../src/particles.js'
 import { withLineage, getLineage, type Row } from '../src/lineage.js'
 
 const t = (rows: Row[]): Table => new Table(rows)
@@ -52,6 +56,26 @@ test('beatMap rebuilds rows off their own beat/dur, keeping only the templates',
     'the source row is discarded — only the template and the beat survive')
   assert.deepEqual(base.beatMap({ event: 'pulse' }).rows.map((r) => r.beat), [3, 9, 1],
     'one row each without a durRow')
+})
+
+test('setVariable/setCode build the one event row every event table reads', () => {
+  const dsl = createDSL(null)
+  const code = dsl.setCode('osc(20, 0.1, 1.2)', { beat: 9, out: 'o1' })
+  const variable = dsl.setVariable('glow', 0.35, { beat: 1, ease: 'easeOut' })
+  assert.deepEqual(code, { beat: 9, event: 'setCode', code: 'osc(20, 0.1, 1.2)', out: 'o1' })
+  assert.deepEqual(variable, { beat: 1, event: 'setVariable', name: 'glow', value: 0.35, ease: 'easeOut' })
+  for (const accepts of [isHydraRow, isPostRow, isBaubleRow]) {
+    assert.ok(accepts(code) && accepts(variable), `${accepts.name} takes both rows`)
+  }
+  assert.ok(isParticleRow(variable), 'particles has setVariable but no setCode')
+
+  // No `beat` unless asked, so a template row leaves beatMap/emit's placement
+  // alone — and an Expr value still bakes against the source row there.
+  const folds = t([{ beat: 3, dur: 2, plies: 4 }])
+  assert.deepEqual(
+    folds.beatMap(dsl.setVariable('blur', field('plies')), dsl.setVariable('blur', 0)).rows,
+    [{ beat: 3, event: 'setVariable', name: 'blur', value: 4 },
+      { beat: 5, event: 'setVariable', name: 'blur', value: 0 }])
 })
 
 test('concat accepts a Table or a bare array', () => {
