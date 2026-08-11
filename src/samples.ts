@@ -379,7 +379,7 @@ t.text({ id: "caption", py: 1.4, size: 0.4, text: "primitives", color: 0xffffff 
     name: "Camera Move",
     table: "cubes",
     code: `// eventable — moving the camera from the DSL
-// The camera is just another scene object: \`t.camera([...])\` emits one keyframe
+// The camera is just another scene object: \`t.camera(table)\` emits one keyframe
 // per row (id "camera", shape "camera") that rides events → rasterize like
 // anything else, so camera moves interpolate on the beat timeline for free.
 // Press "Run" (or Cmd/Ctrl-Enter), then hit Play under the scene.
@@ -395,20 +395,33 @@ table("cubes",
   }))
 ).outThree()
 
-// 2. t.camera([...]) — one row per keyframe. px/py/pz are the eye, tx/ty/tz the
-//    look-at target (here always the origin), fov the vertical field of view.
-//    Over the 16-beat loop the eye swings around the lattice and cranes up,
-//    while the fov eases from wide to tight (a subtle dolly-zoom), then lands
-//    back on the start pose at beat 16 so the loop repeats without a jump.
-//    Its .outThree() merges the keyframes with the cubes above into the one
+// 2. t.camera(...) reads a TABLE, so a camera path is data like anything else —
+//    computed, named, and inspectable in its own tab. "orbit" is one row per
+//    keyframe: px/py/pz are the eye, swinging around the lattice and craning
+//    up; tx/ty/tz the look-at target (the origin throughout). Beat 16 lands
+//    back on the start pose so the loop repeats without a jump.
+table("orbit", [0, 0.25, 0.5, 0.75, 1].map((turn, i) => ({
+  beat: Math.min(1 + i * 4, 16),
+  px: Math.sin(turn * Math.PI * 2) * 4,
+  py: 0.5 + Math.sin(turn * Math.PI) * 2.5,
+  pz: Math.cos(turn * Math.PI * 2) * 5,
+  tx: 0, ty: 0, tz: 0,
+})))
+
+// 3. A camera field also takes an Expr, so the shot itself can be live: fov —
+//    the vertical field of view — reads an expr.slider(), which draws the "lens"
+//    control over the visual and re-reads it every frame while the orbit runs.
+//    Numbers glide between keyframes; an Expr holds until the next keyframe
+//    that names its field, so give every keyframe the same one.
+//    .outThree() merges the camera with the cubes above into the one
 //    "three (system)" scene table — no manual concat.
-t.camera([
-  { beat: 1,  px: 0,    py: 0.5, pz: 5, tx: 0, ty: 0, tz: 0, fov: 60 },
-  { beat: 5,  px: 4,    py: 1.5, pz: 3, fov: 55 },
-  { beat: 9,  px: 0,    py: 3,   pz: -5, fov: 45 },
-  { beat: 13, px: -4,   py: 1.5, pz: 3, fov: 55 },
-  { beat: 16, px: 0,    py: 0.5, pz: 5, fov: 60 },
-]).outThree()
+t.camera(table("orbit").derive({ fov: expr.slider("lens", 35, 80) })).outThree()
+
+// Things to try:
+//   - Edit "orbit" in its tab — the path is an ordinary table, so a nudged
+//     px or beat re-cooks the move.
+//   - Swap the slider for another live source: expr.time().sin().mul(10).add(55)
+//     breathes the lens on the clock instead of your hand.
 `,
   },
   {

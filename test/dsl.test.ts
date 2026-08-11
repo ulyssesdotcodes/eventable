@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Table, createDSL, field } from '../src/dsl.js'
+import { Table, createDSL, field, resolveBindings } from '../src/dsl.js'
 import { withLineage, getLineage, type Row } from '../src/lineage.js'
 
 const t = (rows: Row[]): Table => new Table(rows)
@@ -214,6 +214,18 @@ test('camera builds a create row (defaulted pose) then update keyframes', () => 
   assert.deepEqual(cam.rows[1], {
     id: 'camera', shape: 'camera', event: 'update', beat: 9, px: 4, fov: 45,
   })
+})
+
+test('camera reads a computed table, baking Expr fields in the rows it is handed', () => {
+  const { three, expr } = createDSL(null)
+  const path = t([{ n: 0 }, { n: 1 }]).map({ beat: field('n').mul(8).add(1), r: field('n').add(3) })
+  const cam = three.camera(path.map((p) => ({ ...p, pz: expr.field('r').mul(2), fov: expr.slider('lens') })))
+  // A constant Expr bakes against its own row; the create/update split holds.
+  assert.deepEqual(cam.rows.map((r) => [r.event, r.beat, r.pz]), [['create', 1, 6], ['update', 9, 8]])
+  // The create row still gets the default pose it doesn't name.
+  assert.equal(cam.rows[0].tx, 0)
+  // A live Expr stays a binding for the scene to resolve per frame.
+  assert.equal(resolveBindings(cam.rows[1], { slider: () => 2 }).fov, 2)
 })
 
 test('box builds a defaulted create row, props overriding defaults', () => {
