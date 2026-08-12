@@ -1317,8 +1317,6 @@ export class OrigamiBuilder {
 }
 
 export interface OrigamiFactory {
-  /** A bare square sheet (displayed spanning [-size, size]², default size 1) — fold it with .steps(table). */
-  (opts?: { size?: number }): OrigamiBuilder
   /**
    * A built-in model, already folded: "crane", "cicada", "lotus" or "lily" —
    * the fold tables the origami examples use, each with the pose that shows it
@@ -1334,6 +1332,8 @@ export interface OrigamiFactory {
    * fold on from where the model finishes.
    */
   (model: OrigamiModel, opts?: { size?: number; beats?: number }): OrigamiBuilder
+  /** A bare square sheet (displayed spanning [-size, size]², default size 1) — fold it with .steps(table). */
+  (opts?: { size?: number }): OrigamiBuilder
 }
 
 function makeOrigami(ctx: DSLContext | null): OrigamiFactory {

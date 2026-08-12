@@ -275,25 +275,30 @@ export function codeCompletions(
   getLang: GetLang,
 ) {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
-    // No completions in strings/comments — quoted view names have their own
-    // source (viewNameCompletions).
     const node = syntaxTree(context.state).resolveInner(context.pos, -1)
-    if (/String|Comment/.test(node.name)) return null
+    if (/Comment/.test(node.name)) return null
+    // Inside a string only the checker may answer, and only about the string
+    // itself: a parameter typed as a union of literals completes its values
+    // (origami("crane")). The word heuristics below would offer DSL globals in
+    // the middle of prose, and view names have their own source
+    // (viewNameCompletions).
+    const inString = /String/.test(node.name)
     const lang = getLang()
     if (lang === 'bauble') return null // Janet — no JS surface applies
 
     if (client && client.status() === 'ready') {
-      const word = context.matchBefore(/[\w$]+/)
-      const dot = context.matchBefore(/\.[\w$]*/)
-      if (!word && !dot && !context.explicit) return null
+      const quote = inString ? context.matchBefore(/["'][^"']*/) : null
+      const word = inString ? null : context.matchBefore(/[\w$]+/)
+      const dot = inString ? null : context.matchBefore(/\.[\w$]*/)
+      if (!quote && !word && !dot && !context.explicit) return null
       const text = context.state.doc.toString()
       const res = await client.completions(text, context.pos, lang)
       if (res && res.entries.length) {
-        const from = word ? word.from : context.pos
+        const from = quote ? quote.from + 1 : word ? word.from : context.pos
         return {
           from,
           options: res.entries.map((e): Completion => {
-            const curated = lang === 'dsl' ? curatedDocFor(text, from, e.name) : null
+            const curated = lang === 'dsl' && !inString ? curatedDocFor(text, from, e.name) : null
             return {
               label: e.name,
               type: cmCompletionType(e.kind),
@@ -310,14 +315,14 @@ export function codeCompletions(
               },
             }
           }),
-          validFor: /^[\w$]*$/,
+          validFor: quote ? /^[^"']*$/ : /^[\w$]*$/,
         }
       }
       // No answer (e.g. the parse is too broken mid-edit) — fall through.
     }
     // The heuristic fallback knows only the DSL surface; in a hydra cell wrong
-    // suggestions are worse than none.
-    return lang === 'dsl' ? heuristicCompletions(context, makeInfoNode) : null
+    // suggestions are worse than none, and inside a string all of them are.
+    return lang === 'dsl' && !inString ? heuristicCompletions(context, makeInfoNode) : null
   }
 }
 

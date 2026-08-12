@@ -138,6 +138,16 @@ test('schemas namespace completes its members, each documented on hover', () => 
   }
 })
 
+test('a string parameter typed as literals completes them inside the quotes', () => {
+  // What lets a livecoder swap origami models by name without leaving the
+  // editor — the completion source lets the checker answer inside a string
+  // exactly for this (see editor-support's codeCompletions).
+  for (const model of ['crane', 'cicada', 'lotus', 'lily']) {
+    assert.ok(namesAt('origami("').includes(model), `expected the ${model} model`)
+  }
+  assert.ok(namesAt('origami("cr').includes('crane'), 'and while the name is half-typed')
+})
+
 test('no answers inside an unparseable mess still return gracefully', () => {
   const qi = svc.quickInfoAt('((((', 2)
   assert.equal(qi, null)
