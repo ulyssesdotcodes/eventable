@@ -1720,12 +1720,28 @@ function sceneObject(shape: string, props: Row, ctx: DSLContext | null): Table {
   }], ctx)
 }
 
+// One camera keyframe row — the shared half of row.camera() and
+// three.camera(). A "create" seeds the whole default pose; an "update" carries
+// only the fields it moves, each its own keyframe track.
+function cameraRow({ beat, ...rest }: Row): Row {
+  const create = rest.event !== 'update'
+  return {
+    id: 'camera', event: create ? 'create' : 'update',
+    // A live `beat` can't say when a keyframe lands, so it falls back to the
+    // top of the loop; every other field takes an Expr.
+    beat: typeof beat === 'number' ? beat : 1,
+    shape: 'camera',
+    ...(create ? { px: 0, py: 0, pz: 5, tx: 0, ty: 0, tz: 0 } : {}),
+    ...rest,
+  }
+}
+
 // ── Event rows ───────────────────────────────────────────────────────────────
 // "setVariable" and "setCode" are the same row wherever they appear — hydra,
 // post, bauble, and (setVariable) particles — so one pair of builders serves
 // them all; only which extra columns bite differs, and those ride in `props`.
 
-/** The columns an event row carries besides its own — the last argument of setVariable()/setCode(). */
+/** The columns an event row carries besides its own — the last argument of row.setVariable()/row.setCode(). */
 export interface EventProps {
   /** The beat it lands on, 1-indexed (default 1). Leave it off in an emit()/beatMap() template, where the source row's own timing places the row. */
   beat?: number
@@ -1844,6 +1860,61 @@ export interface CameraProps extends SceneProps {
 export interface PointsProps extends ShapeDims {
   /** Sample density — omit to match the segment counts the renderer itself draws. */
   segments?: number
+}
+
+/**
+ * The row-builder namespace: everything that makes ONE plain row rather than a
+ * Table, so the result is data you put IN a table — rows([…]), .concat() — and
+ * equally a template shape for emit()/beatMap()/derive(). The JSDoc on each
+ * member IS the editor hover doc — write it for the livecoder.
+ */
+export interface RowNamespace {
+  /**
+   * One "setVariable" row — the same row in every event table that has live
+   * inputs, so it reads the same whichever one you route it to: hydra (a
+   * per-frame props value the sketch reads, no recompile), post (a keyframe
+   * track, `props.ease` shaping the segment into this one), bauble (a
+   * `(def name value)` compiled ahead of the sketch) and particles (a sim
+   * parameter). `props` carries the rest of the columns — `beat` (1-indexed),
+   * post's `ease`, hydra's `out`, `disabled`.
+   *
+   *   rows([row.setCode("bloom((p) => p.glow)"), row.setVariable("glow", 0.35)]).outPost()
+   *
+   * Omit `beat` inside an emit()/beatMap() template and the source row's own
+   * timing places it; an Expr `value` bakes against that source row there
+   * (in a plain rows([…]) list, pass a literal):
+   *
+   *   paper.folds().beatMap(row.setVariable("blur", 8, { ease: "step" }),
+   *                         row.setVariable("blur", 0, { ease: "easeInOut" }), -1).outPost()
+   */
+  setVariable(name: string, value: number | string | Expr, props?: EventProps): Row
+  /**
+   * One "setCode" row — the same row in hydra, post and bauble: `code`
+   * replaces that view's whole sketch from this beat on. Only the language
+   * differs (a hydra chain / a post chain / a Janet shape expression), and in
+   * hydra the terminal `.out()` comes from `props.out` (default o0), so the
+   * code needn't write its own. `props` carries `beat` (1-indexed), `out` and
+   * `disabled`.
+   *
+   *   rows([row.setCode("osc(20, 0.1, 1.2)"), row.setCode("noise(3)", { beat: 9 })]).outHydra()
+   */
+  setCode(code: string, props?: EventProps): Row
+  /**
+   * One camera keyframe as a scene row (shape "camera", id "camera"): the eye
+   * at px/py/pz looking at tx/ty/tz, `fov` the vertical field of view in
+   * degrees. A "create" — the default — seeds the whole pose (eye at
+   * (0, 0, 5), target the origin), so one row is already a complete shot;
+   * `event: "update"` makes it a later keyframe carrying ONLY the fields it
+   * moves, each its own track. `beat` is 1-indexed.
+   *
+   *   rows([row.camera({ py: 1.5, pz: 6 }),
+   *         row.camera({ event: "update", beat: 9, pz: 2 })]).outThree()
+   *
+   * It is an ordinary scene row, so it concats, routes and templates like any
+   * other — three.camera(keyframes) is this same row over a whole TABLE of
+   * keyframes, numbering the create and updates for you.
+   */
+  camera(props?: CameraProps): Row
 }
 
 /**
@@ -2068,35 +2139,14 @@ export type DSLSurface = Easings & {
    */
   rotate(rows: Row[] | null | undefined, values: Row[] | null | undefined): Table
   /**
-   * One "setVariable" ROW — the same row in every event table that has live
-   * inputs, so it reads the same whichever one you route it to: hydra (a
-   * per-frame props value the sketch reads, no recompile), post (a keyframe
-   * track, `props.ease` shaping the segment into this one), bauble (a
-   * `(def name value)` compiled ahead of the sketch) and particles (a sim
-   * parameter). `props` carries the rest of the columns — `beat` (1-indexed),
-   * post's `ease`, hydra's `out`, `disabled`.
-   *
-   *   rows([setCode("bloom((p) => p.glow)"), setVariable("glow", 0.35)]).outPost()
-   *
-   * Omit `beat` inside an emit()/beatMap() template and the source row's own
-   * timing places it; an Expr `value` bakes against that source row there
-   * (in a plain rows([…]) list, pass a literal):
-   *
-   *   paper.folds().beatMap(setVariable("blur", 8, { ease: "step" }),
-   *                         setVariable("blur", 0, { ease: "easeInOut" }), -1).outPost()
+   * The row builders, grouped: each makes ONE plain row rather than a Table,
+   * so they drop into rows([…]) and .concat() as data and into the
+   * emit()/beatMap()/derive() templates as shapes — row.setVariable and
+   * row.setCode write the event row every event table reads, row.camera one
+   * camera keyframe. e.g.
+   * rows([row.setCode("bloom((p) => p.glow)"), row.setVariable("glow", 0.35)]).outPost().
    */
-  setVariable(name: string, value: number | string | Expr, props?: EventProps): Row
-  /**
-   * One "setCode" ROW — the same row in hydra, post and bauble: `code`
-   * replaces that view's whole sketch from this beat on. Only the language
-   * differs (a hydra chain / a post chain / a Janet shape expression), and in
-   * hydra the terminal `.out()` comes from `props.out` (default o0), so the
-   * code needn't write its own. `props` carries `beat` (1-indexed), `out` and
-   * `disabled`.
-   *
-   *   rows([setCode("osc(20, 0.1, 1.2)"), setCode("noise(3)", { beat: 9 })]).outHydra()
-   */
-  setCode(code: string, props?: EventProps): Row
+  row: RowNamespace
   csv(text: string): Table
   data(url: string): Table
   json(data: Row[] | string | unknown): Table
@@ -2207,18 +2257,13 @@ export function createDSL(ctx: DSLContext | null): DSLSurface {
     },
     geometry: (points: Table | Row[]): BufferGeometry =>
       geometryFromPoints(rowsOf(points)),
-    // The first keyframe seeds a full default pose so a partial first row is
-    // still well-defined. Each row doubles as its own template, so an Expr in
-    // it bakes against that row — a streaming one staying a binding the scene
-    // resolves per frame.
+    // The first keyframe creates the camera (cameraRow seeds it a full default
+    // pose, so a partial first row is still well-defined) and the rest update
+    // it. Each row doubles as its own template, so an Expr in it bakes against
+    // that row — a streaming one staying a binding the scene resolves per frame.
     camera: (keyframes: Table | Row[] | null | undefined): Table =>
-      asTable(keyframes).map((k, i) => {
-        const row = buildRow(k, k, i)
-        const beat = typeof row.beat === 'number' ? row.beat : 1
-        return i === 0
-          ? { px: 0, py: 0, pz: 5, tx: 0, ty: 0, tz: 0, ...row, id: 'camera', shape: 'camera', event: 'create', beat }
-          : { ...row, id: 'camera', shape: 'camera', event: 'update', beat }
-      }),
+      asTable(keyframes).map((k, i) =>
+        cameraRow({ ...buildRow(k, k, i), event: i === 0 ? 'create' : 'update' })),
     translate: (table: Table | Row[], x = 0, y = 0, z = 0): Table =>
       asTable(table).map((r) => modRow(r, [
         ['px', 0, (v) => v + x], ['py', 0, (v) => v + y], ['pz', 0, (v) => v + z],
@@ -2253,10 +2298,13 @@ export function createDSL(ctx: DSLContext | null): DSLSurface {
         ctx,
       )
     },
-    setVariable: (name: string, value: number | string | Expr, props: EventProps = {}): Row =>
-      eventRow({ event: 'setVariable', name, value }, props),
-    setCode: (code: string, props: EventProps = {}): Row =>
-      eventRow({ event: 'setCode', code }, props),
+    row: {
+      setVariable: (name: string, value: number | string | Expr, props: EventProps = {}): Row =>
+        eventRow({ event: 'setVariable', name, value }, props),
+      setCode: (code: string, props: EventProps = {}): Row =>
+        eventRow({ event: 'setCode', code }, props),
+      camera: (props: CameraProps = {}): Row => cameraRow(props),
+    },
     csv: (text: string) => new Table(parseCSV(text), ctx),
     data: (url: string) => new Table(parseCSV(ctx?.getData?.(url) ?? ''), ctx),
     json: (data: Row[] | string | unknown) => new Table(
