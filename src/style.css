@@ -1317,7 +1317,8 @@ html, body {
   position: sticky;
   top: 0;
   white-space: nowrap;
-  z-index: 1;
+  /* Above the row-insert strips (z-index 1) that scroll under it. */
+  z-index: 2;
 }
 
 .events-table tbody tr {
@@ -1495,6 +1496,65 @@ html, body {
 
 .row-del-btn:hover {
   color: #e94560;
+}
+
+/* Row insertion: the seam between two rows is a hover strip — invisible until
+   the pointer finds it, then a "+" and a rule across the gap; clicking adds a
+   row at the halfway beat (see gapAt in ui/table-panel.tsx). It hangs off a
+   zero-height row/flex item and is absolutely positioned over the seam, so an
+   insert point costs a dense list no height at all. */
+.events-table tbody tr.row-insert {
+  border-bottom: none;
+}
+
+.row-insert > td {
+  position: relative;
+  height: 0;
+  padding: 0;
+}
+
+/* The negative margins cancel the flex gap this zero-height item would
+   otherwise add, so cards stay the same distance apart with or without one. */
+.editor-list > .row-insert {
+  position: relative;
+  height: 0;
+  margin: -2px 0;
+}
+
+/* Thin (3px each side of the seam) so it steals as little of the neighbouring
+   rows' click area as it can; z-index 1 to win the hit test against the cells
+   it straddles, which are positioned too (the sticky heads sit above both). */
+.row-insert-btn {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -3px;
+  height: 6px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 4px;
+  background: transparent;
+  border: none;
+  color: #6fbf73;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* The rule out to the right edge, showing where the row would land — dimmer
+   than the "+" so it reads as a hint rather than a border the table grew. */
+.row-insert-btn::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.row-insert-btn:hover,
+.row-insert-btn:focus-visible {
+  opacity: 1;
 }
 
 /* Per-row "compiled code at this event" info button + popover (hydra rows).
@@ -1812,7 +1872,8 @@ html, body {
 .editor-list-head {
   position: sticky;
   top: 0;
-  z-index: 1;
+  /* Above the row-insert strips (z-index 1) that scroll under it. */
+  z-index: 2;
   background: #0f3460;
   padding: 3px 5px;
   color: #607a96;

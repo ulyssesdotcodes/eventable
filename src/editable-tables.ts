@@ -668,7 +668,8 @@ function applyEvent(tables: Map<string, TableState>, e: StampedEvent): void {
       break
     }
     case 'add-row': {
-      t.rows.push(conformRow({}, effectiveColumns(t)))
+      const seed = e.values && typeof e.values === 'object' ? e.values as Row : {}
+      t.rows.push(conformRow(seed, effectiveColumns(t)))
       t.rowMeta.push(userMeta())
       break
     }
@@ -767,7 +768,9 @@ export interface EditableTableStore {
   removeColumn(name: string, colName: string): void
   setColumnType(name: string, colName: string, type: ColumnType): void
   renameColumn(name: string, colName: string, newName: string): boolean
-  addRow(name: string): void
+  // `values` seeds the new row's cells — a row inserted at a chosen beat, say;
+  // without it every cell takes its column default.
+  addRow(name: string, values?: Row): void
   removeRow(name: string, index: number): void
   duplicateRow(name: string, index: number): void
   // One table's columns and rows as text — the clipboard form replaceTable
@@ -1068,9 +1071,9 @@ export function createEditableTableStore({ src }: { src?: string } = {}): Editab
       return true
     },
 
-    addRow(name: string): void {
+    addRow(name: string, values?: Row): void {
       if (!tables.has(name)) return
-      append({ kind: 'add-row', table: name })
+      append({ kind: 'add-row', table: name, ...(values ? { values } : {}) })
     },
 
     removeRow(name: string, index: number): void {

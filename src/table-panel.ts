@@ -248,15 +248,27 @@ export function showsWarpMap(
   return isTimelineSchema(columnNames)
 }
 
+// A row's sort key: an unset or non-numeric beat (an "=" cell, say) reads as 0.
+const beatOf = (row: Row | undefined): number => Number(row?.beat) || 0
+
 // Display order only: sorted by `beat` (stable) when the table has one. The
 // returned values are always real storage indices — never display positions —
 // so row edits are unaffected by sorting.
 export function displayOrder(rows: Row[], columns: EditableColumn[]): number[] {
   const order = rows.map((_row, i) => i)
   if (columns.some((c) => c.name === 'beat')) {
-    order.sort((a, b) => (Number(rows[a].beat) || 0) - (Number(rows[b].beat) || 0))
+    order.sort((a, b) => beatOf(rows[a]) - beatOf(rows[b]))
   }
   return order
+}
+
+// The beat a row inserted between two adjacent display rows takes: halfway
+// between the pair, so it lands in exactly that gap. Null when the table has
+// no `beat` column — display order is then storage order, which no cell can
+// express, so there is no "between" to insert at.
+export function insertBeat(rows: Row[], columns: EditableColumn[], above: number, below: number): number | null {
+  if (!columns.some((c) => c.name === 'beat')) return null
+  return (beatOf(rows[above]) + beatOf(rows[below])) / 2
 }
 
 // Keyboard-focus a single editable cell, keyed by storage row index + column

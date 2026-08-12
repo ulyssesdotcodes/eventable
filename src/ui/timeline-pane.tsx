@@ -329,8 +329,7 @@ export function TimelinePane(props: {
       const rows = made && props.store.get(made.table)?.rows
       if (!made || !rows) return
       const row = rows.length
-      props.store.addRow(made.table)
-      props.store.setRow(made.table, row, made.values)
+      props.store.addRow(made.table, made.values)
       props.onDragCommit?.()
       props.onSelectView?.(made.table)
       props.onSelectRow?.(made.table, row, true)

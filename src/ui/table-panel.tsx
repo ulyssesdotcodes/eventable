@@ -13,7 +13,7 @@ import { SERIES_COLORS, chartDataFor, computeColRanges, drawSeriesChart, fmtNum,
 import {
   MAX_ROWS, COLUMN_TYPES, EVENTS_SUFFIX, formatCell, formatEditableCell,
   allNames, nextTableName, fallbackTab, chartFor, showsWarpMap, hasCodeColumn, showsCodeEditor,
-  displayOrder, activeRowIndex,
+  displayOrder, activeRowIndex, insertBeat,
   tabRingStyle, viewersOf, lastEditors, moveFocus, isCellInert,
   type TablePanel, type TablePanelOptions, type PeerPresence, type CellFocus, type FocusDir,
 } from '../table-panel.js'
@@ -233,6 +233,13 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     return data ? { name, data } : null
   })
 
+  // The open table's rows in display order, as storage indices — what every
+  // "next row" walk (arrow keys, Tab, the rendered lists) reads.
+  const rowOrder = createMemo(() => {
+    const ed = editableData()
+    return ed ? displayOrder(ed.data.rows, ed.data.columns) : []
+  })
+
   // A code-bearing table renders as the editor list — one card per row, its
   // non-code cells columnar with that row's editor underneath — instead of the
   // grid, so the code column is never a cell there.
@@ -288,7 +295,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     let nextRow = rowIndex
     let nextIdx = cIdx + dir
     if (nextIdx < 0 || nextIdx >= cols.length) {
-      const order = displayOrder(data.rows, cols)
+      const order = rowOrder()
       const pos = order.indexOf(rowIndex)
       const nextPos = pos + dir
       if (pos < 0 || nextPos < 0 || nextPos >= order.length) return
@@ -403,10 +410,8 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     if (e.key === '/' && current()) { e.preventDefault(); setPickerOpen(true); return }
     // Cell navigation is an editable-table feature; read-only views just scroll.
     if (!isEditableTable()) return
-    const ed = editableData()
-    if (!ed) return
     const cols = fieldCols()
-    const order = displayOrder(ed.data.rows, ed.data.columns).filter(edRowVisible)
+    const order = rowOrder().filter(edRowVisible)
     if (!cols.length || !order.length) return
     const fc = focusedCell()
     // No cursor yet, or it points at a now-hidden/removed cell: land on the
@@ -470,11 +475,7 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
         : [])
   }
 
-  const codeTargets = createMemo<EditTarget[]>(() => {
-    const ed = editableData()
-    if (!ed) return []
-    return displayOrder(ed.data.rows, ed.data.columns).flatMap(rowCodeTargets)
-  })
+  const codeTargets = createMemo<EditTarget[]>(() => rowOrder().flatMap(rowCodeTargets))
 
   // A card's facade is <Index>-keyed by position and labeled by row index, so a
   // tab switch or a row insert/delete rebinds a live slot to a different row
@@ -1084,6 +1085,42 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
     )
   }
 
+  // The insert point above the display row at `pos`: the values a row dropped
+  // in that gap takes — a beat halfway between the pair (see insertBeat).
+  // Null where there is nothing to split: the top of the list, a table with no
+  // `beat` column, or a neighbour the filter has hidden (the two rows the eye
+  // sees as adjacent would not be the pair the beat comes from).
+  const gapAt = (pos: number): { beat: number } | null => {
+    const ed = editableData()
+    if (!ed || pos < 1) return null
+    const above = rowOrder()[pos - 1], below = rowOrder()[pos]
+    if (!edRowVisible(above) || !edRowVisible(below)) return null
+    const beat = insertBeat(ed.data.rows, ed.data.columns, above, below)
+    return beat == null ? null : { beat }
+  }
+
+  // That insert point, drawn: a strip straddling the boundary between two rows
+  // that stays invisible until pointed at, then offers a "+". It takes no
+  // vertical space of its own (the strip is absolutely positioned over the
+  // seam), so a dense grid reads exactly as it did. The grid needs it inside a
+  // full-width cell, the card list hangs it off a bare div.
+  function RowInsert(gapProps: { table: string; gap: { beat: number }; tag: 'tr' | 'div' }) {
+    const label = (): string => `Insert a row at beat ${gapProps.gap.beat}`
+    const btn = (
+      <button
+        class="row-insert-btn"
+        title={label()}
+        aria-label={label()}
+        onClick={() => store.addRow(gapProps.table, gapProps.gap)}
+      >
+        <Icon name="plus" size={11} />
+      </button>
+    )
+    return gapProps.tag === 'tr'
+      ? <tr class="row-insert"><td colSpan={fieldCols().length + 2}>{btn}</td></tr>
+      : <div class="row-insert">{btn}</div>
+  }
+
   // Row-level state, worn by a grid <tr> and by a card alike.
   const rowClasses = (ed: { name: string; data: EditableTableData }, i: number) => ({
     'row-source': !!lineageSet()?.has(i),
@@ -1441,17 +1478,22 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
                         </tr>
                       </thead>
                       <tbody>
-                        <For each={displayOrder(ed().data.rows, ed().data.columns)}>
-                          {(i) => (
-                            <tr hidden={!edRowVisible(i)} classList={rowClasses(ed(), i)}>
-                              <td class="row-actions">
-                                <RowTools table={ed().name} rowIndex={i} />
-                              </td>
-                              <For each={fieldCols()}>
-                                {(col) => <EditableCell tag="td" table={ed().name} rowIndex={i} col={col} />}
-                              </For>
-                              <td />
-                            </tr>
+                        <For each={rowOrder()}>
+                          {(i, pos) => (
+                            <>
+                              <Show when={gapAt(pos())}>
+                                {(gap) => <RowInsert tag="tr" table={ed().name} gap={gap()} />}
+                              </Show>
+                              <tr hidden={!edRowVisible(i)} classList={rowClasses(ed(), i)}>
+                                <td class="row-actions">
+                                  <RowTools table={ed().name} rowIndex={i} />
+                                </td>
+                                <For each={fieldCols()}>
+                                  {(col) => <EditableCell tag="td" table={ed().name} rowIndex={i} col={col} />}
+                                </For>
+                                <td />
+                              </tr>
+                            </>
                           )}
                         </For>
                       </tbody>
@@ -1471,27 +1513,32 @@ function TablePanelView(props: PanelProps & { chrome: PanelChrome; children?: JS
                   <AddColHeader tag="div" table={ed().name} />
                 </div>
                 <div class="editor-list">
-                  <For each={displayOrder(ed().data.rows, ed().data.columns)}>
-                    {(i) => (
-                      <div class="row-card" hidden={!edRowVisible(i)} classList={rowClasses(ed(), i)}>
-                        <div class="card-fields">
-                          <div class="row-actions">
-                            <RowTools table={ed().name} rowIndex={i} />
+                  <For each={rowOrder()}>
+                    {(i, pos) => (
+                      <>
+                        <Show when={gapAt(pos())}>
+                          {(gap) => <RowInsert tag="div" table={ed().name} gap={gap()} />}
+                        </Show>
+                        <div class="row-card" hidden={!edRowVisible(i)} classList={rowClasses(ed(), i)}>
+                          <div class="card-fields">
+                            <div class="row-actions">
+                              <RowTools table={ed().name} rowIndex={i} />
+                            </div>
+                            <For each={fieldCols()}>
+                              {(col) => <EditableCell tag="div" table={ed().name} rowIndex={i} col={col} />}
+                            </For>
                           </div>
-                          <For each={fieldCols()}>
-                            {(col) => <EditableCell tag="div" table={ed().name} rowIndex={i} col={col} />}
-                          </For>
+                          <Index each={rowCodeTargets(i)}>
+                            {(target) => (
+                              <CodeFacade
+                                host={props.host}
+                                target={target()}
+                                onPromote={isMobile() ? setPopoverTarget : undefined}
+                              />
+                            )}
+                          </Index>
                         </div>
-                        <Index each={rowCodeTargets(i)}>
-                          {(target) => (
-                            <CodeFacade
-                              host={props.host}
-                              target={target()}
-                              onPromote={isMobile() ? setPopoverTarget : undefined}
-                            />
-                          )}
-                        </Index>
-                      </div>
+                      </>
                     )}
                   </For>
                 </div>

@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   formatCell, formatEditableCell, allNames, nextTableName, fallbackTab, chartFor,
-  displayOrder, activeRowIndex, viewersOf, tabRingStyle, lastEditors, moveFocus,
+  displayOrder, insertBeat, activeRowIndex, viewersOf, tabRingStyle, lastEditors, moveFocus,
   isCellInert, showsWarpMap, showsCodeEditor, EVENTS_SUFFIX, type PeerPresence,
 } from '../src/table-panel.js'
 import type { EditableColumn } from '../src/editable-tables.js'
@@ -226,6 +226,14 @@ test('displayOrder sorts by beat (stable) but returns storage indices', () => {
   const cols = [{ name: 'beat', type: 'number' as const }]
   assert.deepEqual(displayOrder(rows, cols), [1, 3, 0, 2], 'ties keep their storage order')
   assert.deepEqual(displayOrder(rows, [{ name: 'x', type: 'number' as const }]), [0, 1, 2, 3], 'no beat column: storage order')
+})
+
+test('insertBeat: a row dropped between two display rows lands halfway between them', () => {
+  const rows: Row[] = [{ beat: 3 }, { beat: 1 }, { beat: 2 }]
+  const cols = [{ name: 'beat', type: 'number' as const }]
+  // Display order is 1, 2, 0 — the gap between the last two spans beats 2..3.
+  assert.equal(insertBeat(rows, cols, 2, 0), 2.5)
+  assert.equal(insertBeat(rows, [{ name: 'x', type: 'number' as const }], 2, 0), null, 'no beat column: nothing to split')
 })
 
 test('activeRowIndex is the last row at or before the playhead beat', () => {

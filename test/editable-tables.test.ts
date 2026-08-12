@@ -19,6 +19,9 @@ test('addRow / setCell / removeRow', () => {
   assert.equal(store.get('t1')!.rows[0].beat, 42)
   store.removeRow('t1', 0)
   assert.deepEqual(store.get('t1')!.rows, [{ beat: 1 }])
+  // Seeded: an insert between two rows adds one already at its own beat.
+  store.addRow('t1', { beat: 2.5 })
+  assert.deepEqual(store.get('t1')!.rows, [{ beat: 1 }, { beat: 2.5 }])
 })
 
 test('duplicateRow inserts a copy of the row right after it, with its own identity going forward', () => {
