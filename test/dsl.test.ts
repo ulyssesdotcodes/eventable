@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { Table, createDSL, field, resolveBindings } from '../src/dsl.js'
+import { isHydraRow } from '../src/hydra.js'
+import { isPostRow } from '../src/post.js'
+import { isBaubleRow } from '../src/bauble.js'
+import { isParticleRow } from '../src/particles.js'
 import { withLineage, getLineage, type Row } from '../src/lineage.js'
 
 const t = (rows: Row[]): Table => new Table(rows)
@@ -52,6 +56,41 @@ test('beatMap rebuilds rows off their own beat/dur, keeping only the templates',
     'the source row is discarded — only the template and the beat survive')
   assert.deepEqual(base.beatMap({ event: 'pulse' }).rows.map((r) => r.beat), [3, 9, 1],
     'one row each without a durRow')
+})
+
+test('row.setVariable/setCode build the one event row every event table reads', () => {
+  const { row } = createDSL(null)
+  const code = row.setCode('osc(20, 0.1, 1.2)', { beat: 9, out: 'o1' })
+  const variable = row.setVariable('glow', 0.35, { beat: 1, ease: 'easeOut' })
+  assert.deepEqual(code, { beat: 9, event: 'setCode', code: 'osc(20, 0.1, 1.2)', out: 'o1' })
+  assert.deepEqual(variable, { beat: 1, event: 'setVariable', name: 'glow', value: 0.35, ease: 'easeOut' })
+  for (const accepts of [isHydraRow, isPostRow, isBaubleRow]) {
+    assert.ok(accepts(code) && accepts(variable), `${accepts.name} takes both rows`)
+  }
+  assert.ok(isParticleRow(variable), 'particles has setVariable but no setCode')
+
+  // No `beat` unless asked, so a template row leaves beatMap/emit's placement
+  // alone — and an Expr value still bakes against the source row there.
+  const folds = t([{ beat: 3, dur: 2, plies: 4 }])
+  assert.deepEqual(
+    folds.beatMap(row.setVariable('blur', field('plies')), row.setVariable('blur', 0)).rows,
+    [{ beat: 3, event: 'setVariable', name: 'blur', value: 4 },
+      { beat: 5, event: 'setVariable', name: 'blur', value: 0 }])
+})
+
+test('row.camera builds the keyframe three.camera does, one row at a time', () => {
+  const { row, three } = createDSL(null)
+  const shot = row.camera({ py: 1.5, pz: 6 })
+  assert.deepEqual(shot, {
+    id: 'camera', event: 'create', beat: 1, shape: 'camera',
+    px: 0, py: 1.5, pz: 6, tx: 0, ty: 0, tz: 0,
+  }, 'a lone row is a whole shot — the pose it does not name is defaulted')
+  // An update carries only what it moves, so every other field holds its track.
+  assert.deepEqual(row.camera({ event: 'update', beat: 9, pz: 2 }),
+    { id: 'camera', event: 'update', beat: 9, shape: 'camera', pz: 2 })
+  // …and that is exactly what three.camera lays out over a table of keyframes.
+  assert.deepEqual(three.camera([{ py: 1.5, pz: 6 }, { beat: 9, pz: 2 }]).rows,
+    [shot, row.camera({ event: 'update', beat: 9, pz: 2 })])
 })
 
 test('concat accepts a Table or a bare array', () => {

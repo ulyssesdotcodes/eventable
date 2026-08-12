@@ -499,8 +499,7 @@ paper.spawn({ id: "paper" }).outThree()
 // What hangs off the folding follows the swap too, because it is read back off
 // the paper rather than written out by hand: one glow pulse per fold, however
 // many folds the named model has and wherever they land.
-rows([{ beat: 1, event: "setCode", code: "bloom((p) => p.glow, 0.5, 0.7)" },
-      { beat: 1, event: "setVariable", name: "glow", value: 0 }])
+rows([row.setCode("bloom((p) => p.glow, 0.5, 0.7)"), row.setVariable("glow", 0)])
   .concat(paper.folds().derive({ event: "pulse", name: "glow", value: 0.9, ease: "easeOut" }))
   .outPost()
 
@@ -624,8 +623,7 @@ paper.edges()
 
 // One row per fold drives the post chain the same way: a glow that pulses
 // while each fold is in progress. paper.folds() -> post, no scene involved.
-rows([{ beat: 1, event: "setCode", code: "bloom((p) => p.glow, 0.5, 0.7)" },
-      { beat: 1, event: "setVariable", name: "glow", value: 0 }])
+rows([row.setCode("bloom((p) => p.glow, 0.5, 0.7)"), row.setVariable("glow", 0)])
   .concat(paper.folds().derive({ event: "pulse", name: "glow", value: 0.9, ease: "easeOut" }))
   .outPost()
 
@@ -869,7 +867,9 @@ lotus.spawn({ id: "flowerA", color: 0xfff2d6, backColor: 0xe0518a, ...pose })
 // "+ column" survives the next Run too. (Every edit is an event too — see
 // the "hydra·events" tab.) A second, code-generated table only becomes
 // useful once you need to LAYER computed events on top of these — build it
-// in code and route it with .outHydra() (see "Hydra Sketch Swap"). Routing
+// in code and route it with .outHydra() (see "Hydra Sketch Swap"), where
+// row.setCode(code, props) and row.setVariable(name, value, props) write
+// these same two rows for you — the same pair in post and bauble too. Routing
 // takes precedence over this by-name lookup, so the moment anything routes,
 // route every table that should still play: table("hydra").outHydra()
 // would keep this one in the mix.
@@ -1042,10 +1042,9 @@ rows([{ id: "orb", event: "create", beat: 1, shape: "sphere", color: 0xffd43b,
 //    setVariable rows needed. Reference it as a FUNCTION so hydra reads it fresh
 //    each frame: (props) => props.sliders.warp. Here "warp" drives the modulate
 //    amount and "brightness" the output level; .outHydra() routes the sketch.
-rows([
-  { beat: 1, event: "setCode", code:
-    "src(s0).modulate(osc(30), (props) => props.sliders.warp)" +
-    ".brightness((props) => props.sliders.brightness - 0.5).out(o0)" },
+rows([row.setCode(
+  "src(s0).modulate(osc(30), (props) => props.sliders.warp)" +
+  ".brightness((props) => props.sliders.brightness - 0.5).out(o0)"),
 ]).outHydra()
 
 // Recording & sync: while you're not touching a slider, its recorded automation
@@ -1351,12 +1350,11 @@ const gap = prev && typeof last.at === "number" && typeof prev.at === "number"
   ? (last.at - prev.at) / 1000 : 60            // seconds between the last two Runs
 const heat = Math.max(0, 1 - gap / 10)         // 1 = frantic, 0 = calm
 rows([
-  { beat: 1, event: "setCode",
-    code: "osc((props) => props.freq, 0.06, " + (0.4 + heat).toFixed(2) + ")" +
-          ".kaleid(" + (3 + (n % 7)) + ")" +
-          ".rotate((props) => props.time * " + (0.03 + 0.4 * heat).toFixed(3) + ")" +
-          ".out(o0)" },
-  { beat: 1, event: "setVariable", name: "freq", value: 4 + (n % 24) },
+  row.setCode("osc((props) => props.freq, 0.06, " + (0.4 + heat).toFixed(2) + ")" +
+              ".kaleid(" + (3 + (n % 7)) + ")" +
+              ".rotate((props) => props.time * " + (0.03 + 0.4 * heat).toFixed(3) + ")" +
+              ".out(o0)"),
+  row.setVariable("freq", 4 + (n % 24)),
 ]).outHydra()
 
 // Things to try:
@@ -1507,10 +1505,7 @@ t.torus({ id: "ring", r: 1, color: 0x2a3646 })
   .outThree()
 
 // A whisper of feedback so the constellation twinkles.
-rows([
-  { beat: 1, event: "setCode",
-    code: "src(s0).blend(src(o0).scale(1.004), 0.2).out(o0)" },
-]).outHydra()
+rows([row.setCode("src(s0).blend(src(o0).scale(1.004), 0.2).out(o0)")]).outHydra()
 
 // Things to try:
 //   - Tap deliberately BEHIND the beat (a lazy backbeat): the ring spirals
