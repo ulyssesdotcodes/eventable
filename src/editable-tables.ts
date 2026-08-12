@@ -88,11 +88,14 @@ function visibleRows(t: TableState): Row[] {
   return t.rows.filter((r) => r[DISABLED_COL] !== true)
 }
 
-export function defaultFor(type: ColumnType, options?: string[]): unknown {
-  switch (type) {
+export function defaultFor(col: EditableColumn): unknown {
+  // Beats are 1-indexed, so a blank `beat` starts at the top of the loop —
+  // 0 would put the row one beat before the first frame.
+  if (col.name === 'beat' && col.type === 'number') return 1
+  switch (col.type) {
     case 'number': return 0
     case 'boolean': return false
-    case 'enum': return options?.[0] ?? ''
+    case 'enum': return col.options?.[0] ?? ''
     default: return ''
   }
 }
@@ -240,7 +243,7 @@ function eventRow(e: StampedEvent): Row {
  */
 export function conformRow(row: Row, columns: EditableColumn[]): Row {
   const next: Row = {}
-  for (const c of columns) next[c.name] = c.name in row ? row[c.name] : defaultFor(c.type, c.options)
+  for (const c of columns) next[c.name] = c.name in row ? row[c.name] : defaultFor(c)
   return next
 }
 
@@ -665,9 +668,7 @@ function applyEvent(tables: Map<string, TableState>, e: StampedEvent): void {
       break
     }
     case 'add-row': {
-      const row: Row = {}
-      for (const c of effectiveColumns(t)) row[c.name] = defaultFor(c.type, c.options)
-      t.rows.push(row)
+      t.rows.push(conformRow({}, effectiveColumns(t)))
       t.rowMeta.push(userMeta())
       break
     }
