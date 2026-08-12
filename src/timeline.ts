@@ -66,8 +66,8 @@ export interface RowWindow {
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
 
-// Blank cells in an editable table conform to 0 (see conformRow), and beats
-// are 1-indexed, so 0 in any optional column reads as "unset".
+// Blank cells in an editable table conform to 0 (see conformRow — `beat`
+// alone conforms to 1), so 0 in any optional column reads as "unset".
 const opt = (v: unknown): number | undefined => (typeof v === 'number' && v !== 0 ? v : undefined)
 
 // How many passes the LAST row's `outTo` end frame spans (1 when unset). It is

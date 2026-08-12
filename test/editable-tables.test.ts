@@ -13,11 +13,12 @@ test('addRow / setCell / removeRow', () => {
   store.createTable('t1')
   store.addRow('t1')
   store.addRow('t1')
-  assert.deepEqual(store.get('t1')!.rows, [{ beat: 0 }, { beat: 0 }])
+  // A new row starts at beat 1, the top of the loop — beats are 1-indexed.
+  assert.deepEqual(store.get('t1')!.rows, [{ beat: 1 }, { beat: 1 }])
   store.setCell('t1', 0, 'beat', 42)
   assert.equal(store.get('t1')!.rows[0].beat, 42)
   store.removeRow('t1', 0)
-  assert.deepEqual(store.get('t1')!.rows, [{ beat: 0 }])
+  assert.deepEqual(store.get('t1')!.rows, [{ beat: 1 }])
 })
 
 test('duplicateRow inserts a copy of the row right after it, with its own identity going forward', () => {
@@ -44,7 +45,7 @@ test('addColumn backfills existing rows with a default; removeColumn drops it', 
   store.createTable('t1')
   store.addRow('t1')
   store.addColumn('t1', 'label', 'string')
-  assert.deepEqual(store.get('t1')!.rows, [{ beat: 0, label: '' }])
+  assert.deepEqual(store.get('t1')!.rows, [{ beat: 1, label: '' }])
   store.removeColumn('t1', 'beat')
   assert.deepEqual(store.get('t1')!.rows, [{ label: '' }])
 })
@@ -479,7 +480,7 @@ test('an enum column defaults a new row to its first option', () => {
   const store = createEditableTableStore()
   store.ensure('h', { beat: 'number', event: ['setCode', 'layer'] })
   store.addRow('h')
-  assert.deepEqual(store.get('h')!.rows, [{ beat: 0, event: 'setCode' }])
+  assert.deepEqual(store.get('h')!.rows, [{ beat: 1, event: 'setCode' }])
 })
 
 test('cellValid: blanks pass; a non-blank value must fit its type; enum must be in options', () => {
@@ -548,7 +549,7 @@ test('setReplayView restores every table to its state at a past run', () => {
   store.recordRun()
 
   assert.equal(store.get('code')!.rows[0].code, 'v2')
-  assert.deepEqual(store.get('nums')!.rows, [{ beat: 99 }, { beat: 0 }])
+  assert.deepEqual(store.get('nums')!.rows, [{ beat: 99 }, { beat: 1 }])
 
   store.setReplayView(run1)
   assert.equal(store.get('code')!.rows[0].code, 'v1')
@@ -556,7 +557,7 @@ test('setReplayView restores every table to its state at a past run', () => {
 
   store.setReplayView(null)
   assert.equal(store.get('code')!.rows[0].code, 'v2')
-  assert.deepEqual(store.get('nums')!.rows, [{ beat: 99 }, { beat: 0 }])
+  assert.deepEqual(store.get('nums')!.rows, [{ beat: 99 }, { beat: 1 }])
 })
 
 test('ensure is read-only while replaying — a scrubbed cook appends nothing', () => {

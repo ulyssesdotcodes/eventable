@@ -257,8 +257,8 @@ function rowContext(row: Row | undefined, columns: EditableColumn[] | undefined,
     .filter((c) => c.name !== col && c.type !== 'code' && c.name !== DISABLED_COL)
     .filter((c) => !isCellInert(row, c, columns))
     .map((c) => ({ c, v: row[c.name] }))
-    // Blank cells conform to 0, so a numeric 0 reads as "unset" here the same
-    // way the schemas treat it (beats are 1-indexed).
+    // Blank cells conform to 0 (`beat` to 1), so a numeric 0 reads as "unset"
+    // here the same way the schemas treat it.
     .filter(({ v }) => v != null && v !== '' && v !== false && v !== 0)
   const beat = cells.find(({ c }) => c.name === 'beat')
   const rest = cells.filter((x) => x !== beat).slice(0, 3)
@@ -1248,7 +1248,7 @@ function currentScene(): Sample {
       for (const col of data.columns) {
         const v = row[col.name]
         if (v === undefined || v === null || v === '') continue
-        if (col.name === discriminant || v !== defaultFor(col.type, col.options)) clean[col.name] = v
+        if (col.name === discriminant || v !== defaultFor(col)) clean[col.name] = v
       }
       return clean
     })
